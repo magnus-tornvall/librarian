@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "event_id": "01J8X7QK44X9Z5R8N6S0T5V7VU",
+  "ts": "2026-07-05T09:20:00.000Z",
+  "type": "session",
+  "resource": {
+    "agent": "claude-code",
+    "agent_version": "1.2.3",
+    "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+    "cwd": "/Users/magnus/dev/librarian",
+    "git_root": "/Users/magnus/dev/librarian",
+    "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+    "git_branch": "feat/02-schemas"
+  },
+  "context": {
+    "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+    "turn": 5,
+    "cwd": "/Users/magnus/dev/librarian"
+  },
+  "action": "checkpoint"
+}
