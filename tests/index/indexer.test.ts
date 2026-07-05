@@ -67,3 +67,37 @@ test('a note missing source.origin is skipped; only the valid note gets indexed'
   assert.match(row.search_text, /Adopt BM25-over-SQLite-FTS5 as the sole recall index/);
   assert.match(row.search_text, /BM25 over SQLite FTS5 is the one blessed index/);
 });
+
+test('a note with a malformed body is skipped without aborting the rest of the batch', () => {
+  const dataDir = tempDataDir();
+  const cursorPath = path.join(dataDir, 'cursor.json');
+  const malformedNote = { ...VALID_NOTE, note_id: 'decision:malformed', body: null };
+  appendNote(dataDir, malformedNote);
+  appendNote(dataDir, VALID_NOTE);
+
+  const db = new Database(':memory:');
+  migrate(db);
+  const indexedCount = indexNotes(db, dataDir, cursorPath);
+
+  assert.equal(indexedCount, 1);
+  const { count } = db.prepare('SELECT COUNT(*) as count FROM notes_fts').get() as { count: number };
+  assert.equal(count, 1);
+});
+
+test('when two revisions of the same note_id share a created_at, the later-appended one wins', () => {
+  const dataDir = tempDataDir();
+  const cursorPath = path.join(dataDir, 'cursor.json');
+  const revisionOne = { ...VALID_NOTE, revision_id: 'rev-1', title: 'first revision' };
+  const revisionTwo = { ...VALID_NOTE, revision_id: 'rev-2', title: 'second revision' };
+  appendNote(dataDir, revisionOne);
+  appendNote(dataDir, revisionTwo);
+
+  const db = new Database(':memory:');
+  migrate(db);
+  indexNotes(db, dataDir, cursorPath);
+
+  const row = db.prepare('SELECT revision_id FROM notes_fts WHERE note_id = ?').get(VALID_NOTE.note_id) as {
+    revision_id: string;
+  };
+  assert.equal(row.revision_id, 'rev-2');
+});

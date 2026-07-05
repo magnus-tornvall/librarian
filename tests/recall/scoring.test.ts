@@ -52,3 +52,20 @@ test('a near-zero-BM25 candidate is dropped by the relevance floor', () => {
   assert.equal(scoreCandidate(candidate, DEFAULT_SCORING_CONFIG, NOW), 0);
   assert.deepEqual(rankAndFilter([candidate], DEFAULT_SCORING_CONFIG, NOW), []);
 });
+
+test('a future-dated created_at (clock skew) is clamped to zero age instead of amplifying the score', () => {
+  const futureDated: ScoredCandidate = {
+    note_id: 'd',
+    raw_bm25: 2,
+    origin: 'opencode',
+    note_type: 'project_summary',
+    created_at: daysBefore(NOW, -30),
+    is_project_match: false,
+  };
+  const asOfNow: ScoredCandidate = { ...futureDated, note_id: 'e', created_at: NOW };
+
+  assert.equal(
+    scoreCandidate(futureDated, DEFAULT_SCORING_CONFIG, NOW),
+    scoreCandidate(asOfNow, DEFAULT_SCORING_CONFIG, NOW),
+  );
+});

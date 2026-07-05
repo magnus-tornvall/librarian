@@ -1,36 +1,34 @@
 import Database from 'better-sqlite3';
 import { readAllNotes } from '../log/noteLog.ts';
 import { advanceCursor } from '../log/cursor.ts';
+import type { NoteRevision } from '../distill/llmDistiller.ts';
 
-type NoteRecord = Record<string, unknown>;
+type NoteLogRecord = NoteRevision | { kind: 'note_tombstone' };
 
-function latestRevisionPerNoteId(notes: NoteRecord[]): NoteRecord[] {
-  const latest = new Map<string, NoteRecord>();
-  for (const note of notes) {
-    if (note.kind === 'note_tombstone') {
+function latestRevisionPerNoteId(records: NoteLogRecord[]): NoteRevision[] {
+  const latest = new Map<string, NoteRevision>();
+  for (const record of records) {
+    if (record.kind === 'note_tombstone') {
       // ponytail: v1 doesn't remove tombstoned notes from the index yet — real gap, not silently ignored.
       continue;
     }
-    const noteId = note.note_id as string;
-    const existing = latest.get(noteId);
-    if (!existing || (existing.created_at as string) < (note.created_at as string)) {
-      latest.set(noteId, note);
+    const existing = latest.get(record.note_id);
+    // <=, not <: on a created_at tie, prefer whichever revision was appended later in the log.
+    if (!existing || existing.created_at <= record.created_at) {
+      latest.set(record.note_id, record);
     }
   }
   return [...latest.values()];
 }
 
-function buildSearchText(note: NoteRecord): string {
-  const body = (note.body ?? {}) as NoteRecord;
-  const scope = (note.scope ?? {}) as NoteRecord;
-  const links = (note.links ?? []) as Array<{ target: string }>;
+function buildSearchText(note: NoteRevision): string {
   return [
     note.title,
-    body.summary,
-    ...((body.bullets as string[] | undefined) ?? []),
-    body.details ?? '',
-    scope.project_slug ?? '',
-    ...links.map((link) => link.target),
+    note.body.summary,
+    ...(note.body.bullets ?? []),
+    note.body.details ?? '',
+    note.scope.project_slug ?? '',
+    ...note.links.map((link) => link.target),
   ]
     .filter(Boolean)
     .join(' ');
@@ -40,7 +38,7 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath: s
   // ponytail: v1 re-reads the whole note log and upserts by note_id instead of tracking a
   // true byte-offset cursor — cheap and correct at this scale; real incremental reads are
   // the eventual target per §5 once the log grows large enough to matter.
-  const notes = readAllNotes(dataDir) as NoteRecord[];
+  const notes = readAllNotes(dataDir) as NoteLogRecord[];
 
   const deleteStmt = db.prepare('DELETE FROM notes_fts WHERE note_id = ?');
   const insertStmt = db.prepare(
@@ -49,20 +47,19 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath: s
 
   let indexedCount = 0;
   for (const note of latestRevisionPerNoteId(notes)) {
-    const origin = (note.source as NoteRecord | undefined)?.origin;
-    if (typeof origin !== 'string' || origin.length === 0) {
+    if (!note.source.origin) {
       continue; // fail-closed: missing origin is a hard skip, never indexed with a null origin
     }
 
+    let searchText: string;
+    try {
+      searchText = buildSearchText(note);
+    } catch {
+      continue; // fail-closed: one malformed note must not crash indexing for every note after it
+    }
+
     deleteStmt.run(note.note_id);
-    insertStmt.run(
-      note.note_id,
-      note.revision_id,
-      origin,
-      note.note_type,
-      note.created_at,
-      buildSearchText(note),
-    );
+    insertStmt.run(note.note_id, note.revision_id, note.source.origin, note.note_type, note.created_at, searchText);
     indexedCount += 1;
   }
 

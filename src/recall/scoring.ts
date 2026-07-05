@@ -32,7 +32,9 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
 };
 
 export function scoreCandidate(c: ScoredCandidate, config: ScoringConfig, nowIso: string): number {
-  const ageDays = (Date.parse(nowIso) - Date.parse(c.created_at)) / (1000 * 60 * 60 * 24);
+  // Clamp negative age (a future-dated created_at, e.g. clock skew across machines) to 0
+  // rather than letting it invert the decay term into an amplifier.
+  const ageDays = Math.max(0, (Date.parse(nowIso) - Date.parse(c.created_at)) / (1000 * 60 * 60 * 24));
   const score =
     c.raw_bm25 *
     (c.is_project_match ? config.projectBoost : 1) *
