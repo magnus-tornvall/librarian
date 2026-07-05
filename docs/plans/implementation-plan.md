@@ -63,6 +63,15 @@ Phase 0 (001) explicitly installs neither `better-sqlite3` nor `@modelcontextpro
 - Roadmap items 5–11 (curated Markdown ingestion, real instrumentation, MCP server, push adapters, hardening, second provider/exporter, non-agent integrations). Not exploded into backlog tasks yet — the prompt that produced this plan scoped backlog generation to roadmap items 1–4. Explode the next phase only after the walking skeleton (026) is merged and has taught whatever it's going to teach about the note schema (§12 says as much: "revise the note schema from what the skeleton teaches").
 - Anything the spec explicitly deferred (§5 "Deleted / deferred", §13/§15 "Open items"). Building those now would be relitigating a settled decision.
 
+### Post-skeleton composability work (deferred)
+
+`docs/research/composability-seams-handoff.md` names a small set of external-facing composability tasks: a contracts barrel, `docs/extending.md`, and conformance helpers/fixtures. These are **not** Phase 3 work and should not be inserted into tasks 001–026. They should be exploded only after both conditions are true:
+
+1. 026 has merged.
+2. The post-skeleton note-schema revision called out by §12 item 4 is complete.
+
+At that point, add new backlog files (027+) and update this plan in the same change that creates the corresponding GitHub issue(s). Until then, the current concrete exports remain task-local implementation details, including the Obsidian export function in 020.
+
 ## Task sizing
 
 Every task is sized so implementation + verification fits in roughly 15 minutes for an agent already oriented by the task file's context section (§14, "task size sanity check"). Where a natural unit of work exceeded that (the walking skeleton), it was split by pipeline stage — one module, one done-check, one file — rather than by arbitrary line count.

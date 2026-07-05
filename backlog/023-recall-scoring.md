@@ -3,7 +3,7 @@
 **Phase:** 3 — Walking skeleton
 **Dependencies:** none (scaffold merged). Pure function — workable immediately.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §6 ("Scoring (deterministic, in code): BM25 → RRF-style fusion where applicable → project/global boost → recency decay → weights → relevance floor")
-**Do not relitigate:** the scoring pipeline's stage order is fixed (project/global boost, then recency decay, then weights, then floor — as written above); the default weight maps and half-life are given in §6/§5 — use those exact numbers unless a fixture later proves they need tuning (none do yet, this is v1). RRF fusion is explicitly "where applicable" — with a single retrieval source (BM25 only, no vector arm yet), there's nothing to fuse; skip that stage rather than building fusion logic for one input.
+**Do not relitigate:** the scoring pipeline's stage order is fixed (project/global boost, then recency decay, then weights, then floor — as written above); the default weight maps and half-life are given in §6/§5 — use those exact numbers unless a fixture later proves they need tuning (none do yet, this is v1). RRF fusion is explicitly "where applicable" — with a single retrieval source (BM25 only, no vector arm yet), there's nothing to fuse; skip that stage rather than building fusion logic for one input. Loading scoring config from `~/.librarian/config.json` is not part of this task; this module exposes defaults and accepts an explicit `ScoringConfig`, and later wiring can decide where that config came from.
 
 ## Context
 
