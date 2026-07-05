@@ -21,6 +21,16 @@ test('redacts a generic api_key-shaped token', () => {
   assert.match(result, /^curl -H "\[REDACTED:token:sha256:[0-9a-f]{8}\]"$/);
 });
 
+test('redacts a JSON-shaped api_key value (quoted key, colon, quoted value)', () => {
+  const result = redact('curl -d \'{"api_key":"AbCdEfGh12345678ijklmnop"}\'');
+  assert.match(result, /^curl -d '\{"\[REDACTED:token:sha256:[0-9a-f]{8}\]"\}'$/);
+});
+
+test('does not redact "secret" as a substring of an unrelated word', () => {
+  const text = 'the secretary filed the report';
+  assert.equal(redact(text), text);
+});
+
 test('redacts a GitHub PAT', () => {
   const pat = 'ghp_' + 'A'.repeat(36);
   const result = redact(`git remote set-url origin https://${pat}@github.com/x/y.git`);

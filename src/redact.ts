@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 const SECRET_PATTERNS: RegExp[] = [
   /AKIA[0-9A-Z]{16}/g,
-  /(?:token|api[_-]?key|secret)[=: ]+["']?[A-Za-z0-9_\-.]{16,}/gi,
+  /\b(?:token|api[_-]?key|secret)\b["']?[=: ]+["']?[A-Za-z0-9_\-.]{16,}/gi,
   /ghp_[A-Za-z0-9]{36}/g,
 ];
 
