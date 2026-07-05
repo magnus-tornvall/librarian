@@ -1,6 +1,11 @@
-# Librarian — Consolidated Design Handoff (v3)
+# Librarian — Consolidated Design Handoff (v4)
 
-**Date:** 2026-07-04. **Status:** design converged after eight review rounds (Claude Fable 5 ↔ GPT-5.5 ↔ Claude Opus 4.8 research ↔ author challenges). This document supersedes v2 (2026-07-04) and is standalone: a fresh session needs no prior context. Next action is implementation, starting with the two schema files.
+**Date:** 2026-07-05. **Status:** design converged after eight review rounds (Claude Fable 5 ↔ GPT-5.5 ↔ Claude Opus 4.8 research ↔ author challenges), plus a process-consolidation pass closing the seven remaining implementation-mechanics decisions (§14). This document supersedes v3 (2026-07-04) and is standalone: a fresh session needs no prior context. Next action is implementation — the backlog in `backlog/` (see `backlog/README.md`), starting with Phase 0.
+
+**Changes since v3:**
+- **§14 added** — the seven remaining decision areas (language/runtime, repo bootstrap, golden-example format, test convention, backlog execution model, config file location, dogfooding) are now settled and consolidated.
+- Housekeeping (§11) gained the config-file path, cross-referencing §14.
+- Open items renumbered §13 → §15; nothing in it changed.
 
 **Changes since v2:**
 - **Recall/injection contract settled** (§6) — graduated from open item after a dual review round (GPT-5.5 design review + Opus 4.8 literature research, ~40 sources): relevance floor with 0–5 injection (replaces inherited top-5), explicit authority ordering folded into the weights mechanism, tagged non-authoritative injected-block shape, stable-prefix/volatile-suffix layout, push-vs-pull contract split.
@@ -296,7 +301,7 @@ Golden examples: (1) episodic decision, `distiller: llm`, `origin: opencode`; (2
 
 ## 11. Housekeeping decisions
 
-- Directory layout: `~/.librarian/data/` (event + note logs, sacred), `~/.librarian/diagnostics/` (deletable), `~/.librarian/machine-id`, vault wherever the user keeps it (`generated/` + `curated/`).
+- Directory layout: `~/.librarian/data/` (event + note logs, sacred), `~/.librarian/diagnostics/` (deletable), `~/.librarian/machine-id`, `~/.librarian/config.json` (§14), vault wherever the user keeps it (`generated/` + `curated/`).
 - Note-log layout: monthly append-only segments `notes/{yyyy-mm}.ndjson`, never rewritten. Cursors reference `{file_path, byte_offset}`.
 - `machine_id`: generated once, persisted; never the hostname.
 - **V1 is single-machine, by declaration.** ULIDs make records collision-safe; the eventual answer is per-machine log segments. Deferred with it: `daily:{date}` cross-machine collision.
@@ -315,7 +320,39 @@ Golden examples: (1) episodic decision, `distiller: llm`, `origin: opencode`; (2
 10. Second inference provider (OpenAI-compatible ⇒ local) and second exporter (SQLite mirror) — after the first path works end-to-end.
 11. First non-agent integration (when concretely wanted): `ContentEvent` + per-origin profile + origin fixtures.
 
-## 13. Open items (known, deferred, not blocking — all with named triggers or preserved escape hatches)
+## 14. Implementation & process decisions (2026-07-05, settled — same bar as §5, do not relitigate without new information)
+
+Seven decisions closing the design-phase backlog: how the thing gets built, not what it does.
+
+**Language & runtime**
+- TypeScript, compiled to JS for the published CLI. Node.js LTS — not Bun, an additional runtime dependency this project doesn't need; `better-sqlite3` already gives synchronous native SQLite on Node without it.
+- Package manager: **npm**. It ships with Node — zero extra install, which matches the "invisible infrastructure" positioning (§1). pnpm's workspace/hoisting strengths solve a monorepo problem Librarian doesn't have; it is one package.
+- `engines.node >= 22` (native TypeScript type-stripping). Tests run `.ts` files directly via `node --test`, no `ts-node`/`tsx` dependency. Revisit only if a construct the code actually needs turns out to be non-erasable — not preemptively.
+- CLI: `bin/librarian` via `package.json` `bin`, pointing at compiled `dist/` output (`tsc`).
+- `better-sqlite3` and `@modelcontextprotocol/sdk` are added when the code that needs them lands (indexer, MCP server) — not upfront, per the "deleted/deferred" discipline already established in §5.
+
+**Repo bootstrap**
+- Working name **librarian** stands. License, `package.json` metadata beyond what a task needs, and any directory layout beyond what a given backlog task requires are **deferred** — decided when something forces the question (first external contributor, first publish).
+- Risk flagged, not resolved: §1 states an open-source north star, but the repo currently ships no LICENSE file; silence defaults to all-rights-reserved. Cheap to fix, deliberately left out of scope here — a candidate for a future backlog task, not a blocker.
+
+**Golden examples: extracted**
+- §10's golden examples live as JSON files under `schema/examples/event/*.json` and `schema/examples/note/*.json`, one file per example, referenced (not inlined) from `schema/event.md` / `schema/note.md`. Extracted files double as fixture input for the qualification fixtures in §9 — a code-fenced example in a Markdown file can't be loaded by a test.
+
+**Test convention**
+- `node --test`, TypeScript, **black-box/integration only — no unit tests.** This matches the design's own shape: every pipeline stage (collector, distiller, indexer, recall) has an explicit input/output contract (§4); testing through that contract is both the honest test and the one that survives internal refactors. No mocking framework — fixtures are plain files (NDJSON, JSON), consistent with §9's "no frameworks, plain fixtures."
+- Test layout mirrors pipeline stages under `tests/`, one file per stage, plus one end-to-end `tests/walkingSkeleton.integration.test.ts` for the roadmap-4 path.
+
+**Backlog execution: agents**
+- `backlog/<task>.md` files are written to be picked up by a coding agent in a fresh session, not executed by the author directly. Each carries a spec-section pointer, a "do not relitigate" header naming the settled decisions in play, and a done-check runnable in ≤15 minutes. See `backlog/README.md` for the full convention.
+
+**Config file location**
+- `~/.librarian/config.json`. Rejected `~/.config/librarian/config.json` (XDG) for consistency with this project's own settled housekeeping (§11): data (`~/.librarian/data/`), diagnostics (`~/.librarian/diagnostics/`), and `machine-id` already share one dotfolder root. Splitting config out to a second, OS-idiomatic location buys generic-Linux-citizenship at the cost of the property that root is built to have — `rm -rf ~/.librarian` cleanly removes everything, same as the SSH-agent / Ollama precedent §1 already invokes. No XDG override; add one later only if a real user asks for it.
+
+**Dogfooding**
+- "Build sessions get recorded" is real but bootstrapped, not immediate: recording requires a Claude Code instrumentation adapter, which is roadmap step 6 (§12) — before that, there is nothing to instrument with. From step 6 onward, backlog work done in an interactive Claude Code session on a machine with the adapter installed is captured in Librarian's own event log; that is the actual dogfooding moment, not a property that holds from day one.
+- Stated plainly so it isn't mistaken for a gap later: this only applies where the adapter can attach a hook in a persistent home directory. Ephemeral/headless agent runs (CI, one-shot remote containers with no persistent `~/.librarian`) are not expected to be captured — dogfooding is a developer-machine property, not a CI property.
+
+## 15. Open items (known, deferred, not blocking — all with named triggers or preserved escape hatches)
 
 - `ContentEvent` shape + per-origin distiller profiles (trigger: first non-agent source).
 - Re-ranking pass (trigger: negative fixtures show distractor injections despite the floor). Before vector search.
