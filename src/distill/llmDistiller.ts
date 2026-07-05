@@ -1,3 +1,4 @@
+import { ulid } from 'ulid';
 import type { InferenceProvider } from './provider.ts';
 import { renderEventsForDistill } from '../render/distillPrompt.ts';
 
@@ -48,29 +49,6 @@ const NOTE_TYPES: ReadonlyArray<NoteRevision['note_type']> = [
   'curated',
 ];
 
-const CROCKFORD_BASE32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-
-/**
- * Minimal hand-rolled ULID: 48-bit millisecond timestamp + 80 bits of
- * randomness, Crockford base32, 26 chars, lexicographically sortable. A `ulid`
- * npm dependency is deliberately avoided (§5 minimal-deps stance); the 80 random
- * bits per id make collisions between the handful of ids a single distill mints
- * effectively impossible for tests and real single-session use alike.
- */
-function ulid(now: number = Date.now()): string {
-  let time = now;
-  const timeChars = new Array<string>(10);
-  for (let i = 9; i >= 0; i--) {
-    timeChars[i] = CROCKFORD_BASE32[time % 32];
-    time = Math.floor(time / 32);
-  }
-  let random = '';
-  for (let i = 0; i < 16; i++) {
-    random += CROCKFORD_BASE32[Math.floor(Math.random() * 32)];
-  }
-  return timeChars.join('') + random;
-}
-
 type LlmNoteJudgment = {
   note_type?: string;
   title?: string;
@@ -105,6 +83,9 @@ const INSTRUCTION = [
  * LLM's response never dictates them. Provenance `event_ids` are read straight
  * off the input events, not cited by the model. No live call: the provider is
  * injected (tests pass `makeFixtureProvider`).
+ *
+ * `note_id`/`revision_id` use the `ulid` package (monotonic within a
+ * millisecond, so the two ids minted back-to-back here sort in creation order).
  */
 export async function distill(
   events: Array<Record<string, unknown>>,
