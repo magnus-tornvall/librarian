@@ -1,0 +1,23 @@
+{
+  "kind": "note_revision",
+  "schema_version": 1,
+  "note_id": "curated:author-context",
+  "revision_id": "01J8X9F4P2R4T6V8W0X2Y4Z6A8",
+  "created_at": "2026-07-05T11:00:00.000Z",
+  "identity": { "mode": "deterministic", "key": "curated:author-context" },
+  "source": {
+    "origin": "human",
+    "distiller": "human",
+    "source_path": "vault/curated/author-context.md",
+    "content_hash": "sha256:9f2c1a7e4b3d6c8f0a1e2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e"
+  },
+  "note_type": "curated",
+  "title": "Author context",
+  "scope": { "global": true },
+  "provenance": {},
+  "links": [],
+  "body": {
+    "summary": "The project favors KISS, file-over-app, minimal abstraction.",
+    "details": "# Author context\n\nThe project favors KISS, file-over-app, minimal abstraction. Prefer boring code over clever code. Structural invariants beat policy invariants — enforce rules by construction, not by good behavior of future code."
+  }
+}

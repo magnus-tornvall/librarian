@@ -1,0 +1,63 @@
+# Note record
+
+A note record is a structured memory record — the note log's unit of storage, written only
+by distillers, never directly by instrumentation. There are two kinds: `NoteRevision` (a
+version of a note's content) and `NoteTombstone` (marks a note_id superseded/removed). The
+one-sentence version of the distill-only rule: nothing enters the note log without a
+distiller's judgment — `llm` or `human` — there is no generic import path, not even for
+pre-condensed machine content.
+
+## Types
+
+```ts
+type NoteRecord = NoteRevision | NoteTombstone;
+
+type NoteRevision = {
+  kind: "note_revision"; schema_version: 1;
+  note_id: string; revision_id: string;              // revision_id: ULID
+  previous_revision_id?: string;
+  created_at: string;
+  identity: { mode: "deterministic" | "episodic"; key?: string };
+  source: {
+    origin: string;                                  // open vocabulary, MANDATORY
+    distiller: "llm" | "human";
+    model?: string; agent?: string;
+    source_path?: string; content_hash?: string;
+  };
+  note_type: "fact" | "decision" | "project_summary" | "person" | "daily" | "episode" | "curated";
+  title: string;
+  scope: { project_slug?: string; git_root?: string; git_remote?: string; global?: boolean };
+  provenance: { session_id?: string; event_ids?: string[];
+                event_range?: { from_event_id: string; to_event_id: string } };
+  links: Array<{ target_type: "note" | "entity" | "project" | "file" | "url";
+                 target: string; relation?: string }>;
+  body: { summary: string; bullets?: string[]; details?: string };
+};
+
+type NoteTombstone = {
+  kind: "note_tombstone"; schema_version: 1;
+  note_id: string; revision_id: string; previous_revision_id: string;
+  reason?: string; created_at: string;
+  source: { kind: "human" | "cli" };
+};
+```
+
+## Rules
+
+`origin` mandatory, denormalized, indexed, fail-closed. Human distiller preserves Markdown
+verbatim in `body.details`, derives `title` from H1 and `summary` from first paragraph.
+Curated frontmatter may declare `note_id`; importer tombstones orphaned IDs on rename.
+`search_text` is indexer-derived. Tombstones CLI/human only in v1.
+
+Only deterministic-ID notes (`project:{slug}:summary`, `person:{normalized_name}`,
+`daily:{yyyy-mm-dd}`, `curated:{id}`) may be revised — the distiller fetches a prior
+revision only by that deterministic ID, never by "probably related" search. Everything
+else is episodic (`{type}:{ulid}`), one revision, immutable forever.
+
+## Golden examples
+
+1. [`01-episodic-decision-llm-opencode.json`](schema/examples/note/01-episodic-decision-llm-opencode.json) — an episodic decision note, `distiller: "llm"`, `origin: "opencode"`.
+2. [`02-deterministic-project-summary-rev1.json`](schema/examples/note/02-deterministic-project-summary-rev1.json) — a deterministic project-summary note, revision 1.
+3. [`03-deterministic-project-summary-rev2.json`](schema/examples/note/03-deterministic-project-summary-rev2.json) — the same note's revision 2, chained via `previous_revision_id`.
+4. [`04-curated-note-human-explicit-id.json`](schema/examples/note/04-curated-note-human-explicit-id.json) — a curated note, `distiller: "human"`, explicit frontmatter `note_id`.
+5. [`05-tombstone-via-cli.json`](schema/examples/note/05-tombstone-via-cli.json) — a tombstone emitted via the CLI.

@@ -1,0 +1,36 @@
+{
+  "kind": "note_revision",
+  "schema_version": 1,
+  "note_id": "decision:01J8X9F1TZ6R3M8N0P5Q7S9VWX",
+  "revision_id": "01J8X9F1TZ6R3M8N0P5Q7S9VWY",
+  "created_at": "2026-07-05T10:00:00.000Z",
+  "identity": { "mode": "episodic" },
+  "source": {
+    "origin": "opencode",
+    "distiller": "llm",
+    "model": "claude-sonnet-5",
+    "agent": "opencode"
+  },
+  "note_type": "decision",
+  "title": "Adopt BM25-over-SQLite-FTS5 as the sole recall index",
+  "scope": {
+    "project_slug": "librarian",
+    "git_root": "/Users/magnus/dev/librarian",
+    "git_remote": "git@github.com:magnus-tornvall/librarian.git"
+  },
+  "provenance": {
+    "session_id": "01J8X9F1S0M2N4P6Q8R0T2V4W6",
+    "event_range": {
+      "from_event_id": "01J8X9F1TZ6R3M8N0P5Q7S9VW1",
+      "to_event_id": "01J8X9F1TZ6R3M8N0P5Q7S9VW9"
+    }
+  },
+  "links": [],
+  "body": {
+    "summary": "BM25 over SQLite FTS5 is the one blessed index for v1; no recall provider abstraction.",
+    "bullets": [
+      "Schema must not block later vector search, but nothing more is built now.",
+      "Re-ranking is the named first upgrade, trigger-gated on negative fixtures."
+    ]
+  }
+}

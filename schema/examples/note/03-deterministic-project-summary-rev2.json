@@ -1,0 +1,29 @@
+{
+  "kind": "note_revision",
+  "schema_version": 1,
+  "note_id": "project:librarian:summary",
+  "revision_id": "01J8X9F3K7M9N1P3Q5R7S9T1V3",
+  "previous_revision_id": "01J8X9F2A1B3C5D7E9F0G2H4J6",
+  "created_at": "2026-07-06T08:30:00.000Z",
+  "identity": { "mode": "deterministic", "key": "project:librarian:summary" },
+  "source": {
+    "origin": "opencode",
+    "distiller": "llm",
+    "model": "claude-sonnet-5",
+    "agent": "opencode"
+  },
+  "note_type": "project_summary",
+  "title": "Librarian project summary",
+  "scope": {
+    "project_slug": "librarian",
+    "git_root": "/Users/magnus/dev/librarian",
+    "git_remote": "git@github.com:magnus-tornvall/librarian.git"
+  },
+  "provenance": {
+    "session_id": "01J8X9F3H0M2N4P6Q8R0T2V4W8"
+  },
+  "links": [],
+  "body": {
+    "summary": "Librarian is an AI memory system built on append-only event and note logs, with a distill-only note-log write path and a BM25-over-SQLite-FTS5 recall index."
+  }
+}
