@@ -46,6 +46,18 @@ Fixture events → renderer → LLM distill → note log → Obsidian export →
 - 025 — `src/diagnostics/injectionTrace.ts` (§8 injection trace record)
 - 026 — `tests/walkingSkeleton.integration.test.ts` (capstone: fixture → append → distill → note log → index → recall → assert injected content + injection trace)
 
+## Runtime dependencies
+
+Per §14, native/runtime deps are added only by the task that first needs them — never upfront. Confirmed choices and their introduction points:
+
+| Dependency | Confirmed | Introduced by | For |
+|---|---|---|---|
+| `typescript` (dev) | ✅ Phase 0 (001) | 001 | build + `node --test` on `.ts` |
+| `better-sqlite3` | ✅ | 021 (`src/index/schema.ts`) | synchronous native SQLite / FTS5 index (§14) |
+| `@modelcontextprotocol/sdk` | ✅ | MCP server task (roadmap item 7, not yet exploded) | pull-path MCP server (§6/§12) |
+
+Phase 0 (001) explicitly installs neither `better-sqlite3` nor `@modelcontextprotocol/sdk` — that constraint stands.
+
 ## What's deliberately not in this plan
 
 - Roadmap items 5–11 (curated Markdown ingestion, real instrumentation, MCP server, push adapters, hardening, second provider/exporter, non-agent integrations). Not exploded into backlog tasks yet — the prompt that produced this plan scoped backlog generation to roadmap items 1–4. Explode the next phase only after the walking skeleton (026) is merged and has taught whatever it's going to teach about the note schema (§12 says as much: "revise the note schema from what the skeleton teaches").

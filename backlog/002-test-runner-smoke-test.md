@@ -19,7 +19,7 @@ Depends on 001 (needs `package.json`/`tsconfig.json` to exist). Node's native Ty
      assert.equal(1 + 1, 2);
    });
    ```
-2. Confirm the `test` script in `package.json` (from 001) actually invokes it — glob expansion in `package.json` scripts isn't shell-expanded on every platform, so if `node --test tests/**/*.test.ts` doesn't pick the file up, change the script to `node --test tests/` (directory form, which `node --test` walks recursively) instead.
+2. Confirm the `test` script in `package.json` (from 001) actually invokes it. Use the **quoted glob** `node --test "tests/**/*.test.ts"` — quoting hands the pattern to node's own globber (supported since v21), which is shell-independent. Do **not** use the `node --test tests/` directory shorthand: it throws `MODULE_NOT_FOUND` (tries to load `tests` as a module) on Node ≥23, i.e. every runtime this project targets.
 
 ## Done-check
 
