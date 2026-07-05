@@ -1,6 +1,7 @@
 # 026 — tests/walkingSkeleton.integration.test.ts (capstone)
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** all of 010–025 merged. Capstone — last task in this backlog, do not parallelize with anything.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §12 roadmap item 4 ("Walking skeleton: fixture events → renderer → LLM distill → note log → Obsidian export → BM25 index → recall query with floor + weights + injection trace. Ugly internals, real data.")
 **Do not relitigate:** this test wires together tasks 010–025 exactly as the roadmap names the stages, in that order. It uses the fixture inference provider (017) — **not** a live `claude -p` call, matching §14's test convention. If this test tempts you to add a new abstraction "to make the wiring cleaner," don't — §5's whole point is that the walking skeleton is allowed to be ugly; cleanup is deliberately a later, separate concern (§12: "revise the note schema from what the skeleton teaches" happens *after* this lands, not during).
 

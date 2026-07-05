@@ -1,6 +1,7 @@
 # 001 — Bootstrap: package.json + tsconfig.json
 
 **Phase:** 0 — Scaffold
+**Dependencies:** none — first task in the repo; everything else depends on it.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §14 ("Language & runtime")
 **Do not relitigate:** §14 has already decided TypeScript, Node.js LTS (not Bun), npm (not pnpm), `engines.node >= 22`, native `node --test` for TS (no ts-node/tsx). §14 "Repo bootstrap" has already decided license and broader package metadata are **deferred** — do not add a LICENSE file or flesh out `author`/`repository`/etc. beyond the minimum npm requires. Do not introduce any other runtime dependency (no `better-sqlite3`, no `@modelcontextprotocol/sdk` yet — those land in later tasks that actually use them).
 

@@ -1,6 +1,7 @@
 # 005 — schema/note.md (prose + types)
 
 **Phase:** 1 — Schemas
+**Dependencies:** none (scaffold merged). Independent of 003/004 — parallel-safe with them.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §10.2 (note record types + rules + golden-example list)
 **Do not relitigate:** §10.2's types are already fully drafted — copy, don't redesign. Note in particular the **V1 revision rule** (§5 "Identity & revisions": only deterministic-ID notes may be revised) and the **distill-only ingestion rule** (§5 "Ingestion: distill-only, two distillers") — this doc explains them, it doesn't get to change them.
 

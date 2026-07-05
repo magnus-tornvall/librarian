@@ -1,6 +1,7 @@
 # 022 — src/index/indexer.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 012 (cursor), 019 (note log), 021 (FTS5 schema).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §4 ("Indexer: note-log consumer... derives `search_text` by fixed concatenation rule; indexes `origin` as a filterable column; fail-closed: records missing `origin` are excluded"), §5 ("`search_text` is indexer-derived (fixed concatenation rule over title/summary/bullets/details/scope/links), never a record field")
 **Do not relitigate:** the fail-closed-on-missing-`origin` rule is not a warning-and-continue — a note without `source.origin` must be skipped from indexing, not indexed with a null/empty origin. `search_text` is computed here and only here; it must never be read from or written into the note record itself.
 

@@ -1,6 +1,7 @@
 # 013 — src/redact.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 004 (its test reproduces golden example `04-redacted-command-with-token.json`).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §5 ("Redaction preserves correlation without the secret: `[REDACTED:token:sha256:abc123]`. Applies to prompts as well as commands.")
 **Do not relitigate:** the redaction placeholder format is fixed — `[REDACTED:token:sha256:<hash>]` — don't invent a different tag scheme. This module must be called **before** any event reaches `appendRecord` (011) once task 015 wires the collector; this task only builds the function, it doesn't wire the pipeline order yet.
 

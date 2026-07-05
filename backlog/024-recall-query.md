@@ -1,6 +1,7 @@
 # 024 — src/recall/query.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 021 (FTS5 table), 023 (scoring). Soft: 022 (its test may reuse `indexNotes()`; inserting FTS rows directly is also fine).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §6 ("Push path... 0–5 records per prompt, never force-filled... Require project match or explicit global scope")
 **Do not relitigate:** the 0–5 cap and "never force-filled" rule mean this function must be able to return **zero** results without erroring or padding with low-relevance filler — an empty result is a correct, expected output, not a failure mode to work around. This task implements the push-path rules specifically (§6 is explicit that "austerity rules above are push-path rules" — the MCP pull-path's looser ~10-result rule is a different, later task, not this one).
 

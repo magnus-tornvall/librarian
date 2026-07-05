@@ -6,16 +6,19 @@ Each file in this directory is one task, sized to be picked up by a coding agent
 
 Every task file has these sections, in this order:
 
-1. **Header** — phase, spec pointer(s), a "do not relitigate" line naming the settled decisions the task must not re-open.
+1. **Header** — phase, a **Dependencies** line (see below), spec pointer(s), a "do not relitigate" line naming the settled decisions the task must not re-open.
 2. **Context** — 2–4 sentences: what this fits into and why, enough for a reader with zero prior context on this project.
 3. **Task** — concrete steps: files to create/edit, what they must contain or do.
 4. **Done-check** — one or more exact commands, and what output means "done." Must be runnable in ≤15 minutes total (implementation + verification, per §14's task-size sanity check). If you can't verify it that fast, the task is too big — split it, don't skip verification.
 
 ## Ordering and dependencies
 
-Files are numbered (`001`, `002`, …) in dependency order within a phase. A task may assume every lower-numbered task in its own phase is already merged. Phase 3 (walking skeleton) assumes Phases 0–2 are merged — it imports from `src/paths.ts` (009) and consumes the golden examples (004, 006) as fixture shape references.
+Every task file carries a `**Dependencies:**` line in its header. That line is the sole source of truth for whether a task can be started:
 
-Phases can't run out of order: Phase 1 (schemas) and Phase 2 (structural invariants) both need Phase 0's scaffold; Phase 3 needs both, since it implements the pipeline the schemas and invariants describe.
+- **A task is workable when every task named on its Dependencies line is merged to main** (plus the Phase 0 scaffold, 001–002, which everything assumes). "none" means workable right now.
+- **Hard vs. soft:** hard dependencies are imports or files the task's code/tests actually consume — do not start before they're merged. Soft dependencies (marked "Soft:") are references or idioms; the task is workable without them, using the spec section as the fallback source.
+- File numbering is publication order, not a dependency chain. Do **not** assume every lower-numbered task is merged — several tasks are deliberately parallel-safe (e.g. 003 and 005; 011, 017, 021, 023), and the Dependencies line says so where it matters.
+- Agents working tasks in parallel should each work in their own branch/worktree, run the done-check *after rebasing on latest main*, and merge one at a time — `npm test` runs the whole suite, so a green done-check is only meaningful against current main.
 
 ## Do not relitigate
 

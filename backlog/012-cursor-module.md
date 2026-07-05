@@ -1,6 +1,7 @@
 # 012 — src/log/cursor.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** none hard. Soft: 011 (mirrors its dir-creation idiom; no import — workable in parallel with 011).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §5 ("Cursors: `{consumer, log_name, file_path, byte_offset, last_record_id?, updated_at}`; advance only after successful processing")
 **Do not relitigate:** the cursor shape is already specified — use those exact field names. Don't add retry/backoff logic here (§5 mentions "bounded retries" as a separate concern from cursor storage itself; this task is just read/write the pointer).
 

@@ -1,6 +1,7 @@
 # 007 — tests/schema/goldenExamples.test.ts
 
 **Phase:** 1 — Schemas
+**Dependencies:** 004 and 006 (reads both golden-example sets from disk).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §9 (qualification fixtures), §14 ("Test convention")
 **Do not relitigate:** §14: black-box test, no schema-validation library (no zod/ajv) — a runtime shape check is a handful of `typeof`/`in` checks, not a framework. That restraint is deliberate (§5 "Deleted / deferred": no generic abstraction where concrete functions do).
 

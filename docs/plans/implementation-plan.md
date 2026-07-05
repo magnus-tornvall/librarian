@@ -26,7 +26,7 @@ Each schema file is prose + TypeScript types + golden JSON examples (§14: examp
 - 009 — `src/paths.ts`: `~/.librarian/{data,diagnostics,machine-id,config.json}` constants + test asserting diagnostics root ≠ data root (the isolation invariant starts being true in code here, not just in prose)
 
 ### Phase 3 — Walking skeleton (roadmap item 4, spec §12 item 4)
-Fixture events → renderer → LLM distill → note log → Obsidian export → BM25 index → recall with floor + weights + injection trace. Decomposed into one module + one black-box test per task (§14 test convention). Sequential dependency chain — later tasks assume earlier ones are merged.
+Fixture events → renderer → LLM distill → note log → Obsidian export → BM25 index → recall with floor + weights + injection trace. Decomposed into one module + one black-box test per task (§14 test convention). Not a strict sequential chain — each backlog file declares its actual dependencies in a `**Dependencies:**` header line (see `backlog/README.md`); several tasks are parallel-safe (011/012/013, 017, 021, 023 among them), and 026 is the capstone that requires everything 010–025 merged.
 
 - 010 — `fixtures/events/session-001.ndjson` (static fixture, shape matches §10.1)
 - 011 — `src/log/ndjson.ts` (append/read-all)

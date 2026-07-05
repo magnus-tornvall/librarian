@@ -1,6 +1,7 @@
 # 004 — schema/examples/event/*.json (5 golden examples)
 
 **Phase:** 1 — Schemas
+**Dependencies:** 003 (types + example filenames in `schema/event.md`).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §10.1 (golden-example list) and §14 ("Golden examples: extracted")
 **Do not relitigate:** §14 already decided examples are extracted JSON files, not inline code fences — that's this task's whole point, don't second-guess it. Field shapes must match the types in `schema/event.md` (task 003) exactly; don't add fields the type doesn't have.
 

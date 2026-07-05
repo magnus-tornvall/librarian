@@ -1,6 +1,7 @@
 # 025 — src/diagnostics/injectionTrace.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 009, 011, 014 (poison-pill cross-check imports `validateEvent`), 018 (reuses its ULID helper).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §8 ("Injection trace per injection: `injection_id`... query, candidate `note_id`s with raw and post-weight scores, cut reasons... records shipped, `indexed_through`, and a config snapshot")
 **Do not relitigate:** this file writes to `~/.librarian/diagnostics/` (via `paths.ts`, 009), never into the vault and never into the note log — that's the structural isolation from §8/task 008, and it applies here as code, not just as a rule someone has to remember. The trace record's own shape must **not** validate as a canonical event or note (it's fine, even correct, that it would be hard-rejected by `validateEvent.ts`, 014, if it were ever mistakenly fed into the collector — that's the poison-pill property working as intended).
 

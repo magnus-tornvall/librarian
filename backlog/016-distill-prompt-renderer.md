@@ -1,6 +1,7 @@
 # 016 — src/render/distillPrompt.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 003 (event types), 010 (fixture its test renders).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §7 ("Distill prompts render events as indexed compact text... ordinal indexes are already required for collector-stamped provenance")
 **Do not relitigate:** §7's category rule — "storage formats optimize for machines... prompt formats optimize for signal-per-token. They meet only at the renderer" — means this function reads events and produces a string; it must never be handed a raw NDJSON blob to pass through unmodified, and it must never write anything back to a log. Field elision (drop `machine_id`, `schema_version`, collapse timestamps) is the point, not accidental data loss.
 

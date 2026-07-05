@@ -1,6 +1,7 @@
 # 020 — src/export/obsidian.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** none hard (its test uses a hand-built note object). Soft: 005 (note shape), 008 (the invariants doc it enforces — spec §5 suffices if 008 is not merged yet).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §4 ("Exporters: note-log consumers; idempotent by `note_id`... Obsidian exporter first"), §5 ("Human curation" vault split), `docs/specs/structural-invariants.md` (task 008)
 **Do not relitigate:** this exporter writes **only** to `vault/generated/**`, never to `vault/curated/**` — that boundary is the structural invariant from task 008, not a style choice. Idempotency is by `note_id` (overwrite the same path on re-export), not by content diffing or a "has this changed" check — keep it that simple per §5's minimal-abstraction stance.
 

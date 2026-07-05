@@ -1,6 +1,7 @@
 # 019 — src/log/noteLog.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 009 (`paths.ts`), 011 (`ndjson.ts`).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §11 ("Note-log layout: monthly append-only segments `notes/{yyyy-mm}.ndjson`, never rewritten")
 **Do not relitigate:** monthly segmentation by `created_at`'s year-month is fixed — don't switch to daily/single-file/size-based segmentation. This module appends `NoteRevision`/`NoteTombstone` records; it does not validate them (that's a gap this backlog knowingly leaves — see task 026's integration test, which is where validation-shaped confidence actually comes from for v1).
 

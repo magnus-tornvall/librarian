@@ -1,6 +1,7 @@
 # 006 — schema/examples/note/*.json (5 golden examples)
 
 **Phase:** 1 — Schemas
+**Dependencies:** 005 (types + example filenames in `schema/note.md`).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §10.2 (golden-example list) and §14 ("Golden examples: extracted")
 **Do not relitigate:** same extraction convention as task 004. Revision chaining (rev1 → rev2) must actually use matching `note_id` and `previous_revision_id` — this is the one place the V1 revision rule (§5) becomes concrete data, get it right rather than approximate.
 

@@ -1,6 +1,7 @@
 # 009 — src/paths.ts (directory constants)
 
 **Phase:** 2 — Structural invariants
+**Dependencies:** none (scaffold merged).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §11 (Housekeeping), §14 ("Config file location")
 **Do not relitigate:** `~/.librarian/` is the one root — data, diagnostics, machine-id, and config all live under it (§14 explicitly rejected splitting config out to XDG `~/.config/librarian/`). Don't make the root configurable via an env var or a second lookup path — that's exactly the complexity §14 declined to add ("No XDG override; add one later only if a real user asks").
 

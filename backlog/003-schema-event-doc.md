@@ -1,6 +1,7 @@
 # 003 — schema/event.md (prose + types)
 
 **Phase:** 1 — Schemas
+**Dependencies:** none (scaffold 001–002 merged). Parallel-safe with 005, 008, 009, 011, 017, 021, 023.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §10.1 (canonical event types + rules + golden-example list)
 **Do not relitigate:** §10.1's types are already fully drafted in the spec — copy them, don't redesign them. §14 "Golden examples: extracted" means this file **references** golden JSON files under `schema/examples/event/` (task 004) rather than embedding example JSON inline. §5 "Resource & salience" and "Durability & safety" sections are the source for the prose around `resource`/`hints`/redaction — don't invent new rules.
 

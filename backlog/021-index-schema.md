@@ -1,6 +1,7 @@
 # 021 — src/index/schema.ts (FTS5 migration)
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** none (scaffold merged). Only task that edits `package.json` (installs `better-sqlite3`) — merge it before or apart from anything else touching the lockfile.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §5 ("BM25-over-SQLite-FTS5 is the one blessed index. No recall provider abstraction."), §11
 **Do not relitigate:** FTS5 only, no `sqlite-vec`/vector columns (§5's schema-must-not-block-vector-search rule means don't paint yourself into a corner, but it does **not** mean add vector columns now — those are explicitly deferred, §15/§13 open items). This is the first task that adds a real runtime dependency: `better-sqlite3` (§14 already approved it, "added when the code that needs them lands" — this is that moment).
 

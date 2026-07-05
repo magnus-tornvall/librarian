@@ -1,6 +1,7 @@
 # 017 — src/distill/provider.ts (interface + fixture stub)
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** none (scaffold merged). Workable immediately.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §2 (swapping the distillation LLM = "swap an inference provider"), §5 ("Deleted / deferred": "Inference-provider schema-negotiation sophistication (completion + JSON-schema + validate + one retry)")
 **Do not relitigate:** exactly one method, no schema-negotiation sophistication, no retry logic yet (§5 explicitly caps this at "completion + JSON-schema + validate + one retry" as the *eventual* ceiling — this task builds the interface and a test stub only; a real retry-once wrapper is not required here and would be over-building ahead of need). Do not add provider auto-discovery or a provider registry — §14 hasn't asked for one and §5's anti-generic stance applies.
 

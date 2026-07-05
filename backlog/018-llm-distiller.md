@@ -1,6 +1,7 @@
 # 018 — src/distill/llmDistiller.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 016, 017 (imports both). Soft: 005 (`NoteRevision` shape — spec §10.2 suffices if 005 is not merged yet).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §4 ("LLM distiller: consumer of the event log via an inference provider; admission control"), §10.2 (note shape + rules), §5 (provenance is collector-stamped: "the renderer presents events with ordinal indexes; the LLM cites indexes; the collector maps indexes → ULIDs")
 **Do not relitigate:** the distiller does not invent `note_id`/`revision_id`/provenance from LLM output — it stamps those mechanically after the LLM returns content. The LLM's job is judgment (is this worth remembering, what type, what summary); the code's job is identity and provenance. Don't let the LLM's response dictate `event_id`s or `note_id` — those come from the code side.
 

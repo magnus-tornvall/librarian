@@ -1,6 +1,7 @@
 # 008 — docs/specs/structural-invariants.md
 
 **Phase:** 2 — Structural invariants
+**Dependencies:** none — doc-only, sourced entirely from the spec. Workable at any time.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §5 ("Human curation", "Ingestion: distill-only, two distillers"), §8 (Diagnostics isolation), §11 (Housekeeping)
 **Do not relitigate:** these three invariants are already decided — this task documents them together as roadmap item 3 (§12) asks, it does not design them. Do not propose a fourth invariant or generalize these into a rule-engine/plugin system (§5 "Deleted / deferred" already rejects generic frameworks here).
 

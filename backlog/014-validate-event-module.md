@@ -1,6 +1,7 @@
 # 014 — src/collector/validateEvent.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 004 (its test validates all 5 event golden examples).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §10.1 (event rules), §8 (poison-pill: "diagnostic records carry `record_class: 'diagnostic'`... every ingestion-side validator hard-rejects them")
 **Do not relitigate:** no schema-validation library (§14 test convention's spirit extends here too — plain functions, not zod/ajv, per §5's anti-generic-abstraction stance). The diagnostic hard-reject is not optional and not a warning — it must throw, matching §8's "quarantine-with-error, not silent skip."
 

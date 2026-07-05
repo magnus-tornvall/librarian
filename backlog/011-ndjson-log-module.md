@@ -1,6 +1,7 @@
 # 011 — src/log/ndjson.ts (append/read-all)
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** none (scaffold merged). Pure file I/O.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §4 (logs are "append-only, replayable, never deleted"), §5 ("partial trailing JSON lines ignored until completed")
 **Do not relitigate:** this is a generic-looking module but must stay narrow — one file's worth of append/read, not a database abstraction, not a generic `Log<T>` class hierarchy (§5 "Deleted / deferred": generic storage layer rejected). Keep it to plain functions over a file path.
 

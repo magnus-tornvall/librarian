@@ -1,6 +1,7 @@
 # 015 — src/collector/append.ts
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 011, 013, 014 (imports all three).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §4 ("Collector... normalize → redact → validate → append"), §5 (pipeline order: "native event → normalize → redact → validate → append")
 **Do not relitigate:** the pipeline order is fixed by the spec — redact **then** validate **then** append, always in that order, never reordered or made configurable. "Normalize" is a no-op passthrough in v1 (nothing to normalize yet — instrumentation adapters don't exist until roadmap step 6) — don't build normalization machinery for a need that doesn't exist yet.
 

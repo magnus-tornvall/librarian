@@ -1,6 +1,7 @@
 # 010 — fixtures/events/session-001.ndjson
 
 **Phase:** 3 — Walking skeleton
+**Dependencies:** 003 (event types to shape against). Soft: 004 (golden examples as reference only).
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §10.1 (event shape), §12 roadmap item 4
 **Do not relitigate:** this fixture must be shaped exactly like `schema/event.md`'s types (task 003) — it is not a new example, it's the input data the rest of Phase 3 processes end-to-end. Don't invent new event types or fields.
 

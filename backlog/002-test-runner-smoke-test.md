@@ -1,6 +1,7 @@
 # 002 — Bootstrap: node --test smoke test
 
 **Phase:** 0 — Scaffold
+**Dependencies:** 001.
 **Spec pointer:** `docs/specs/librarian-design-consolidated.md` §14 ("Test convention")
 **Do not relitigate:** §14 has decided `node --test`, TypeScript, black-box/integration only — no unit-test framework (no Jest/Vitest/Mocha), no ts-node/tsx. This task exists only to prove that pipeline works before any real module depends on it.
 
