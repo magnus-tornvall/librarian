@@ -87,7 +87,12 @@ export async function distill(
     source: { origin, distiller: 'llm' },
     note_type: noteType,
     title: judgment.title ?? '',
-    scope: {},
+    // An episodic note the distiller can't tie to a project defaults to global scope.
+    // Recall enforces "project match or explicit global scope" (§6), so a scopeless
+    // note would be permanently unrecallable — global is the honest v1 default here,
+    // mirroring the human distiller's curated-note default. Project attribution from
+    // event `git_root`/`git_remote` is a later concern (§5).
+    scope: { global: true },
     provenance: {
       session_id: sessionId,
       event_ids: events.map((event) => event.event_id as string),

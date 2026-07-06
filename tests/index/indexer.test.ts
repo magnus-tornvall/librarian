@@ -153,7 +153,7 @@ test('a note is indexed, then a newer tombstone removes it from BOTH notes_fts a
     count: number;
   };
   assert.equal(before.count, 1);
-  const recallBefore = recall(db, TOMBSTONE_TERM, { global: true }, undefined, NOW);
+  const recallBefore = recall(db, TOMBSTONE_TERM, { projectSlug: 'librarian' }, undefined, NOW);
   assert.equal(recallBefore.length, 1);
   assert.equal(recallBefore[0].note_id, TOMBSTONABLE_NOTE.note_id);
 
@@ -175,7 +175,7 @@ test('a note is indexed, then a newer tombstone removes it from BOTH notes_fts a
     count: number;
   };
   assert.equal(after.count, 0);
-  const recallAfter = recall(db, TOMBSTONE_TERM, { global: true }, undefined, NOW);
+  const recallAfter = recall(db, TOMBSTONE_TERM, { projectSlug: 'librarian' }, undefined, NOW);
   assert.deepEqual(recallAfter, []);
 });
 
@@ -213,7 +213,7 @@ test('a revision newer than a tombstone re-indexes the note (latest-wins is symm
     | undefined;
   assert.ok(row, 'a revision newer than the tombstone must be re-indexed');
   assert.equal(row.revision_id, '01J8X9F1TZ6R3M8N0P5Q7S9REVIVED');
-  const recalled = recall(db, TOMBSTONE_TERM, { global: true }, undefined, '2026-07-05T13:00:00.000Z');
+  const recalled = recall(db, TOMBSTONE_TERM, { projectSlug: 'librarian' }, undefined, '2026-07-05T13:00:00.000Z');
   assert.equal(recalled.length, 1);
   assert.equal(recalled[0].note_id, TOMBSTONABLE_NOTE.note_id);
 });

@@ -1,0 +1,37 @@
+{
+  "name": "project-scope enforcement: a global-only note is invisible to a project query",
+  "reason": "This fixture FAILS unless recall enforces the §6 'project match or explicit global scope' gate: a global-only note must not surface for a { projectSlug } query, and the in-scope project note must.",
+  "query": "keystone",
+  "opts": { "projectSlug": "orion" },
+  "now": "2026-07-06T12:00:00.000Z",
+  "notes": [
+    {
+      "note_id": "decision:orion-keystone",
+      "note_type": "decision",
+      "origin": "opencode",
+      "created_at": "2026-07-06T10:00:00.000Z",
+      "scope": { "project_slug": "orion" },
+      "title": "Orion keystone decision",
+      "body": { "summary": "The orion keystone decision pins the orion keystone rollout." }
+    },
+    {
+      "note_id": "curated:global-keystone",
+      "note_type": "curated",
+      "origin": "human",
+      "created_at": "2026-07-06T10:00:00.000Z",
+      "scope": { "global": true },
+      "title": "Global keystone runbook",
+      "body": { "summary": "A global keystone runbook describing the keystone procedure everywhere." }
+    },
+    { "note_id": "fact:filler-0", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "orion" }, "title": "Filler 0", "body": { "summary": "Unrelated content zero about assorted topics." } },
+    { "note_id": "fact:filler-1", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "orion" }, "title": "Filler 1", "body": { "summary": "Unrelated content one about assorted topics." } },
+    { "note_id": "fact:filler-2", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "orion" }, "title": "Filler 2", "body": { "summary": "Unrelated content two about assorted topics." } },
+    { "note_id": "fact:filler-3", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "orion" }, "title": "Filler 3", "body": { "summary": "Unrelated content three about assorted topics." } },
+    { "note_id": "fact:filler-4", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "orion" }, "title": "Filler 4", "body": { "summary": "Unrelated content four about assorted topics." } }
+  ],
+  "expect": {
+    "include": ["decision:orion-keystone"],
+    "exclude": ["curated:global-keystone"],
+    "maxResults": 5
+  }
+}
