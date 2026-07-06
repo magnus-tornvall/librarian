@@ -1,0 +1,52 @@
+{
+  "name": "git-commit-via-bash",
+  "description": "A bash tool whose command line is a `git commit` invocation is recategorized to vcs_commit (canonical_name stays bash), ships the raw command, and carries a non-authoritative vcs_commit salience hint.",
+  "native": {
+    "kind": "tool",
+    "tool": "bash",
+    "command": "git commit -m \"fix: expire check before redirect\""
+  },
+  "env": {
+    "event_id": "01J8X7QK42V5X9P2M6Q0R5S7VW",
+    "ts": "2026-07-06T09:14:59.887Z",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 3,
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK42V5X9P2M6Q0R5S7VW",
+    "ts": "2026-07-06T09:14:59.887Z",
+    "type": "tool",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 3,
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "bash",
+      "canonical_name": "bash",
+      "category": "vcs_commit"
+    },
+    "command": "git commit -m \"fix: expire check before redirect\"",
+    "hints": { "possibly_salient": true, "reason": "vcs_commit" }
+  }
+}
