@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ulid } from 'ulid';
-import type { NoteRevision } from '../note.ts';
-import { appendNote } from '../log/noteLog.ts';
+import type { NoteRecord, NoteRevision, NoteTombstone } from '../note.ts';
+import { appendNote, readAllNotes } from '../log/noteLog.ts';
 
 /**
  * Human distiller (curated-note importer, §5 "Human curation"). The human already
@@ -47,6 +47,24 @@ function deriveSummary(body: string): string {
   return paragraph ?? '';
 }
 
+type NoteIdState = { revision: NoteRevision; tombstoned: boolean };
+
+/** Latest revision per note_id plus whether a tombstone came after it (log append order). */
+function latestStatePerNoteId(records: NoteRecord[]): Map<string, NoteIdState> {
+  const state = new Map<string, NoteIdState>();
+  for (const record of records) {
+    if (record.kind === 'note_revision') {
+      state.set(record.note_id, { revision: record, tombstoned: false });
+    } else {
+      const existing = state.get(record.note_id);
+      if (existing) {
+        existing.tombstoned = true;
+      }
+    }
+  }
+  return state;
+}
+
 /**
  * Import one curated Markdown file into the note log. Every rejection below is a
  * thrown error naming the invariant violated — quarantine-with-error, never a
@@ -88,11 +106,65 @@ export function importCuratedNote(vaultDir: string, filePath: string, dataDir: s
   const noteId = frontmatter.note_id ?? `curated:${createHash('sha256').update(relPath).digest('hex')}`;
   const contentHash = `sha256:${createHash('sha256').update(content).digest('hex')}`;
 
+  // ponytail: full-log rescan per file, fine at v1 scale; a future batch importer
+  // looping over thousands of curated files should hoist this scan to run once.
+  const latestByNoteId = latestStatePerNoteId(readAllNotes(dataDir) as NoteRecord[]);
+  const noteIdState = latestByNoteId.get(noteId);
+  // A tombstoned note_id is dead — resurrecting it (e.g. the old path reappears)
+  // must mint a fresh revision, never silently resume as "unchanged" or "edited".
+  const existing = noteIdState && !noteIdState.tombstoned ? noteIdState.revision : undefined;
+
+  // Idempotency (§5): re-import of the same file at the same path with unchanged
+  // content mints nothing. A path change still mints a revision so `source_path`
+  // stays accurate, even when content (and thus content_hash) didn't move.
+  if (existing && existing.source.content_hash === contentHash && existing.source.source_path === relPath) {
+    return existing;
+  }
+
+  let previousRevisionId: string | undefined;
+  let renameTombstone: NoteTombstone | undefined;
+
+  if (existing) {
+    previousRevisionId = existing.revision_id;
+  } else if (!frontmatter.note_id) {
+    // Rename detection is path-hash identity only (§5): an explicit frontmatter
+    // note_id travels with the content and is always caught by the `existing`
+    // branch above, never here.
+    // ponytail: first matching candidate wins if two distinct notes ever share a
+    // content_hash (e.g. identical boilerplate) — exact-hash rename detection
+    // can't disambiguate further without the fuzzy matching §15 defers.
+    for (const [candidateId, candidateState] of latestByNoteId) {
+      const candidate = candidateState.revision;
+      const oldSourcePath = candidate.source.source_path;
+      if (
+        candidateState.tombstoned ||
+        candidateId === noteId ||
+        candidate.source.content_hash !== contentHash ||
+        !oldSourcePath ||
+        fs.existsSync(path.join(resolvedVault, oldSourcePath))
+      ) {
+        continue;
+      }
+      renameTombstone = {
+        kind: 'note_tombstone',
+        schema_version: 1,
+        note_id: candidateId,
+        revision_id: ulid(),
+        previous_revision_id: candidate.revision_id,
+        reason: 'renamed',
+        created_at: new Date().toISOString(),
+        source: { kind: 'human' },
+      };
+      break;
+    }
+  }
+
   const note: NoteRevision = {
     kind: 'note_revision',
     schema_version: 1,
     note_id: noteId,
     revision_id: ulid(),
+    ...(previousRevisionId ? { previous_revision_id: previousRevisionId } : {}),
     created_at: new Date().toISOString(),
     identity: { mode: 'deterministic', key: noteId },
     source: { origin: 'human', distiller: 'human', source_path: relPath, content_hash: contentHash },
@@ -106,5 +178,8 @@ export function importCuratedNote(vaultDir: string, filePath: string, dataDir: s
   };
 
   appendNote(dataDir, note);
+  if (renameTombstone) {
+    appendNote(dataDir, renameTombstone);
+  }
   return note;
 }
