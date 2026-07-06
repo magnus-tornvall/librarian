@@ -131,6 +131,112 @@ test('rejection: a .md file with record_class: diagnostic in YAML frontmatter is
   assert.throws(() => importCuratedNote(vaultDir, filePath, dataDir), /record_class: diagnostic/);
 });
 
+test('re-import idempotency: an unchanged file appends nothing on the second run', () => {
+  const vaultDir = tempVaultDir();
+  const dataDir = tempDataDir();
+  const content = '# Stable Note\n\nBody paragraph.\n';
+  const filePath = writeCurated(vaultDir, 'stable.md', content);
+
+  importCuratedNote(vaultDir, filePath, dataDir);
+  const afterFirst = readAllNotes(dataDir);
+  assert.equal(afterFirst.length, 1);
+
+  importCuratedNote(vaultDir, filePath, dataDir);
+  const afterSecond = readAllNotes(dataDir);
+  assert.equal(afterSecond.length, 1);
+  assert.deepEqual(afterSecond, afterFirst);
+});
+
+test('re-import of an edited file mints a new revision under the same note_id', () => {
+  const vaultDir = tempVaultDir();
+  const dataDir = tempDataDir();
+  const filePath = writeCurated(vaultDir, 'evolving.md', '# Evolving\n\nOriginal body.\n');
+
+  const first = importCuratedNote(vaultDir, filePath, dataDir);
+
+  fs.writeFileSync(filePath, '# Evolving\n\nRevised body.\n');
+  const second = importCuratedNote(vaultDir, filePath, dataDir);
+
+  assert.equal(second.note_id, first.note_id);
+  assert.notEqual(second.revision_id, first.revision_id);
+  assert.equal(second.previous_revision_id, first.revision_id);
+  assert.equal(second.body.details, '# Evolving\n\nRevised body.\n');
+
+  const stored = readAllNotes(dataDir);
+  assert.equal(stored.length, 2);
+});
+
+test('rename of a path-hash note mints the new-id revision and tombstones the old id', () => {
+  const vaultDir = tempVaultDir();
+  const dataDir = tempDataDir();
+  const content = '# Renamed Note\n\nUnchanged body across the move.\n';
+  const oldPath = writeCurated(vaultDir, 'old-name.md', content);
+
+  const original = importCuratedNote(vaultDir, oldPath, dataDir);
+
+  fs.unlinkSync(oldPath);
+  const newPath = writeCurated(vaultDir, 'new-name.md', content);
+  const renamed = importCuratedNote(vaultDir, newPath, dataDir);
+
+  assert.notEqual(renamed.note_id, original.note_id);
+  assert.equal(renamed.previous_revision_id, undefined);
+
+  const stored = readAllNotes(dataDir) as Array<Record<string, unknown>>;
+  assert.equal(stored.length, 3);
+
+  const tombstone = stored.find((r) => r.kind === 'note_tombstone') as Record<string, unknown>;
+  assert.ok(tombstone);
+  assert.equal(tombstone.note_id, original.note_id);
+  assert.equal(tombstone.reason, 'renamed');
+  assert.equal(tombstone.previous_revision_id, original.revision_id);
+  assert.deepEqual(tombstone.source, { kind: 'human' });
+});
+
+test('explicit frontmatter note_id survives a rename: edited case, never a tombstone', () => {
+  const vaultDir = tempVaultDir();
+  const dataDir = tempDataDir();
+  const content = ['---', 'note_id: curated:pinned', '---', '', '# Pinned', '', 'Body text.', ''].join('\n');
+  const oldPath = writeCurated(vaultDir, 'old-location.md', content);
+
+  const original = importCuratedNote(vaultDir, oldPath, dataDir);
+
+  fs.unlinkSync(oldPath);
+  const newPath = writeCurated(vaultDir, 'new-location.md', content);
+  const moved = importCuratedNote(vaultDir, newPath, dataDir);
+
+  assert.equal(moved.note_id, 'curated:pinned');
+  assert.equal(moved.note_id, original.note_id);
+  assert.equal(moved.previous_revision_id, original.revision_id);
+  assert.equal(moved.source.source_path, 'curated/new-location.md');
+
+  const stored = readAllNotes(dataDir) as Array<Record<string, unknown>>;
+  assert.equal(stored.length, 2);
+  assert.ok(!stored.some((r) => (r as Record<string, unknown>).kind === 'note_tombstone'));
+});
+
+test('a file recreated at a tombstoned path-hash note_id mints a fresh revision, never a silent no-op', () => {
+  const vaultDir = tempVaultDir();
+  const dataDir = tempDataDir();
+  const content = '# Renamed Then Restored\n\nUnchanged body throughout.\n';
+  const oldPath = writeCurated(vaultDir, 'old-name.md', content);
+
+  const original = importCuratedNote(vaultDir, oldPath, dataDir);
+
+  fs.unlinkSync(oldPath);
+  writeCurated(vaultDir, 'new-name.md', content); // rename: tombstones original's note_id
+  importCuratedNote(vaultDir, path.join(vaultDir, 'curated', 'new-name.md'), dataDir);
+
+  const restoredPath = writeCurated(vaultDir, 'old-name.md', content); // same path, same content, dead note_id
+  const restored = importCuratedNote(vaultDir, restoredPath, dataDir);
+
+  assert.equal(restored.note_id, original.note_id);
+  assert.notEqual(restored.revision_id, original.revision_id);
+  assert.equal(restored.previous_revision_id, undefined);
+
+  const stored = readAllNotes(dataDir);
+  assert.equal(stored.length, 4); // original + renamed + tombstone + restored
+});
+
 test('rejection: a symlink inside curated/ pointing outside the vault does not bypass the directory check', () => {
   const vaultDir = tempVaultDir();
   const dataDir = tempDataDir();
