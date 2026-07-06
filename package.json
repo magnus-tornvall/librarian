@@ -3,6 +3,9 @@
   "private": true,
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "librarian": "dist/cli.js"
+  },
   "engines": {
     "node": ">=22.18.0"
   },
