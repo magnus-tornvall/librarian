@@ -13,10 +13,17 @@
  * stamps facts, emits cheap hints (via the mapper), and hands off. Nothing more.
  *
  * OpenCode plugin API: https://opencode.ai/docs/plugins — a plugin is an async
- * function returning a hooks object. The relevant hooks here are `event` (session
- * lifecycle + user messages) and `tool.execute.after` (tool invocations). The hook
- * NAMES are not the contract (they drift across OpenCode versions); the mapping in
- * `map.ts` is. When a hook name changes, only the lowering below changes.
+ * function returning a hooks object. Hook shapes below track the pinned SDK
+ * (@opencode-ai/plugin + @opencode-ai/sdk). The hooks this adapter subscribes to:
+ *
+ *   - `chat.message`                    — a new user message → PromptEvent
+ *   - `tool.execute.after`              — a tool invocation → ToolEvent
+ *   - `experimental.session.compacting` — pre-compaction → SessionEvent(compact)
+ *   - `event` (session.created/deleted) — session lifecycle → SessionEvent(start/stop)
+ *
+ * The hook NAMES are not the canonical contract (they drift across OpenCode versions);
+ * the mapping in `map.ts` is. When a hook name or payload changes, only the lowering
+ * below changes — the mapper and its fixtures are untouched.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -31,6 +38,7 @@ import {
   type FileAction,
   type NativePayload,
   type Resource,
+  type SessionPayload,
 } from './map.ts';
 
 // ---------------------------------------------------------------------------
@@ -101,10 +109,11 @@ function resolveGitFacts(cwd: string): Pick<Resource, 'git_root' | 'git_remote' 
  * for the life of a session, so we resolve them at plugin init and reuse them —
  * spawning `git`/`librarian` per event would be wasteful.
  *
- * ponytail: `agent_version` is left unset here — OpenCode does not surface its own
- * version to a plugin through the documented context. When a version becomes
- * available on the plugin context, stamp it; the schema already carries the optional
- * field. Facts we cannot resolve are omitted, never faked.
+ * `agent_version` is filled opportunistically: OpenCode only surfaces its version on
+ * the full `Session` object (`session.created`/`session.deleted`), not on the chat/tool
+ * hooks. So it is unset at init and back-filled once `session.created` is observed (see
+ * the `event` handler), after which every subsequent event in the session carries it.
+ * Facts we cannot resolve are omitted, never faked.
  */
 function buildResource(cwd: string): Resource {
   return {
@@ -145,9 +154,10 @@ function handOff(event: CanonicalEvent, log: (level: string, message: string) =>
 // ---------------------------------------------------------------------------
 // Lowering: OpenCode native hook args → the mapper's terse NativePayload.
 //
-// These are intentionally forgiving readers over loosely-typed hook arguments — the
-// plugin API surface is JS objects, not a versioned type we can import here. Anything
-// we cannot understand is skipped (returns undefined) rather than mis-mapped.
+// Shapes track the pinned SDK (@opencode-ai/sdk types.gen.ts). We read them through
+// forgiving accessors rather than importing the SDK types (keeping this repo free of
+// that dependency), but the field paths below are the real, version-pinned ones.
+// Anything we cannot understand is skipped (returns undefined) rather than mis-mapped.
 // ---------------------------------------------------------------------------
 
 type Loose = Record<string, unknown>;
@@ -160,77 +170,99 @@ function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
 
-/** Map an OpenCode `event` payload (session lifecycle + user messages) → NativePayload. */
-function lowerEvent(evt: Loose): NativePayload | undefined {
-  const type = asString(evt.type);
-  if (!type) {
+/** A parsed `Session` object (present on session.created/deleted under properties.info). */
+interface SessionInfo {
+  id: string;
+  version?: string;
+}
+
+/** Read the `Session` under an `event`'s `properties.info`, if present and well-formed. */
+function readSessionInfo(evt: Loose): SessionInfo | undefined {
+  const props = asRecord(evt.properties);
+  const info = props && asRecord(props.info);
+  const id = info && asString(info.id);
+  if (!id) {
     return undefined;
   }
-
-  // Session lifecycle. OpenCode fires session.created / session.compacted /
-  // session.deleted; map them onto start / compact / stop respectively.
-  if (type === 'session.created') {
-    return { kind: 'session', action: 'start' };
-  }
-  if (type === 'session.compacted') {
-    return { kind: 'session', action: 'compact' };
-  }
-  if (type === 'session.deleted' || type === 'session.idle') {
-    return { kind: 'session', action: 'stop' };
-  }
-
-  // A user message becoming available is the prompt signal. The exact envelope has
-  // shifted across versions (message.updated with a nested part, or a dedicated
-  // message part event); read defensively for the user's text.
-  if (type === 'message.updated' || type === 'message.part.updated') {
-    const props = asRecord(evt.properties) ?? evt;
-    const info = asRecord(props.info) ?? asRecord(props.message) ?? props;
-    const role = asString(info.role);
-    const text = extractMessageText(props);
-    if (role === 'user' && text) {
-      return { kind: 'prompt', text };
-    }
-  }
-
-  return undefined;
+  return { id, version: asString(info.version) };
 }
 
-/** Pull the user-visible text out of a message-ish payload, tolerating shapes. */
-function extractMessageText(props: Loose): string | undefined {
-  const direct = asString(props.text);
-  if (direct) {
-    return direct;
+/**
+ * Map an OpenCode `event` payload to a session-lifecycle NativePayload — but only the
+ * two ONE-SHOT transitions we care about:
+ *
+ *   - `session.created` → start. Fires EXACTLY ONCE when a session is created (unlike
+ *     Claude Code's `SessionStart`, which fires repeatedly across a session's life).
+ *   - `session.deleted` → stop. Fires once when the session is deleted — the only
+ *     one-shot "session ended" signal OpenCode offers (session.idle repeats per turn,
+ *     so it is deliberately NOT used here).
+ *
+ * Compaction is handled by its own `experimental.session.compacting` hook, not here.
+ * Both events carry the full `Session` under `properties.info` (so the session id, and
+ * for `created` the version, come from there).
+ */
+function lowerSessionEvent(evt: Loose): { payload: SessionPayload; session: SessionInfo } | undefined {
+  const type = asString(evt.type);
+  if (type !== 'session.created' && type !== 'session.deleted') {
+    return undefined;
   }
-  const part = asRecord(props.part);
-  if (part) {
-    const partText = asString(part.text);
-    if (part.type === 'text' && partText) {
-      return partText;
-    }
+  const session = readSessionInfo(evt);
+  if (!session) {
+    return undefined;
   }
-  const parts = props.parts;
-  if (Array.isArray(parts)) {
-    const texts = parts
-      .map((p) => {
-        const rec = asRecord(p);
-        return rec && rec.type === 'text' ? asString(rec.text) : undefined;
-      })
-      .filter((t): t is string => t !== undefined);
-    if (texts.length > 0) {
-      return texts.join('\n');
-    }
-  }
-  return undefined;
+  const action = type === 'session.created' ? 'start' : 'stop';
+  return { payload: { kind: 'session', action }, session };
 }
 
-/** Map an OpenCode `tool.execute.after` payload → NativePayload. */
-function lowerTool(input: Loose, output: Loose): NativePayload | undefined {
+/** Concatenate the user-visible text out of a message's `parts[]` (TextPart.text),
+ *  skipping synthetic/ignored parts and anything that is not a text part. */
+function extractUserText(parts: unknown): string | undefined {
+  if (!Array.isArray(parts)) {
+    return undefined;
+  }
+  const texts = parts
+    .map((p) => {
+      const rec = asRecord(p);
+      if (!rec || rec.type !== 'text' || rec.synthetic === true || rec.ignored === true) {
+        return undefined;
+      }
+      return asString(rec.text);
+    })
+    .filter((t): t is string => t !== undefined);
+  return texts.length > 0 ? texts.join('\n') : undefined;
+}
+
+/**
+ * Map an OpenCode `chat.message` payload → a prompt NativePayload. The hook fires with
+ * one message + its parts; we emit only for user messages. Returns the message id too
+ * so the caller can dedup (the same message can be delivered more than once).
+ */
+function lowerChatMessage(output: Loose): { payload: NativePayload; messageId: string | undefined } | undefined {
+  const message = asRecord(output.message);
+  if (!message || message.role !== 'user') {
+    return undefined;
+  }
+  const text = extractUserText(output.parts);
+  if (!text) {
+    return undefined;
+  }
+  // raw prompt — collector redacts (§5)
+  return { payload: { kind: 'prompt', text }, messageId: asString(message.id) };
+}
+
+/**
+ * Map an OpenCode `tool.execute.after` payload → a tool NativePayload. The tool args
+ * (command line, filePath) are on `input.args` — the pinned signature is
+ * `input: { tool, sessionID, callID, args }`, `output: { title, output, metadata }`
+ * (there is no `output.args`).
+ */
+function lowerTool(input: Loose): NativePayload | undefined {
   const tool = asString(input.tool);
   if (!tool) {
     return undefined;
   }
 
-  const args = asRecord(output.args) ?? asRecord(input.args) ?? {};
+  const args = asRecord(input.args) ?? {};
   const command = asString(args.command);
   const files = extractFiles(tool, args);
 
@@ -277,8 +309,17 @@ interface PluginContext {
  */
 export const LibrarianOpenCodePlugin = async (ctx: PluginContext) => {
   const cwd = ctx.worktree ?? ctx.directory ?? process.cwd();
-  const resource = buildResource(cwd);
+  // Mutable so `session.created` can back-fill `agent_version` (Session.version) into
+  // the shared facts, after which every subsequent event in the session carries it.
+  let resource = buildResource(cwd);
   const sessionCwd = cwd;
+
+  // Prompt dedup: `chat.message` is a one-shot "new message received" signal, but the
+  // same UserMessage.id can still be delivered more than once — remember the ids we
+  // have already emitted a PromptEvent for and skip repeats. In-memory only, so a
+  // plugin restart resets it (at-least-once; an occasional post-restart dup is fine,
+  // the collector has no id-dedup today and instrumentation stays dumb).
+  const seenMessageIds = new Set<string>();
 
   const log = (level: string, message: string): void => {
     // Prefer structured logging through the SDK; fall back to stderr.
@@ -290,49 +331,81 @@ export const LibrarianOpenCodePlugin = async (ctx: PluginContext) => {
     }
   };
 
+  /** Build the per-event context. There is no `turn` concept in the OpenCode payloads,
+   *  so `context.turn` is deliberately left unset (schema allows it to be absent). */
+  const contextFor = (sessionId: string | undefined): Context => ({
+    session_id: sessionId && sessionId.length > 0 ? sessionId : 'unknown',
+    cwd: sessionCwd,
+  });
+
   /** Turn a lowered payload into a stamped canonical event and hand it off. */
-  const emit = (payload: NativePayload, context: Context): void => {
+  const emit = (payload: NativePayload, sessionId: string | undefined): void => {
     const events = map(payload, {
       event_id: ulid(), // ULID stamped before handoff (§10.1)
       ts: new Date().toISOString(), // ISO 8601 stamp (§10.1)
       resource,
-      context,
+      context: contextFor(sessionId),
     });
     for (const event of events) {
       handOff(event, log);
     }
   };
 
-  /** Best-effort session id + turn from a loose hook payload; cwd is the session cwd. */
-  const contextFrom = (source: Loose): Context => {
-    const props = asRecord(source.properties) ?? source;
-    const info = asRecord(props.info) ?? asRecord(props.sessionInfo) ?? props;
-    const session_id =
-      asString(props.sessionID) ??
-      asString(info.sessionID) ??
-      asString(info.sessionId) ??
-      asString(info.id) ??
-      'unknown';
-    const turnRaw = props.turn ?? info.turn;
-    const context: Context = { session_id, cwd: sessionCwd };
-    if (typeof turnRaw === 'number') {
-      context.turn = turnRaw;
-    }
-    return context;
-  };
-
   return {
-    event: async ({ event }: { event: Loose }) => {
-      const payload = lowerEvent(event);
+    /**
+     * A new message was received. We emit a PromptEvent for user messages only.
+     *
+     * Why `chat.message` and not `experimental.chat.messages.transform`: the latter is a
+     * transform over the ENTIRE message history that fires on every chat round-trip, so
+     * emitting per user message there would re-emit every prior prompt each turn.
+     * `chat.message` is the one-shot "message received" signal — the natural fit.
+     *
+     * We capture the prompt at first receipt only; later edits to a message (message
+     * updates) are deliberately NOT re-emitted — handling updated/edited messages is
+     * deferred. Dedup by message id guards against a repeated delivery of the same id.
+     */
+    'chat.message': async (input: Loose, output: Loose) => {
+      const lowered = lowerChatMessage(output);
+      if (!lowered) {
+        return;
+      }
+      if (lowered.messageId) {
+        if (seenMessageIds.has(lowered.messageId)) {
+          return;
+        }
+        seenMessageIds.add(lowered.messageId);
+      }
+      emit(lowered.payload, asString(input.sessionID) ?? asString((asRecord(output.message) ?? {}).sessionID));
+    },
+
+    /** A tool finished executing → ToolEvent. Args (command/filePath) are on input.args. */
+    'tool.execute.after': async (input: Loose, _output: Loose) => {
+      const payload = lowerTool(input);
       if (payload) {
-        emit(payload, contextFrom(event));
+        emit(payload, asString(input.sessionID));
       }
     },
-    'tool.execute.after': async (input: Loose, output: Loose) => {
-      const payload = lowerTool(input, output);
-      if (payload) {
-        emit(payload, contextFrom(input));
+
+    /**
+     * Fired BEFORE session compaction runs (hook is "compacting", distinct from the
+     * post-hoc `session.compacted` event) → SessionEvent(compact). We are a pure
+     * observer here: we do not touch `output.context`/`output.prompt`.
+     */
+    'experimental.session.compacting': async (input: Loose, _output: Loose) => {
+      emit({ kind: 'session', action: 'compact' }, asString(input.sessionID));
+    },
+
+    /** Session lifecycle: only the one-shot session.created (start) / session.deleted
+     *  (stop). session.created also back-fills `agent_version` from Session.version. */
+    event: async ({ event }: { event: Loose }) => {
+      const lowered = lowerSessionEvent(event);
+      if (!lowered) {
+        return;
       }
+      if (lowered.payload.action === 'start' && lowered.session.version && !resource.agent_version) {
+        resource = { ...resource, agent_version: lowered.session.version };
+      }
+      emit(lowered.payload, lowered.session.id);
     },
   };
 };

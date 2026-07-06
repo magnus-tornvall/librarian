@@ -58,9 +58,28 @@ distiller (§4, §5).
 
 `resource` carries `agent: "opencode"`, `machine_id` (via `librarian machine-id` or
 `MACHINE_ID_PATH`), `cwd`, and `git_root`/`git_remote`/`git_branch` when resolvable —
-**facts, not identity**. There is deliberately no `project_slug` on events (§10.1). The
-adapter stamps `event_id` (ULID) and `ts` before handoff. `hints` are non-authoritative
-and optional; the collector and distiller own judgment.
+**facts, not identity**. `agent_version` is back-filled from `Session.version` once
+`session.created` is observed (OpenCode surfaces its version only on the full `Session`
+object), after which every later event in the session carries it. There is deliberately
+no `project_slug` on events (§10.1). The adapter stamps `event_id` (ULID) and `ts` before
+handoff. `hints` are non-authoritative and optional; the collector and distiller own
+judgment.
+
+## OpenCode hooks used
+
+The mapping table above is the canonical contract; the specific OpenCode hooks the plugin
+subscribes to (pinned to the `@opencode-ai/plugin`/`sdk` surface) are:
+
+| Hook | Emits | Notes |
+| ---- | ----- | ----- |
+| `chat.message` | `PromptEvent` (user messages) | One-shot "new message received". Chosen over `experimental.chat.messages.transform`, which is a whole-history transform firing every round-trip (would duplicate prompts). Prompt is captured at first receipt; **updated/edited messages are deferred** (not re-emitted). Deduped by message id. |
+| `tool.execute.after` | `ToolEvent` | Tool args (command line, `filePath`) are read from `input.args`. |
+| `experimental.session.compacting` | `SessionEvent` (`compact`) | Fires **before** compaction (distinct from the post-hoc `session.compacted` event); the plugin is a pure observer and does not modify the compaction prompt. |
+| `event` → `session.created` | `SessionEvent` (`start`) | Fires **exactly once** per session (unlike Claude Code's repeated `SessionStart`). Also back-fills `agent_version`. |
+| `event` → `session.deleted` | `SessionEvent` (`stop`) | The one-shot "session ended" signal (`session.idle` repeats per turn and is intentionally not used). |
+
+There is no `turn` concept in the OpenCode payloads, so `context.turn` is left unset
+(the schema allows it to be absent).
 
 ## v1 ceiling
 
