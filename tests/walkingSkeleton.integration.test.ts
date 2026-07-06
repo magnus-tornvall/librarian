@@ -91,7 +91,10 @@ test('walking skeleton: fixture events → distill → note log → export → i
   // 4. Distill via distill() (018) using makeFixtureProvider() (017) — NOT live inference.
   const note = await distill(loggedEvents, SESSION_ID, makeFixtureProvider(LLM_RESPONSE), ORIGIN);
   assert.equal(note.kind, 'note_revision', 'stage 4 (distill): result must be a note_revision');
-  assert.ok(note.note_id.startsWith(`${ORIGIN}:`), 'stage 4 (distill): note_id must be stamped under the origin');
+  assert.ok(
+    note.note_id.startsWith(`${note.note_type}:`),
+    'stage 4 (distill): note_id must be stamped under the note type',
+  );
   assert.equal(note.source.distiller, 'llm', 'stage 4 (distill): distiller must be stamped llm');
 
   // 5. Append the resulting note via appendNote() (019). Decoys give the FTS

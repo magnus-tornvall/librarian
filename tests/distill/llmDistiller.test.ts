@@ -51,17 +51,17 @@ test('provenance.event_ids has length 4 matching the input events', async () => 
   assert.equal(note.provenance.session_id, SESSION_ID);
 });
 
-test('identity and note_id are stamped mechanically as episodic under the origin', async () => {
+test('identity and note_id are stamped mechanically as episodic under the note type', async () => {
   const events = loadFixtureEvents();
   const note = await distill(events, SESSION_ID, makeFixtureProvider(LLM_RESPONSE), ORIGIN);
 
   assert.equal(note.identity.mode, 'episodic');
-  assert.ok(note.note_id.startsWith(`${ORIGIN}:`));
+  assert.ok(note.note_id.startsWith(`${note.note_type}:`));
   // ULID suffix: 26 Crockford-base32 chars.
-  const suffix = note.note_id.slice(ORIGIN.length + 1);
+  const suffix = note.note_id.slice(note.note_type.length + 1);
   assert.match(suffix, /^[0-9A-HJKMNP-TV-Z]{26}$/);
   assert.match(note.revision_id, /^[0-9A-HJKMNP-TV-Z]{26}$/);
-  assert.notEqual(note.note_id.slice(ORIGIN.length + 1), note.revision_id);
+  assert.notEqual(note.note_id.slice(note.note_type.length + 1), note.revision_id);
 });
 
 test('the LLM judgment (type/title/summary) is merged into the note', async () => {
@@ -89,7 +89,7 @@ test('the LLM cannot dictate identity/provenance even if it tries', async () => 
   });
   const note = await distill(events, SESSION_ID, makeFixtureProvider(hostile), ORIGIN);
 
-  assert.ok(note.note_id.startsWith(`${ORIGIN}:`));
+  assert.ok(note.note_id.startsWith(`${note.note_type}:`));
   assert.notEqual(note.note_id, 'attacker:HIJACKED');
   assert.notEqual(note.revision_id, 'HIJACKED');
   assert.deepEqual(
