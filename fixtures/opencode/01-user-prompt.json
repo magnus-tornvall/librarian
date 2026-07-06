@@ -1,0 +1,45 @@
+{
+  "name": "user-prompt-in-git-repo",
+  "description": "A user prompt sent from inside a git repo maps to a PromptEvent with the raw prompt text and a full resource block (git_root/remote/branch).",
+  "native": {
+    "kind": "prompt",
+    "text": "fix the login redirect bug, it loops on expired tokens"
+  },
+  "env": {
+    "event_id": "01J8X7QK3VZ9R4M2N6P0S5T7WY",
+    "ts": "2026-07-06T09:12:03.441Z",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 1,
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK3VZ9R4M2N6P0S5T7WY",
+    "ts": "2026-07-06T09:12:03.441Z",
+    "type": "prompt",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 1,
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "prompt": "fix the login redirect bug, it loops on expired tokens"
+  }
+}

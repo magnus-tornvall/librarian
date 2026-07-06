@@ -1,0 +1,45 @@
+{
+  "name": "session-compact",
+  "description": "An OpenCode session compaction maps to a SessionEvent with action compact. Session lifecycle transitions carry no salience hint.",
+  "native": {
+    "kind": "session",
+    "action": "compact"
+  },
+  "env": {
+    "event_id": "01J8X7QK44X9Z5R8N6S0T5V7VU",
+    "ts": "2026-07-06T09:20:00.000Z",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 5,
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK44X9Z5R8N6S0T5V7VU",
+    "ts": "2026-07-06T09:20:00.000Z",
+    "type": "session",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 5,
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "action": "compact"
+  }
+}
