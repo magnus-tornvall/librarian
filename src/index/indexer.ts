@@ -3,15 +3,13 @@ import { readAllNotes } from '../log/noteLog.ts';
 import { advanceCursor } from '../log/cursor.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 
-function latestRevisionPerNoteId(records: NoteRecord[]): NoteRevision[] {
-  const latest = new Map<string, NoteRevision>();
+function latestRecordPerNoteId(records: NoteRecord[]): NoteRecord[] {
+  const latest = new Map<string, NoteRecord>();
   for (const record of records) {
-    if (record.kind === 'note_tombstone') {
-      // ponytail: v1 doesn't remove tombstoned notes from the index yet — real gap, not silently ignored.
-      continue;
-    }
     const existing = latest.get(record.note_id);
-    // <=, not <: on a created_at tie, prefer whichever revision was appended later in the log.
+    // Tombstones and revisions compete as peers on created_at; latest-wins is symmetric, so a
+    // tombstone can retire a note and a newer revision can revive it. <=, not <: on a created_at
+    // tie, prefer whichever record was appended later in the log.
     if (!existing || existing.created_at <= record.created_at) {
       latest.set(record.note_id, record);
     }
@@ -44,7 +42,16 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath: s
   );
 
   let indexedCount = 0;
-  for (const note of latestRevisionPerNoteId(notes)) {
+  for (const note of latestRecordPerNoteId(notes)) {
+    // Delete first regardless of record kind: a tombstoned note must lose any existing row, and a
+    // surviving revision is deleted-then-reinserted to upsert. This is how a tombstone removes a
+    // note from the index (and therefore from recall) with no separate removal pass.
+    deleteStmt.run(note.note_id);
+
+    if (note.kind === 'note_tombstone') {
+      continue; // latest record is a tombstone: leave the note deleted, never re-index it
+    }
+
     if (!note.source.origin) {
       continue; // fail-closed: missing origin is a hard skip, never indexed with a null origin
     }
@@ -56,7 +63,6 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath: s
       continue; // fail-closed: one malformed note must not crash indexing for every note after it
     }
 
-    deleteStmt.run(note.note_id);
     insertStmt.run(note.note_id, note.revision_id, note.source.origin, note.note_type, note.created_at, searchText);
     indexedCount += 1;
   }

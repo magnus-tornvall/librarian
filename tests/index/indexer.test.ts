@@ -6,6 +6,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { migrate } from '../../src/index/schema.ts';
 import { indexNotes } from '../../src/index/indexer.ts';
+import { recall } from '../../src/recall/query.ts';
 import { appendNote } from '../../src/log/noteLog.ts';
 
 function tempDataDir(): string {
@@ -100,4 +101,119 @@ test('when two revisions of the same note_id share a created_at, the later-appen
     revision_id: string;
   };
   assert.equal(row.revision_id, 'rev-2');
+});
+
+// A distinctive term the decoys never use, so BM25's IDF stays well above zero for this one note.
+const TOMBSTONE_TERM = 'tombstonable';
+const TOMBSTONABLE_NOTE = {
+  kind: 'note_revision',
+  schema_version: 1,
+  note_id: 'curated:01J8X9F1TZ6R3M8N0P5Q7S9TOMB',
+  revision_id: '01J8X9F1TZ6R3M8N0P5Q7S9TOMBA',
+  created_at: '2026-07-05T10:00:00.000Z',
+  identity: { mode: 'deterministic', key: 'tombstonable-note' },
+  source: { origin: 'human', distiller: 'human' },
+  note_type: 'curated',
+  title: 'A tombstonable curated note about tombstonable things',
+  scope: { project_slug: 'librarian' },
+  provenance: {},
+  links: [],
+  body: { summary: 'This tombstonable note exists to be retired by a later tombstone.' },
+};
+
+// Recency decay is anchored near the notes' created_at, and enough decoys are indexed that
+// FTS5's bm25() yields a nonzero relevance for TOMBSTONE_TERM (mirrors the recall test corpus).
+const NOW = '2026-07-05T12:00:00.000Z';
+
+function seedDecoyNotes(dataDir: string): void {
+  for (let i = 0; i < 5; i += 1) {
+    appendNote(dataDir, {
+      ...VALID_NOTE,
+      note_id: `decoy:${i}`,
+      revision_id: `decoy-rev-${i}`,
+      title: `unrelated filler note ${i}`,
+      body: { summary: `unrelated filler content ${i}` },
+    });
+  }
+}
+
+test('a note is indexed, then a newer tombstone removes it from BOTH notes_fts and recall', () => {
+  const dataDir = tempDataDir();
+  const cursorPath = path.join(dataDir, 'cursor.json');
+  seedDecoyNotes(dataDir);
+  appendNote(dataDir, TOMBSTONABLE_NOTE);
+
+  const db = new Database(':memory:');
+  migrate(db);
+  indexNotes(db, dataDir, cursorPath);
+
+  // Precondition: the revision really is indexed and really is recallable, so the post-tombstone
+  // absence assertions below are meaningful rather than vacuously true.
+  const before = db.prepare('SELECT COUNT(*) as count FROM notes_fts WHERE note_id = ?').get(TOMBSTONABLE_NOTE.note_id) as {
+    count: number;
+  };
+  assert.equal(before.count, 1);
+  const recallBefore = recall(db, TOMBSTONE_TERM, { global: true }, undefined, NOW);
+  assert.equal(recallBefore.length, 1);
+  assert.equal(recallBefore[0].note_id, TOMBSTONABLE_NOTE.note_id);
+
+  // Append a tombstone newer than the revision, then re-run the full-rescan indexer.
+  appendNote(dataDir, {
+    kind: 'note_tombstone',
+    schema_version: 1,
+    note_id: TOMBSTONABLE_NOTE.note_id,
+    revision_id: '01J8X9F1TZ6R3M8N0P5Q7S9TOMBSTONE',
+    previous_revision_id: TOMBSTONABLE_NOTE.revision_id,
+    reason: 'curated rename retired this note_id',
+    created_at: '2026-07-05T11:00:00.000Z',
+    source: { kind: 'human' },
+  });
+  indexNotes(db, dataDir, cursorPath);
+
+  // DoD: absence asserted via a direct notes_fts query AND via recall(..., { global: true }).
+  const after = db.prepare('SELECT COUNT(*) as count FROM notes_fts WHERE note_id = ?').get(TOMBSTONABLE_NOTE.note_id) as {
+    count: number;
+  };
+  assert.equal(after.count, 0);
+  const recallAfter = recall(db, TOMBSTONE_TERM, { global: true }, undefined, NOW);
+  assert.deepEqual(recallAfter, []);
+});
+
+test('a revision newer than a tombstone re-indexes the note (latest-wins is symmetric)', () => {
+  const dataDir = tempDataDir();
+  const cursorPath = path.join(dataDir, 'cursor.json');
+  seedDecoyNotes(dataDir);
+  appendNote(dataDir, TOMBSTONABLE_NOTE);
+
+  // Tombstone at 11:00 retires the 10:00 revision...
+  appendNote(dataDir, {
+    kind: 'note_tombstone',
+    schema_version: 1,
+    note_id: TOMBSTONABLE_NOTE.note_id,
+    revision_id: '01J8X9F1TZ6R3M8N0P5Q7S9TOMBSTONE',
+    previous_revision_id: TOMBSTONABLE_NOTE.revision_id,
+    created_at: '2026-07-05T11:00:00.000Z',
+    source: { kind: 'human' },
+  });
+  // ...but a revision at 12:00 is newer, so the note must come back.
+  appendNote(dataDir, {
+    ...TOMBSTONABLE_NOTE,
+    revision_id: '01J8X9F1TZ6R3M8N0P5Q7S9REVIVED',
+    previous_revision_id: TOMBSTONABLE_NOTE.revision_id,
+    created_at: '2026-07-05T12:00:00.000Z',
+    title: 'The tombstonable note, revived after its tombstone',
+  });
+
+  const db = new Database(':memory:');
+  migrate(db);
+  indexNotes(db, dataDir, cursorPath);
+
+  const row = db.prepare('SELECT revision_id FROM notes_fts WHERE note_id = ?').get(TOMBSTONABLE_NOTE.note_id) as
+    | { revision_id: string }
+    | undefined;
+  assert.ok(row, 'a revision newer than the tombstone must be re-indexed');
+  assert.equal(row.revision_id, '01J8X9F1TZ6R3M8N0P5Q7S9REVIVED');
+  const recalled = recall(db, TOMBSTONE_TERM, { global: true }, undefined, '2026-07-05T13:00:00.000Z');
+  assert.equal(recalled.length, 1);
+  assert.equal(recalled[0].note_id, TOMBSTONABLE_NOTE.note_id);
 });
