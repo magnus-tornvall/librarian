@@ -1,0 +1,37 @@
+{
+  "name": "similarly-named projects do not contaminate each other",
+  "reason": "A query scoped to project 'librarian' must not surface a note from the look-alike project 'librarian-web'; scope, not string similarity, gates recall.",
+  "query": "deployment",
+  "opts": { "projectSlug": "librarian" },
+  "now": "2026-07-06T12:00:00.000Z",
+  "notes": [
+    {
+      "note_id": "project_summary:librarian-deploy",
+      "note_type": "project_summary",
+      "origin": "opencode",
+      "created_at": "2026-07-06T10:00:00.000Z",
+      "scope": { "project_slug": "librarian" },
+      "title": "Librarian deployment",
+      "body": { "summary": "The librarian deployment runbook covers the librarian deployment pipeline." }
+    },
+    {
+      "note_id": "project_summary:librarian-web-deploy",
+      "note_type": "project_summary",
+      "origin": "opencode",
+      "created_at": "2026-07-06T10:00:00.000Z",
+      "scope": { "project_slug": "librarian-web" },
+      "title": "Librarian-web deployment",
+      "body": { "summary": "The librarian-web deployment runbook covers the librarian-web deployment pipeline." }
+    },
+    { "note_id": "fact:filler-0", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "librarian" }, "title": "Filler 0", "body": { "summary": "Unrelated content zero about assorted topics." } },
+    { "note_id": "fact:filler-1", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "librarian" }, "title": "Filler 1", "body": { "summary": "Unrelated content one about assorted topics." } },
+    { "note_id": "fact:filler-2", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "librarian" }, "title": "Filler 2", "body": { "summary": "Unrelated content two about assorted topics." } },
+    { "note_id": "fact:filler-3", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "librarian" }, "title": "Filler 3", "body": { "summary": "Unrelated content three about assorted topics." } },
+    { "note_id": "fact:filler-4", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "librarian" }, "title": "Filler 4", "body": { "summary": "Unrelated content four about assorted topics." } }
+  ],
+  "expect": {
+    "include": ["project_summary:librarian-deploy"],
+    "exclude": ["project_summary:librarian-web-deploy"],
+    "maxResults": 5
+  }
+}

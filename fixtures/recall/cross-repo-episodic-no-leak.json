@@ -1,0 +1,37 @@
+{
+  "name": "cross-repo episodic notes do not leak across projects",
+  "reason": "An episodic note scoped to project 'repo-a' must not surface for a query scoped to project 'repo-b'; episodic memory is project-fenced by scope (§9 cross-repo leakage).",
+  "query": "migration",
+  "opts": { "projectSlug": "repo-b" },
+  "now": "2026-07-06T12:00:00.000Z",
+  "notes": [
+    {
+      "note_id": "episode:repo-a-migration",
+      "note_type": "episode",
+      "origin": "opencode",
+      "created_at": "2026-07-06T10:00:00.000Z",
+      "scope": { "project_slug": "repo-a" },
+      "title": "Repo-a migration episode",
+      "body": { "summary": "The repo-a migration episode walked through the repo-a migration cutover." }
+    },
+    {
+      "note_id": "episode:repo-b-migration",
+      "note_type": "episode",
+      "origin": "opencode",
+      "created_at": "2026-07-06T10:00:00.000Z",
+      "scope": { "project_slug": "repo-b" },
+      "title": "Repo-b migration episode",
+      "body": { "summary": "The repo-b migration episode walked through the repo-b migration cutover." }
+    },
+    { "note_id": "fact:filler-0", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "repo-b" }, "title": "Filler 0", "body": { "summary": "Unrelated content zero about assorted topics." } },
+    { "note_id": "fact:filler-1", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "repo-b" }, "title": "Filler 1", "body": { "summary": "Unrelated content one about assorted topics." } },
+    { "note_id": "fact:filler-2", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "repo-a" }, "title": "Filler 2", "body": { "summary": "Unrelated content two about assorted topics." } },
+    { "note_id": "fact:filler-3", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "repo-a" }, "title": "Filler 3", "body": { "summary": "Unrelated content three about assorted topics." } },
+    { "note_id": "fact:filler-4", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "repo-b" }, "title": "Filler 4", "body": { "summary": "Unrelated content four about assorted topics." } }
+  ],
+  "expect": {
+    "include": ["episode:repo-b-migration"],
+    "exclude": ["episode:repo-a-migration"],
+    "maxResults": 5
+  }
+}

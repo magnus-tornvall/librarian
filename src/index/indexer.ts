@@ -38,7 +38,7 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath: s
 
   const deleteStmt = db.prepare('DELETE FROM notes_fts WHERE note_id = ?');
   const insertStmt = db.prepare(
-    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, search_text) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   );
 
   let indexedCount = 0;
@@ -63,7 +63,23 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath: s
       continue; // fail-closed: one malformed note must not crash indexing for every note after it
     }
 
-    insertStmt.run(note.note_id, note.revision_id, note.source.origin, note.note_type, note.created_at, searchText);
+    // Scope columns carry §10.2 `scope` into the index so recall can enforce project
+    // match / explicit global scope (§6). A note with neither project_slug nor global
+    // is stored as project_slug='' + is_global=0 — recall can only reach it via a
+    // matching project scope, never via a global query.
+    const projectSlug = note.scope.project_slug ?? '';
+    const isGlobal = note.scope.global === true ? 1 : 0;
+
+    insertStmt.run(
+      note.note_id,
+      note.revision_id,
+      note.source.origin,
+      note.note_type,
+      note.created_at,
+      projectSlug,
+      isGlobal,
+      searchText,
+    );
     indexedCount += 1;
   }
 

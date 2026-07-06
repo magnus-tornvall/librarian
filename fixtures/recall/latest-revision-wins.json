@@ -1,0 +1,39 @@
+{
+  "name": "deterministic latest revision wins: an older revision's text is gone from recall",
+  "reason": "Two revisions of the same note_id are seeded oldest-first; the indexer keeps only the latest, so a term that existed ONLY in the older revision must no longer recall at all.",
+  "query": "legacyflowterm",
+  "opts": { "global": true },
+  "now": "2026-07-06T12:00:00.000Z",
+  "notes": [
+    {
+      "note_id": "decision:token-flow",
+      "revision_id": "token-flow-rev-1",
+      "note_type": "decision",
+      "origin": "opencode",
+      "created_at": "2026-07-06T10:00:00.000Z",
+      "scope": { "global": true },
+      "title": "Token flow decision (old)",
+      "body": { "summary": "The old token flow decision chose the legacyflowterm approach." }
+    },
+    {
+      "note_id": "decision:token-flow",
+      "revision_id": "token-flow-rev-2",
+      "previous_revision_id": "token-flow-rev-1",
+      "note_type": "decision",
+      "origin": "opencode",
+      "created_at": "2026-07-06T11:00:00.000Z",
+      "scope": { "global": true },
+      "title": "Token flow decision (current)",
+      "body": { "summary": "The current token flow decision adopts the rotatingflowterm approach instead." }
+    },
+    { "note_id": "fact:filler-0", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "global": true }, "title": "Filler 0", "body": { "summary": "Unrelated content zero about assorted topics." } },
+    { "note_id": "fact:filler-1", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "global": true }, "title": "Filler 1", "body": { "summary": "Unrelated content one about assorted topics." } },
+    { "note_id": "fact:filler-2", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "global": true }, "title": "Filler 2", "body": { "summary": "Unrelated content two about assorted topics." } },
+    { "note_id": "fact:filler-3", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "global": true }, "title": "Filler 3", "body": { "summary": "Unrelated content three about assorted topics." } },
+    { "note_id": "fact:filler-4", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "global": true }, "title": "Filler 4", "body": { "summary": "Unrelated content four about assorted topics." } }
+  ],
+  "expect": {
+    "empty": true,
+    "exclude": ["decision:token-flow"]
+  }
+}
