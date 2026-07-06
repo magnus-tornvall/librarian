@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ulid } from 'ulid';
 import { appendEvent } from './collector/append.ts';
-import { makeFixtureProvider } from './distill/provider.ts';
+import { makeFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { runDistill } from './distill/distillRun.ts';
 import { DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
@@ -84,25 +84,43 @@ function collect(flags: Map<string, string>): void {
 }
 
 /**
+ * Map the distill flags to an `InferenceProvider` — the single place where
+ * provider *selection* lives, kept apart from `distillCommand` so the command
+ * reads as intent and the choice is testable without spawning a model.
+ *
+ * `--provider-fixture <file>` selects an offline provider that replays the
+ * file's contents (§2: swapping the model is swapping a provider, nothing
+ * more). It is a first-class operator switch for offline/canned runs, not a
+ * test-only hook — the fixture-backed provider is also how tests avoid a live
+ * call. Absent the flag, the real `claude -p` provider is used.
+ *
+ * The `--provider <name>` selector for the second inference provider
+ * (OpenAI-compatible / local) is roadmap item 10 — a later branch here, not a
+ * registry to build now.
+ */
+export function resolveProvider(flags: Map<string, string>): InferenceProvider {
+  const fixture = flags.get('provider-fixture');
+  if (fixture !== undefined) {
+    return makeFixtureProvider(fs.readFileSync(fixture, 'utf8'));
+  }
+  return makeClaudeProvider();
+}
+
+/**
  * Cursor-driven distill trigger (§4 "Owns distill triggering", §8 "Distill
  * verdicts"). Scans `<dataDir>/events/*.ndjson`, applies the skip heuristic,
  * runs the distiller on eligible session deltas, appends notes, writes distill
  * verdicts to the diagnostics dir, and advances cursors after success. The
- * heavy lifting lives in `runDistill` so this stays a thin shell.
+ * heavy lifting lives in `runDistill`, and provider selection in
+ * `resolveProvider`, so this stays a thin shell.
  *
- * `--provider-fixture <file>` swaps in `makeFixtureProvider` so tests and
- * offline runs never call a live model (§2); absent, the real `claude -p`
- * provider is used. Fail loud (§9): a provider/parse failure propagates and
- * aborts with a non-zero exit; the failed session's cursor is not advanced.
+ * Fail loud (§9): a provider/parse failure propagates and aborts with a
+ * non-zero exit; the failed session's cursor is not advanced.
  */
 async function distillCommand(flags: Map<string, string>): Promise<void> {
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const diagnosticsDir = flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR;
-  const fixture = flags.get('provider-fixture');
-  const provider =
-    fixture !== undefined
-      ? makeFixtureProvider(fs.readFileSync(fixture, 'utf8'))
-      : makeClaudeProvider();
+  const provider = resolveProvider(flags);
 
   await runDistill({ dataDir, diagnosticsDir, provider });
 }
@@ -143,8 +161,12 @@ async function main(argv: string[]): Promise<void> {
   }
 }
 
-main(process.argv.slice(2)).catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`librarian: ${message}\n`);
-  process.exit(1);
-});
+// Auto-run only as the CLI entry point, so this module can be imported (e.g. by
+// tests exercising `resolveProvider`) without executing a command.
+if (import.meta.main) {
+  main(process.argv.slice(2)).catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`librarian: ${message}\n`);
+    process.exit(1);
+  });
+}
