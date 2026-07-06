@@ -308,12 +308,14 @@ Golden examples: (1) episodic decision, `distiller: llm`, `origin: opencode`; (2
 
 ## 12. Roadmap
 
-1. `schema/event.md` — prose + types + golden examples (§10.1).
-2. `schema/note.md` — same (§10.2).
-3. Specify curated-note ingestion + generated-file exclusion + diagnostics isolation (short doc; the three structural invariants together).
-4. **Walking skeleton:** fixture events → renderer → LLM distill (`claude -p`, hard-coded) → note log → Obsidian export → BM25 index → recall query with floor + weights + injection trace. Ugly internals, real data. Revise the note schema from what the skeleton teaches. **Diagnostics log and injection traces start here** — recall telemetry is computed from them.
-5. Curated Markdown → human distiller → note log → index → recall (with human weight).
-6. Real instrumentation (OpenCode first — existing plugin remapped to canonical schema; Claude Code second).
+**Status (2026-07-06):** items 1–5 complete (issues #2–#9, #16–#21). The post-item-5 recall calibration gate (#24) is in progress. Item 6 is next, decomposed into issues #28–#32 with blocking chains on the issues themselves.
+
+1. ✅ `schema/event.md` — prose + types + golden examples (§10.1).
+2. ✅ `schema/note.md` — same (§10.2).
+3. ✅ Specify curated-note ingestion + generated-file exclusion + diagnostics isolation (short doc; the three structural invariants together).
+4. ✅ **Walking skeleton:** fixture events → renderer → LLM distill (`claude -p`, hard-coded) → note log → Obsidian export → BM25 index → recall query with floor + weights + injection trace. Ugly internals, real data. Revise the note schema from what the skeleton teaches. **Diagnostics log and injection traces start here** — recall telemetry is computed from them.
+5. ✅ Curated Markdown → human distiller → note log → index → recall (with human weight).
+6. ⏳ Real instrumentation (OpenCode first — existing plugin remapped to canonical schema; Claude Code second). *Next — issues #28–#32.*
 7. **MCP server (pull path):** search tool (scored results, origin/scope filters) + **provenance drill-down tool** (note → verbatim event excerpts).
 8. Recall injection adapters (push path: OpenCode two-phase hook design; Claude Code parity). Injected-block contract per §6; `librarian why` / `why-not` land here.
 9. Hardening: cursors, locks, retries, quarantine, `librarian drain`.
