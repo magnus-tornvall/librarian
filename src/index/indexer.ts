@@ -1,11 +1,9 @@
 import Database from 'better-sqlite3';
 import { readAllNotes } from '../log/noteLog.ts';
 import { advanceCursor } from '../log/cursor.ts';
-import type { NoteRevision } from '../distill/llmDistiller.ts';
+import type { NoteRecord, NoteRevision } from '../note.ts';
 
-type NoteLogRecord = NoteRevision | { kind: 'note_tombstone' };
-
-function latestRevisionPerNoteId(records: NoteLogRecord[]): NoteRevision[] {
+function latestRevisionPerNoteId(records: NoteRecord[]): NoteRevision[] {
   const latest = new Map<string, NoteRevision>();
   for (const record of records) {
     if (record.kind === 'note_tombstone') {
@@ -38,7 +36,7 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath: s
   // ponytail: v1 re-reads the whole note log and upserts by note_id instead of tracking a
   // true byte-offset cursor — cheap and correct at this scale; real incremental reads are
   // the eventual target per §5 once the log grows large enough to matter.
-  const notes = readAllNotes(dataDir) as NoteLogRecord[];
+  const notes = readAllNotes(dataDir) as NoteRecord[];
 
   const deleteStmt = db.prepare('DELETE FROM notes_fts WHERE note_id = ?');
   const insertStmt = db.prepare(

@@ -61,3 +61,69 @@ else is episodic (`{type}:{ulid}`), one revision, immutable forever.
 3. [`03-deterministic-project-summary-rev2.json`](schema/examples/note/03-deterministic-project-summary-rev2.json) — the same note's revision 2, chained via `previous_revision_id`.
 4. [`04-curated-note-human-explicit-id.json`](schema/examples/note/04-curated-note-human-explicit-id.json) — a curated note, `distiller: "human"`, explicit frontmatter `note_id`.
 5. [`05-tombstone-via-cli.json`](schema/examples/note/05-tombstone-via-cli.json) — a tombstone emitted via the CLI.
+
+## Post-skeleton revision (2026-07)
+
+Gate per §12 item 4: reconcile this doc against what the walking skeleton (roadmap items
+010–025) actually implemented, and extract `NoteRevision`/`NoteTombstone`/`NoteRecord` into
+one shared module (`src/note.ts`). Findings below cover every top-level field of both types;
+"no change" entries were reviewed against `src/distill/llmDistiller.ts`, `src/index/indexer.ts`,
+`src/export/obsidian.ts`, `src/recall/query.ts`, `src/recall/scoring.ts`, and
+`tests/walkingSkeleton.integration.test.ts`, not skipped.
+
+**Structural — DELTA (fixed).** `NoteRevision` was defined inline in `llmDistiller.ts` and
+re-declared as a throwaway `{ kind: 'note_tombstone' }` stub in `indexer.ts`, instead of
+living in one shared module. Extracted to `src/note.ts`; both consumers now import from
+there.
+
+**`note_id` (episodic notes) — DELTA (fixed).** The LLM distiller minted episodic
+`note_id`s as `{origin}:{ulid}` (e.g. `opencode:01J8...`). §5 and this doc's own Rules
+section are explicit that episodic ids are `{type}:{ulid}` (e.g. `decision:01J8...`, per
+golden example 1) — `origin` and `note_type` are different fields and the skeleton
+conflated them. Fixed in `llmDistiller.ts` to mint `{note_type}:{ulid}`; updated the tests
+that had encoded the old (wrong) convention.
+
+**`kind` / `schema_version`** — no change. Both types stamp the literals exactly as
+specified everywhere they're produced or read.
+
+**`revision_id` / `created_at`** — no change. Minted via `ulid()` / `new Date().toISOString()`
+in the distiller, exactly as documented.
+
+**`previous_revision_id`** — no change. Correctly never set by the LLM distiller: it only
+ever mints fresh episodic notes (one revision, immutable), and revision chaining is a
+deterministic-note concern the human/curated distiller owns (later issue in this phase, not
+built yet).
+
+**`identity`** — no change. LLM distiller stamps `{ mode: 'episodic' }` with no `key`,
+matching the rule that only deterministic notes carry a `key`.
+
+**`source`** — no change to the type. `origin`/`distiller` are always stamped (fail-closed
+on missing `origin` is enforced in `indexer.ts`). `model`/`agent`/`source_path`/`content_hash`
+are optional and currently never populated by the LLM path — `InferenceProvider` (task 017)
+exposes only `complete(prompt)`, no model identity, so there's nothing to stamp yet. Not a
+schema mismatch (the fields are optional); flagged here so it isn't silently invisible.
+
+**`note_type`** — no change. The skeleton's 7-value union matches this doc's exactly.
+
+**`title` / `body`** — no change. LLM path fills `summary`/`bullets` only; `details` is
+correctly left unset (human-only field per the Rules section, preserved verbatim from
+Markdown by the human distiller, which doesn't exist yet).
+
+**`scope`** — no change to the type. The LLM distiller always stamps `{}`; deterministic
+`project_slug`/`git_root`/`git_remote` derivation (§4) is not implemented by any module yet
+— there is no project-slug-deriving code anywhere in `src/`. This is a real gap, but it's
+new functionality (out of scope per this issue's "reconciliation, not redesign" rule), not
+a doc/implementation disagreement about the shape.
+
+**`provenance`** — no change. `session_id`/`event_ids` are stamped mechanically from the
+input events, exactly as documented; `event_range` is unused by the LLM path (it stamps
+individual `event_ids` instead), which the type already allows since both sub-fields are
+optional.
+
+**`links`** — no change. Always `[]` from the LLM path; no linking logic exists yet.
+
+**`NoteTombstone` (all fields)** — no change. No producer exists yet (no CLI), so there is
+nothing in the skeleton to disagree with; the type matches golden example 5 exactly. The
+former `indexer.ts` stub only ever checked `kind === 'note_tombstone'` as a discriminant,
+never accessed `NoteTombstone`'s other fields — replaced with the real type from
+`src/note.ts` (see Structural finding above).
