@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Librarian — Interactive Design Map (v3)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Libre+Caslon+Text:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#EDEFE8;
+  --card:#FBFBF7;
+  --ink:#212B29;
+  --muted:#5A6461;
+  --line:#C6CCC0;
+  --line-soft:#DDE1D8;
+  --stamp:#3A4DB0;
+  --stamp-soft:#E3E6F5;
+  --sacred:#8A6210;
+  --sacred-soft:#F3ECDB;
+  --human:#38684C;
+  --human-soft:#E2ECE4;
+  --diag:#6E7681;
+  --diag-soft:#E8EAEC;
+  --code-bg:#20282B;
+  --code-ink:#D8DFD9;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,sans-serif;
+  font-size:15px;line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+/* ---------- header ---------- */
+header{
+  border-bottom:1px solid var(--line);
+  padding:26px 28px 0;
+  max-width:1240px;margin:0 auto;
+}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--stamp);
+}
+h1{
+  font-family:"Libre Caslon Text",serif;font-weight:700;
+  font-size:clamp(26px,4vw,38px);line-height:1.15;margin:6px 0 4px;
+}
+.status{
+  font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted);
+  margin-bottom:16px;
+}
+.status .dot{color:var(--human)}
+nav.levels{display:flex;gap:0;align-items:flex-end;flex-wrap:wrap}
+nav.levels button{
+  appearance:none;border:none;background:none;cursor:pointer;
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;letter-spacing:.04em;
+  color:var(--muted);padding:10px 16px 12px;border-bottom:2px solid transparent;
+}
+nav.levels button.active{color:var(--ink);border-bottom-color:var(--stamp)}
+nav.levels button:hover{color:var(--ink)}
+nav.levels button:focus-visible{outline:2px solid var(--stamp);outline-offset:2px}
+.crumb{
+  margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:12px;
+  color:var(--muted);padding:10px 4px 12px;display:none;
+}
+.crumb b{color:var(--ink);font-weight:500}
+/* ---------- main / boards ---------- */
+main{max-width:1240px;margin:0 auto;padding:18px 28px 80px}
+.hint{
+  font-size:13px;color:var(--muted);margin:6px 2px 14px;
+}
+.hint kbd{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;border:1px solid var(--line);
+  border-bottom-width:2px;border-radius:3px;padding:0 5px;background:var(--card);
+}
+.board-wrap{position:relative;overflow:hidden}
+.board{
+  position:relative;transform-origin:top left;
+  transition:transform .28s ease,opacity .28s ease;
+}
+.board.zooming{opacity:0}
+svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+svg.wires path,svg.wires line{stroke:var(--muted);stroke-width:1.4;fill:none}
+svg.wires .dotted{stroke:var(--diag);stroke-dasharray:3 4}
+svg.wires text{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;fill:var(--muted);
+}
+/* ---------- cards ---------- */
+.node{
+  position:absolute;background:var(--card);border:1px solid var(--line);
+  border-radius:6px;padding:12px 14px;text-align:left;cursor:pointer;
+  font-family:inherit;color:var(--ink);
+  box-shadow:0 1px 0 rgba(33,43,41,.06);
+  transition:border-color .15s,box-shadow .15s,transform .15s;
+}
+.node:hover{border-color:var(--stamp);box-shadow:0 3px 10px rgba(58,77,176,.14);transform:translateY(-1px)}
+.node:focus-visible{outline:2px solid var(--stamp);outline-offset:2px}
+.node h3{
+  font-family:"Libre Caslon Text",serif;font-size:16.5px;font-weight:700;
+  line-height:1.2;margin-bottom:3px;
+}
+.node p{font-size:12.5px;color:var(--muted);line-height:1.4}
+.node .chips{margin-top:8px;display:flex;gap:5px;flex-wrap:wrap}
+.chip{
+  font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.03em;
+  border:1px solid var(--line);border-radius:3px;padding:1px 6px;color:var(--muted);
+  background:#fff;
+}
+.chip.sacred{color:var(--sacred);border-color:var(--sacred);background:var(--sacred-soft)}
+.chip.stamp{color:var(--stamp);border-color:var(--stamp);background:var(--stamp-soft)}
+.chip.human{color:var(--human);border-color:var(--human);background:var(--human-soft)}
+.chip.diag{color:var(--diag);border-color:var(--diag);background:var(--diag-soft)}
+.node.diag-node{border-style:dashed;border-color:var(--diag);background:var(--diag-soft)}
+.node.ghost{cursor:default;background:transparent;border-style:dashed}
+.node.ghost:hover{border-color:var(--line);box-shadow:none;transform:none}
+.node.center-node{border-width:2px;border-color:var(--ink)}
+.node .zoom-glyph{
+  position:absolute;top:8px;right:10px;font-family:"IBM Plex Mono",monospace;
+  font-size:11px;color:var(--line);transition:color .15s;
+}
+.node:hover .zoom-glyph{color:var(--stamp)}
+/* ---------- principles strip ---------- */
+.principles{
+  margin-top:26px;border-top:1px solid var(--line-soft);padding-top:14px;
+  display:flex;gap:8px;flex-wrap:wrap;
+}
+.principles span{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);
+  border:1px solid var(--line-soft);border-radius:14px;padding:3px 10px;background:var(--card);
+}
+/* ---------- detail view ---------- */
+#detail{display:none;animation:rise .28s ease}
+@keyframes rise{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
+.detail-article{display:none;max-width:860px}
+.detail-article.open{display:block}
+.backbar{margin:4px 0 18px}
+.backbar button{
+  appearance:none;cursor:pointer;background:var(--card);border:1px solid var(--line);
+  border-radius:4px;font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink);
+  padding:6px 12px;
+}
+.backbar button:hover{border-color:var(--stamp);color:var(--stamp)}
+.detail-head{border-bottom:2px solid var(--ink);padding-bottom:12px;margin-bottom:18px}
+.detail-head .kind{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--stamp);
+}
+.detail-head h2{
+  font-family:"Libre Caslon Text",serif;font-size:30px;font-weight:700;line-height:1.15;margin:4px 0 6px;
+}
+.detail-head .loc{display:flex;gap:6px;flex-wrap:wrap}
+.detail-article h4{
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted);margin:22px 0 8px;
+}
+.detail-article p{margin-bottom:10px;max-width:72ch}
+.detail-article ul{margin:0 0 10px 20px;max-width:72ch}
+.detail-article li{margin-bottom:5px}
+.detail-article strong{font-weight:600}
+.detail-article .rule{
+  border-left:3px solid var(--sacred);background:var(--sacred-soft);
+  padding:10px 14px;border-radius:0 4px 4px 0;margin:12px 0;max-width:72ch;font-size:14px;
+}
+.detail-article .rule.blue{border-left-color:var(--stamp);background:var(--stamp-soft)}
+.detail-article .rule.green{border-left-color:var(--human);background:var(--human-soft)}
+.detail-article .rule.gray{border-left-color:var(--diag);background:var(--diag-soft)}
+pre{
+  background:var(--code-bg);color:var(--code-ink);border-radius:6px;
+  padding:14px 16px;overflow-x:auto;margin:10px 0 14px;max-width:100%;
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;line-height:1.5;
+}
+pre .c{color:#8FA396}
+code{font-family:"IBM Plex Mono",monospace;font-size:.92em;background:#fff;
+  border:1px solid var(--line-soft);border-radius:3px;padding:0 4px}
+pre code{background:none;border:none;padding:0}
+.xlinks{margin-top:26px;border-top:1px solid var(--line-soft);padding-top:12px;
+  display:flex;gap:8px;flex-wrap:wrap}
+.xlinks a{
+  font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--stamp);
+  text-decoration:none;border:1px solid var(--stamp-soft);background:var(--stamp-soft);
+  border-radius:4px;padding:4px 10px;cursor:pointer;
+}
+.xlinks a:hover{border-color:var(--stamp)}
+@media (prefers-reduced-motion:reduce){
+  .board,#detail,.node{transition:none;animation:none}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">Librarian · consolidated design handoff v3 · 2026-07-04</div>
+  <h1>Design map</h1>
+  <div class="status"><span class="dot">●</span> design converged after eight review rounds — next action: implementation, starting with the two schema files</div>
+  <nav class="levels" aria-label="Diagram levels">
+    <button id="tab-context" class="active" onclick="showLevel('context')">L1 · Context</button>
+    <button id="tab-system" onclick="showLevel('system')">L2 · System map</button>
+    <div class="crumb" id="crumb">L2 · System map / <b id="crumb-name"></b></div>
+  </nav>
+</header>
+
+<main>
+
+<!-- ============ L1 CONTEXT ============ -->
+<section id="view-context">
+  <p class="hint">Librarian in its world. Click any box for detail. <kbd>Esc</kbd> goes back up a level.</p>
+  <div class="board-wrap" id="wrap-context">
+    <div class="board" id="board-context" style="width:1360px;height:600px">
+      <svg class="wires" viewBox="0 0 1360 600" preserveAspectRatio="none">
+        <defs>
+          <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5A6461"/></marker>
+        </defs>
+        <!-- human -> vault -->
+        <line x1="150" y1="215" x2="150" y2="330" marker-end="url(#arr)"/>
+        <text x="160" y="280">read · author · veto</text>
+        <!-- vault <-> librarian -->
+        <line x1="260" y1="370" x2="560" y2="330" marker-end="url(#arr)"/>
+        <text x="300" y="338">ingest curated/</text>
+        <line x1="560" y1="390" x2="260" y2="415" marker-end="url(#arr)"/>
+        <text x="330" y="418">export generated/</text>
+        <!-- human -> librarian (instruction) -->
+        <line x1="260" y1="140" x2="560" y2="240" marker-end="url(#arr)"/>
+        <text x="330" y="176">curated notes are the only human write path</text>
+        <!-- agents <-> librarian -->
+        <line x1="900" y1="115" x2="800" y2="245" marker-end="url(#arr)"/>
+        <text x="806" y="150">events (write)</text>
+        <line x1="800" y1="290" x2="900" y2="160" marker-end="url(#arr)"/>
+        <text x="838" y="248">injection (push)</text>
+        <!-- mcp <-> librarian -->
+        <line x1="900" y1="400" x2="800" y2="345" marker-end="url(#arr)"/>
+        <text x="812" y="398">search · drill-down (pull)</text>
+        <!-- librarian -> inference -->
+        <line x1="680" y1="400" x2="680" y2="450" marker-end="url(#arr)"/>
+        <text x="690" y="432">distill via provider</text>
+      </svg>
+
+      <button class="node" style="left:40px;top:80px;width:220px;height:135px" onclick="openDetail('distillers')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>You</h3>
+        <p>Reads the vault, authors curated notes, corrects and vetoes memory. One of the two distillers.</p>
+        <div class="chips"><span class="chip human">distiller: human</span></div>
+      </button>
+
+      <button class="node" style="left:40px;top:330px;width:220px;height:145px" onclick="openDetail('exporters')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Obsidian vault</h3>
+        <p>Human-facing view. Rendered output + curated input — never canonical storage.</p>
+        <div class="chips"><span class="chip">generated/</span><span class="chip human">curated/</span></div>
+      </button>
+
+      <button class="node center-node" style="left:560px;top:240px;width:240px;height:160px" onclick="showLevel('system')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Librarian</h3>
+        <p>Personal context layer: two append-only domain logs, distill-only ingestion, deterministic recall. File-over-app, vendor-agnostic.</p>
+        <div class="chips"><span class="chip stamp">zoom → system map</span></div>
+      </button>
+
+      <button class="node" style="left:900px;top:60px;width:240px;height:150px" onclick="openDetail('push')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Instrumented agents</h3>
+        <p>OpenCode, Claude Code (plausibly Cursor/Aider). Emit events; receive invisible prompt injection where a hook point exists.</p>
+        <div class="chips"><span class="chip stamp">push path</span></div>
+      </button>
+
+      <button class="node" style="left:900px;top:350px;width:240px;height:150px" onclick="openDetail('mcp')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>MCP clients</h3>
+        <p>ChatGPT, Claude.ai, Gemini, any MCP-speaking agent. On-demand, model-initiated. The universal floor — and the cross-vendor promise.</p>
+        <div class="chips"><span class="chip stamp">pull path</span></div>
+      </button>
+
+      <button class="node ghost" style="left:560px;top:450px;width:240px;height:115px" tabindex="-1">
+        <h3>Inference providers</h3>
+        <p><code>claude&nbsp;-p</code> → <code>opencode run</code> → local Ollama / llama.cpp. Swappable; a 100%-local, open-source-only config must be possible.</p>
+      </button>
+    </div>
+  </div>
+
+  <div class="rule blue" style="max-width:900px;margin-top:18px;border-left:3px solid var(--stamp);background:var(--stamp-soft);padding:10px 14px;border-radius:0 4px 4px 0;font-size:14px">
+    <strong>Write-side asymmetry, stated honestly:</strong> Librarian is readable everywhere (via MCP) but learns only from instrumented surfaces and from you. Vendor chat products expose no hooks; conclusions from those surfaces enter via curated notes, not transcripts.
+  </div>
+
+  <div class="principles">
+    <span>the product is eliminating repetition</span>
+    <span>invisible by default · glass-box on demand</span>
+    <span>recall precision is the product surface</span>
+    <span>structural invariants beat policy invariants</span>
+    <span>file-over-app · KISS · deliberate coupling</span>
+  </div>
+</section>
+
+<!-- ============ L2 SYSTEM MAP ============ -->
+<section id="view-system" style="display:none">
+  <p class="hint">Two append-only domain logs plus one isolated diagnostics log family; independent cursor-tracking consumers; event-driven eventual consistency. Click any component to zoom in. <kbd>Esc</kbd> goes back.</p>
+  <div class="board-wrap" id="wrap-system">
+    <div class="board" id="board-system" style="width:1360px;height:960px">
+      <svg class="wires" viewBox="0 0 1360 960" preserveAspectRatio="none">
+        <defs>
+          <marker id="arr2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5A6461"/></marker>
+        </defs>
+        <!-- instr -> collector -->
+        <line x1="240" y1="140" x2="300" y2="140" marker-end="url(#arr2)"/>
+        <!-- collector -> event log -->
+        <line x1="550" y1="140" x2="610" y2="140" marker-end="url(#arr2)"/>
+        <text x="556" y="128">append</text>
+        <!-- event log -> llm distiller -->
+        <line x1="830" y1="140" x2="890" y2="140" marker-end="url(#arr2)"/>
+        <text x="836" y="128">cursor</text>
+        <!-- llm distiller -> note log (elbow) -->
+        <path d="M1000 210 L1000 265 L760 265 L760 315" marker-end="url(#arr2)"/>
+        <text x="890" y="258">note revisions</text>
+        <!-- curated -> human distiller -->
+        <line x1="240" y1="395" x2="300" y2="395" marker-end="url(#arr2)"/>
+        <!-- human distiller -> note log -->
+        <line x1="550" y1="395" x2="610" y2="395" marker-end="url(#arr2)"/>
+        <!-- note log -> exporters -->
+        <line x1="830" y1="395" x2="890" y2="395" marker-end="url(#arr2)"/>
+        <text x="836" y="383">cursor</text>
+        <!-- exporters -> vault -->
+        <line x1="1090" y1="395" x2="1140" y2="395" marker-end="url(#arr2)"/>
+        <!-- note log -> indexer (elbow) -->
+        <path d="M700 470 L700 515 L410 515 L410 565" marker-end="url(#arr2)"/>
+        <text x="470" y="508">cursor</text>
+        <!-- indexer -> index -->
+        <line x1="410" y1="675" x2="410" y2="725" marker-end="url(#arr2)"/>
+        <!-- index -> recall -->
+        <line x1="520" y1="765" x2="610" y2="765" marker-end="url(#arr2)"/>
+        <text x="524" y="753">read-only</text>
+        <!-- recall -> push -->
+        <line x1="830" y1="655" x2="890" y2="645" marker-end="url(#arr2)"/>
+        <!-- recall -> mcp -->
+        <line x1="830" y1="765" x2="890" y2="790" marker-end="url(#arr2)"/>
+        <!-- recall -> diagnostics (dotted) -->
+        <line class="dotted" x1="610" y1="700" x2="245" y2="700" marker-end="url(#arr2)"/>
+        <text x="330" y="692">injection trace per injection</text>
+      </svg>
+
+      <button class="node" style="left:20px;top:70px;width:220px;height:150px" onclick="openDetail('instrumentation')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Instrumentation</h3>
+        <p>Per-agent adapters. Native events → canonical schema. Dumb by design: zero domain logic.</p>
+        <div class="chips"><span class="chip">opencode</span><span class="chip">claude-code</span></div>
+      </button>
+
+      <button class="node" style="left:300px;top:55px;width:250px;height:175px" onclick="openDetail('collector')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Collector</h3>
+        <p>Library + CLI, no daemon. Normalize → redact → validate → append. Owns distill triggering, authoritative salience, provenance stamping, and the prompt renderer.</p>
+        <div class="chips"><span class="chip stamp">narrow waist owner</span></div>
+      </button>
+
+      <button class="node" style="left:610px;top:70px;width:220px;height:150px" onclick="openDetail('event-log')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Event log</h3>
+        <p>Canonical, redacted-before-append telemetry. NDJSON per session. Source of truth for raw activity.</p>
+        <div class="chips"><span class="chip sacred">sacred · append-only</span><span class="chip">~/.librarian/data</span></div>
+      </button>
+
+      <button class="node" style="left:890px;top:70px;width:220px;height:150px" onclick="openDetail('distillers')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>LLM distiller</h3>
+        <p>Event-log consumer via an inference provider. Admission control for machine-produced content — not compression.</p>
+        <div class="chips"><span class="chip stamp">distiller: llm</span></div>
+      </button>
+
+      <button class="node ghost" style="left:20px;top:340px;width:220px;height:115px" tabindex="-1">
+        <h3>vault/curated/**</h3>
+        <p>Human-authored Markdown. The one door for human knowledge — and for diagnostic insights.</p>
+      </button>
+
+      <button class="node" style="left:300px;top:330px;width:250px;height:135px" onclick="openDetail('distillers')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Human distiller</h3>
+        <p>Curated-note importer. Markdown → note records directly; body preserved verbatim, never LLM-normalized.</p>
+        <div class="chips"><span class="chip human">distiller: human</span></div>
+      </button>
+
+      <button class="node" style="left:610px;top:315px;width:220px;height:155px" onclick="openDetail('note-log')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Note log</h3>
+        <p>Structured memory records. Written <strong>only</strong> by distillers. Everything here was judged worth remembering, by a named judge, from a named origin.</p>
+        <div class="chips"><span class="chip sacred">sacred · append-only</span><span class="chip">~/.librarian/data</span></div>
+      </button>
+
+      <button class="node" style="left:890px;top:330px;width:200px;height:135px" onclick="openDetail('exporters')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Exporters</h3>
+        <p>Note-log consumers, idempotent by <code>note_id</code>. Obsidian first, SQLite mirror second.</p>
+        <div class="chips"><span class="chip">may filter by origin</span></div>
+      </button>
+
+      <button class="node ghost" style="left:1140px;top:340px;width:200px;height:115px" tabindex="-1">
+        <h3>vault/generated/**</h3>
+        <p>Exporter-owned, deterministic paths, overwritten freely. Excluded from ingestion — structurally.</p>
+      </button>
+
+      <button class="node" style="left:300px;top:565px;width:220px;height:110px" onclick="openDetail('indexer')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Indexer</h3>
+        <p>Derives <code>search_text</code> by fixed rule; indexes <code>origin</code>; fail-closed.</p>
+      </button>
+
+      <button class="node" style="left:300px;top:725px;width:220px;height:110px" onclick="openDetail('indexer')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Index</h3>
+        <p>SQLite FTS5 · BM25. The one blessed index. No provider abstraction.</p>
+        <div class="chips"><span class="chip">buy-not-build</span></div>
+      </button>
+
+      <button class="node" style="left:610px;top:620px;width:220px;height:165px" onclick="openDetail('recall')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Recall</h3>
+        <p>Deterministic scoring: BM25 → boost → recency decay → origin × note-type weights → relevance floor. Read-only DB access.</p>
+        <div class="chips"><span class="chip stamp">the product surface</span></div>
+      </button>
+
+      <button class="node" style="left:890px;top:590px;width:220px;height:110px" onclick="openDetail('push')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Push adapters</h3>
+        <p>Invisible per-prompt injection. 0–5 records, never force-filled.</p>
+        <div class="chips"><span class="chip">opencode</span><span class="chip">claude-code</span></div>
+      </button>
+
+      <button class="node" style="left:890px;top:740px;width:220px;height:125px" onclick="openDetail('mcp')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>MCP server</h3>
+        <p>Pull path: search tool (~10 scored results) + provenance drill-down to verbatim events.</p>
+        <div class="chips"><span class="chip stamp">cross-vendor bridge</span></div>
+      </button>
+
+      <button class="node diag-node" style="left:20px;top:620px;width:225px;height:165px" onclick="openDetail('diagnostics')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>Diagnostics log</h3>
+        <p>Injection traces, distill verdicts, quarantine events. Structurally isolated from memory; never ingested, never in the vault.</p>
+        <div class="chips"><span class="chip diag">~/.librarian/diagnostics</span><span class="chip diag">freely deletable</span></div>
+      </button>
+
+      <button class="node" style="left:20px;top:830px;width:225px;height:105px" onclick="openDetail('cli')">
+        <span class="zoom-glyph">[+]</span>
+        <h3>CLI</h3>
+        <p><code>drain</code> · <code>why</code> · <code>why-not</code> · <code>note show</code></p>
+        <div class="chips"><span class="chip">manual recovery &gt; daemon</span></div>
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ L3 DETAIL ============ -->
+<section id="detail">
+  <div class="backbar"><button onclick="closeDetail()">← back to system map</button></div>
+
+  <!-- Instrumentation -->
+  <article class="detail-article" id="d-instrumentation">
+    <div class="detail-head">
+      <div class="kind">Component · per agent</div>
+      <h2>Instrumentation</h2>
+      <div class="loc"><span class="chip">one thin adapter per agent</span><span class="chip stamp">an integration is just an event emitter</span></div>
+    </div>
+    <h4>Role</h4>
+    <p>Map native agent events to the canonical event schema, stamp Resource facts, emit cheap non-authoritative salience hints, append via the collector. <strong>Zero domain logic</strong> — adding a new agent (Claude Code, OpenCode, Codex) means writing a thin adapter, nothing more.</p>
+    <h4>What it stamps</h4>
+    <ul>
+      <li><strong>Facts, not identity:</strong> <code>agent</code>, <code>agent_version</code>, <code>machine_id</code>, <code>cwd</code>, <code>git_root</code>, <code>git_remote</code>, <code>git_branch</code>.</li>
+      <li>Authoritative <code>project_slug</code> is <em>not</em> on events — derived deterministically at distill/index time and cached in note <code>scope</code>. (Fixes SuperBrain's late-slug bug class: silent degradation to global-only recall.)</li>
+      <li>Hints: <code>{ possibly_salient?, reason? }</code> — non-authoritative. Canonical salience lives in the collector/distiller.</li>
+    </ul>
+    <h4>Prior working assets</h4>
+    <ul>
+      <li>OpenCode plugin writing SuperBrain-format NDJSON, verified end-to-end — to be remapped to the canonical schema (roadmap step 6).</li>
+      <li>Fully researched OpenCode recall-injection design (used on the push side, see Push adapters).</li>
+    </ul>
+    <div class="xlinks"><a onclick="openDetail('collector')">Collector →</a><a onclick="openDetail('event-log')">Event log →</a></div>
+  </article>
+
+  <!-- Collector -->
+  <article class="detail-article" id="d-collector">
+    <div class="detail-head">
+      <div class="kind">Component · library + CLI</div>
+      <h2>Collector</h2>
+      <div class="loc"><span class="chip stamp">no daemon</span><span class="chip">owns the prompt renderer</span></div>
+    </div>
+    <h4>Write pipeline</h4>
+    <pre><code>native event → normalize → redact → validate → append</code></pre>
+    <div class="rule"><strong>Redaction before durable append is non-retrofittable:</strong> secrets in an append-only replayable log are immortal. Redaction preserves correlation without the secret — <code>[REDACTED:token:sha256:abc123]</code> — and applies to prompts as well as commands.</div>
+    <h4>Owns</h4>
+    <ul>
+      <li><strong>Distill triggering</strong> — lazy, detached-child model: checkpoint acquires lockfile, spawns detached distill child, lock token via env, child releases. Stale-lock recovery via PID/token checks + timeout.</li>
+      <li><strong>Authoritative salience</strong> and the distill-skip heuristic (0 salience markers, 0 write tools, &lt;2 prompts, &lt;10 events → skip).</li>
+      <li><strong>Mechanical provenance stamping:</strong> the renderer presents events with ordinal indexes, the LLM cites indexes, the collector maps indexes → ULIDs. Provenance is never LLM-authored.</li>
+      <li><strong>The prompt renderer</strong> — all LLM-facing serialization (see Note log → rendering, and Recall).</li>
+    </ul>
+    <h4>Guards</h4>
+    <ul>
+      <li>Hard-rejects <code>record_class: diagnostic</code> at the validate stage (quarantine-with-error, not silent skip).</li>
+      <li>Poison records quarantined with debug context; quarantine verdicts go to the diagnostics log. Partial trailing JSON lines ignored until completed.</li>
+    </ul>
+    <h4>Renderer (storage vs. prompt — the category rule)</h4>
+    <p>Storage formats optimize for machines, humans, and replay; prompt formats optimize for signal-per-token. They meet only at the renderer, which carries zero compatibility obligations — prompts are ephemeral, never parsed back. Real token win = field elision (drop ULIDs, <code>machine_id</code>, <code>schema_version</code>; collapse timestamps; elide repeated <code>cwd</code>):</p>
+    <pre><code>[1] 12:04 prompt "fix the login redirect bug, it loops on expired tokens"
+[2] 12:05 write src/auth/session.ts
+[4] 12:09 bash: git commit -m "fix: expire check before redirect"  <span class="c">← salient:vcs_commit</span></code></pre>
+    <div class="xlinks"><a onclick="openDetail('event-log')">Event log →</a><a onclick="openDetail('distillers')">Distillers →</a><a onclick="openDetail('diagnostics')">Diagnostics →</a></div>
+  </article>
+
+  <!-- Event log -->
+  <article class="detail-article" id="d-event-log">
+    <div class="detail-head">
+      <div class="kind">Log · domain</div>
+      <h2>Event log</h2>
+      <div class="loc"><span class="chip sacred">sacred · append-only · replayable · never deleted</span><span class="chip">~/.librarian/data</span><span class="chip">NDJSON per session</span></div>
+    </div>
+    <h4>Role</h4>
+    <p>Canonical, normalized, redacted-before-append telemetry from instrumentations and integrations. Source of truth for raw activity — the thing the distiller consumes and the thing provenance drill-down recovers verbatim excerpts from.</p>
+    <h4>Schema (v1, draft → <code>schema/event.md</code>)</h4>
+    <pre><code>type CanonicalEvent = PromptEvent | ToolEvent | SessionEvent;
+<span class="c">// ContentEvent reserved for non-agent sources — rule settled, shape deferred</span>
+
+EventBase = {
+  schema_version: 1;
+  event_id: string;          <span class="c">// ULID, generated before append</span>
+  ts: string;                <span class="c">// ISO 8601</span>
+  resource: { agent; agent_version?; machine_id; cwd;
+              git_root?; git_remote?; git_branch? };
+  context:  { session_id; turn?; cwd };
+  hints?:   { possibly_salient?; reason? };  <span class="c">// non-authoritative</span>
+}
+PromptEvent  = { type:"prompt"; prompt }              <span class="c">// redacted</span>
+ToolEvent    = { type:"tool"; tool:{native_name; canonical_name; category};
+                 command?; files? }                   <span class="c">// command redacted</span>
+SessionEvent = { type:"session"; action:"start"|"stop"|"compact"|"checkpoint" }</code></pre>
+    <h4>Consumption</h4>
+    <ul>
+      <li>Cursors: <code>{consumer, log_name, file_path, byte_offset, last_record_id?, updated_at}</code> — advance only after successful processing.</li>
+      <li><code>machine_id</code>: generated once, persisted at <code>~/.librarian/machine-id</code> — never the hostname.</li>
+      <li>V1 is single-machine by declaration; ULIDs keep records collision-safe; per-machine segments are the eventual multi-machine answer (deferred, trigger: second machine).</li>
+    </ul>
+    <h4>Golden examples (acceptance test for schema concreteness)</h4>
+    <p>(1) prompt in a git repo · (2) file edit → <code>file_write</code> · (3) <code>git commit</code> via bash → <code>vcs_commit</code> · (4) redacted command containing a token · (5) session checkpoint.</p>
+    <div class="xlinks"><a onclick="openDetail('collector')">← Collector</a><a onclick="openDetail('distillers')">Distillers →</a></div>
+  </article>
+
+  <!-- Distillers -->
+  <article class="detail-article" id="d-distillers">
+    <div class="detail-head">
+      <div class="kind">Components · the narrow waist</div>
+      <h2>Distillers</h2>
+      <div class="loc"><span class="chip stamp">distiller: llm</span><span class="chip human">distiller: human</span></div>
+    </div>
+    <div class="rule"><strong>Nothing enters the note log without a distiller's judgment. There are exactly two distillers.</strong> No generic import path; machine-produced content — however pre-condensed — passes through the LLM distiller. The distiller is <em>admission control</em>, not compression: one writer discipline, one quality gate, one narrow waist. <span class="chip sacred" style="margin-left:4px">endorsed by literature round</span></div>
+    <h4>LLM distiller</h4>
+    <ul>
+      <li>Consumer of the event log via an inference provider (<code>claude&nbsp;-p</code> pure completion first; provider swappable down to local).</li>
+      <li>Prompt selection keyed on <code>origin</code> — per-origin profiles, default profile for unconfigured origins. Mechanism deferred until the first non-agent source.</li>
+      <li><strong>V1 revision rule:</strong> may revise only deterministic-ID notes (<code>project:{slug}:summary</code>, <code>person:{name}</code>, <code>daily:{date}</code>, <code>curated:{id}</code>), fetched <em>only by deterministic ID</em> — never search-and-mutate "probably related" notes. Everything else is episodic and immutable forever.</li>
+      <li><strong>Re-distill invariant:</strong> idempotency is by provenance, not content — re-distilling an already-provenanced event range is a bug. Cursor advance-after-success + this invariant = exactly-once-ish. Nasty-path fixture required.</li>
+      <li>Never emits tombstones in v1 (CLI/human actions only).</li>
+    </ul>
+    <h4>Human distiller (curated-note importer)</h4>
+    <ul>
+      <li>Converts human-authored Markdown in <code>vault/curated/**</code> into note records directly — the human distiller's serialization mechanism, not an import facility.</li>
+      <li>Preserves the Markdown body <strong>verbatim</strong> in <code>body.details</code>; derives <code>title</code> from H1 and <code>summary</code> from the first paragraph. No LLM normalization — a correctness feature, not just fidelity.</li>
+      <li>Curated frontmatter may declare an explicit <code>note_id</code> (path-hash fallback); renames detected via <code>content_hash</code> tombstone the orphaned old ID.</li>
+      <li>Diagnostic <em>insights</em> enter memory only through this door — the raw traces never do.</li>
+    </ul>
+    <h4>Shared guards</h4>
+    <ul>
+      <li>Both hard-reject <code>record_class: diagnostic</code>.</li>
+      <li>Generated files are structurally excluded from curated ingestion (directory split). No mixed-ownership regions inside one Markdown file. Ever.</li>
+    </ul>
+    <h4>Quality gates (fixtures, not frameworks)</h4>
+    <p>Provider qualification: 3–5 synthetic sessions in → note lands, routes correctly, links sanely — guards quiet degradation on small local models. Origin qualification: every new integration ships 3–5 golden content-events + expected outcomes.</p>
+    <div class="xlinks"><a onclick="openDetail('event-log')">← Event log</a><a onclick="openDetail('note-log')">Note log →</a></div>
+  </article>
+
+  <!-- Note log -->
+  <article class="detail-article" id="d-note-log">
+    <div class="detail-head">
+      <div class="kind">Log · domain</div>
+      <h2>Note log</h2>
+      <div class="loc"><span class="chip sacred">sacred · append-only</span><span class="chip">~/.librarian/data</span><span class="chip">notes/{yyyy-mm}.ndjson</span></div>
+    </div>
+    <div class="rule"><strong>The contract:</strong> everything in the note log was judged worth remembering, by a named judge (<code>distiller</code>), from a named origin (<code>origin</code>). The vault, the index, and recall are downstream conveniences of that one guarantee.</div>
+    <h4>Identity & revisions</h4>
+    <ul>
+      <li><code>note_id</code> = stable logical identity; <code>revision_id</code> = immutable version (ULID). Snapshot revisions, latest-revision-wins. No event-sourced note internals, no diff/patch format.</li>
+      <li>Identity modes: <strong>deterministic</strong> (revisable, keyed IDs) vs <strong>episodic</strong> (<code>{type}:{ulid}</code>, one revision, immutable). Semantic consolidation deferred — it is the entity-resolution problem.</li>
+      <li>Tombstones exist in the schema from day one; v1 emitters are CLI/human only.</li>
+    </ul>
+    <h4>Schema (v1, draft → <code>schema/note.md</code>)</h4>
+    <pre><code>NoteRevision = {
+  kind:"note_revision"; schema_version:1;
+  note_id; revision_id; previous_revision_id?;
+  created_at;
+  identity: { mode:"deterministic"|"episodic"; key? };
+  source:   { origin;            <span class="c">// open vocabulary, MANDATORY, fail-closed</span>
+              distiller:"llm"|"human";
+              model?; agent?; source_path?; content_hash? };
+  note_type:"fact"|"decision"|"project_summary"|"person"
+           |"daily"|"episode"|"curated";
+  title;
+  scope:      { project_slug?; git_root?; git_remote?; global? };
+  provenance: { session_id?; event_ids?; event_range? };
+  links:      Array&lt;{ target_type; target; relation? }&gt;;
+  body:       { summary; bullets?; details? };
+}
+NoteTombstone = { kind:"note_tombstone"; …; source:{kind:"human"|"cli"} }</code></pre>
+    <h4>Source identity — two independent dimensions</h4>
+    <p><strong>origin</strong> (<em>where</em>: <code>opencode</code>, <code>claude-code</code>, <code>human</code>, <code>email</code>, … — open string vocabulary, denormalized at distill time, indexed) and <strong>distiller</strong> (<em>who judged it in</em>: <code>llm</code> | <code>human</code>). Write side and read side share no contract: a source may exist purely to enrich memory with no injection adapter, and vice versa.</p>
+    <h4>Storage format (settled)</h4>
+    <p>NDJSON stays for all logs — self-describing, nested-structure-capable, robust to payloads full of pipes/newlines, <code>jq</code>/SQLite-JSON tooling, glass-box ownership. Token efficiency is a renderer property, not a storage property; the LLM never reads a log file verbatim.</p>
+    <div class="xlinks"><a onclick="openDetail('distillers')">← Distillers</a><a onclick="openDetail('indexer')">Indexer →</a><a onclick="openDetail('exporters')">Exporters →</a></div>
+  </article>
+
+  <!-- Indexer / Index -->
+  <article class="detail-article" id="d-indexer">
+    <div class="detail-head">
+      <div class="kind">Component + store</div>
+      <h2>Indexer &amp; Index</h2>
+      <div class="loc"><span class="chip">SQLite FTS5 · BM25</span><span class="chip stamp">the one blessed index</span></div>
+    </div>
+    <h4>Indexer</h4>
+    <ul>
+      <li>Independent note-log consumer with its own cursor.</li>
+      <li><code>search_text</code> is <strong>indexer-derived</strong> by a fixed concatenation rule over title / summary / bullets / details / scope / links — never a record field.</li>
+      <li><code>origin</code> indexed as a filterable column.</li>
+      <li><strong>Fail-closed:</strong> records missing <code>origin</code> are excluded from the index.</li>
+    </ul>
+    <h4>Index decisions</h4>
+    <ul>
+      <li>BM25-over-SQLite-FTS5 only. No recall-provider abstraction. Schema must not block later vector search — but nothing more. <span class="chip sacred">endorsed — lexical retrieval also has a milder distractor profile than dense retrieval</span></li>
+      <li>Recency decay <code>exp(-ageDays/90)</code> computed in code, half-life tunable — freshness/conflict resolution must not be LLM-reasoned.</li>
+    </ul>
+    <div class="rule blue"><strong>First search upgrade is trigger-gated, not a roadmap item:</strong> if negative fixtures show distractor injections despite the relevance floor → add a re-ranking pass. Re-ranking before vector search; vector/hybrid only if BM25 + re-ranking proves insufficient.</div>
+    <div class="xlinks"><a onclick="openDetail('note-log')">← Note log</a><a onclick="openDetail('recall')">Recall →</a></div>
+  </article>
+
+  <!-- Recall -->
+  <article class="detail-article" id="d-recall">
+    <div class="detail-head">
+      <div class="kind">Component · domain core</div>
+      <h2>Recall</h2>
+      <div class="loc"><span class="chip stamp">recall precision is the product surface</span><span class="chip">read-only DB access</span></div>
+    </div>
+    <h4>Scoring — deterministic, in code</h4>
+    <pre><code>BM25 → RRF-style fusion (where applicable)
+     → project/global boost
+     → recency decay exp(-ageDays/90)
+     → weights: score × f(origin) × f(note_type)
+       <span class="c">e.g. { human:1.5, opencode:1.0, email:0.6 }
+            × { curated:1.4, decision:1.2, project_summary:1.0,
+                fact:0.9, daily:0.7, episode:0.7 }</span>
+     → relevance floor</code></pre>
+    <h4>Authority ordering (reflected in weights, wording, and tests)</h4>
+    <pre><code>current workspace evidence
+&gt; explicit user instruction in current session
+&gt; curated memory
+&gt; deterministic project notes
+&gt; recent episodic notes
+&gt; old episodic notes</code></pre>
+    <p>The first line is the poisoning guard: memory is always framed as subordinate to what the agent can see in the repo right now.</p>
+    <h4>Every injection leaves a trace</h4>
+    <p>Recall writes an injection trace (with <code>injection_id</code>, candidates, cut reasons, and a config snapshot/hash of the weights and floor in force) to the diagnostics log. Recall telemetry — injected count and tokens, query + top-result metadata, corrections/contradictions, turns-to-goal — is computed from those traces; no second pipeline. Measured from the walking skeleton onward.</p>
+    <div class="rule"><strong>Under invisible injection, wrong context is worse than no context.</strong> A single near-miss distractor measurably hurts. Fail-closed is extended from scope to relevance.</div>
+    <div class="xlinks"><a onclick="openDetail('push')">Push contract →</a><a onclick="openDetail('mcp')">Pull contract →</a><a onclick="openDetail('diagnostics')">Diagnostics →</a></div>
+  </article>
+
+  <!-- Push -->
+  <article class="detail-article" id="d-push">
+    <div class="detail-head">
+      <div class="kind">Contract · push path</div>
+      <h2>Push adapters — invisible injection</h2>
+      <div class="loc"><span class="chip">opencode (two-phase hook)</span><span class="chip">claude-code (parity)</span><span class="chip stamp">precision-first</span></div>
+    </div>
+    <h4>The contract</h4>
+    <ul>
+      <li><strong>0–5 records per prompt, never force-filled.</strong> A low-relevance note filling a slot is a distractor; a distractor is worse than an empty slot. Relevance floor = BM25-score threshold, tuned against fixtures. <span class="chip sacred">endorsed — single-distractor harm is measured and monotonic</span></li>
+      <li>Budget ~300–700 tokens per prompt (SuperBrain's ~500 confirmed in-range). Do not grow the budget "to be safe."</li>
+      <li>Require project match or explicit global scope.</li>
+      <li><strong>Layout rule:</strong> turn-1 brief + prefs ride the first user message and never mutate mid-session (stable prefix, cache-friendly); per-prompt recall splices adjacent to the latest user message (volatile suffix, pays full price by design). Top hit nearest the prompt.</li>
+    </ul>
+    <h4>Injected block shape — tagged, provenance-bearing, freshness-bearing, non-authoritative</h4>
+    <pre><code>&lt;librarian-memory injection_id="01J…" indexed_through="notes/2026-07.ndjson:12345"&gt;
+Possibly relevant prior context. Prefer current repository evidence and
+current user instructions if they conflict.
+
+1. [decision · curated · 2026-07-03 · high authority]
+   The project favors KISS, file-over-app, minimal abstraction.
+   src: curated:author-context
+
+2. [project_summary · distilled · 2026-07-03 · medium authority]
+   Librarian uses event logs as telemetry and note logs as canonical memory.
+   src: session 01J…, events 01J…–01J…
+&lt;/librarian-memory&gt;</code></pre>
+    <h4>OpenCode adapter (researched design, prior asset)</h4>
+    <p>Two-phase hook: compute on <code>chat.message</code>, splice ephemeral tagged part on <code>experimental.chat.messages.transform</code>, open-thread pointers on <code>experimental.session.compacting</code>; avoid <code>system.transform</code>.</p>
+    <div class="xlinks"><a onclick="openDetail('recall')">← Recall</a><a onclick="openDetail('mcp')">Pull path (different physics) →</a></div>
+  </article>
+
+  <!-- MCP -->
+  <article class="detail-article" id="d-mcp">
+    <div class="detail-head">
+      <div class="kind">Contract · pull path</div>
+      <h2>MCP server — model-initiated recall</h2>
+      <div class="loc"><span class="chip stamp">the universal floor</span><span class="chip">one implementation serves every MCP client</span></div>
+    </div>
+    <div class="rule blue"><strong>Different physics from push.</strong> The model <em>chose</em> to search: returning up to ~10 scored results with full metadata is appropriate. The austerity rules (0–5, floor, tight budget) are push-path rules — do not "fix" the MCP tool to obey them.</div>
+    <h4>Tools</h4>
+    <ul>
+      <li><strong>Search:</strong> scored results with full metadata; origin/scope filters exposed as tool parameters.</li>
+      <li><strong>Provenance drill-down:</strong> given a <code>note_id</code>, fetch the verbatim event excerpts behind it via collector-stamped provenance. Distilled notes are a <em>supplement to</em> recoverable verbatim source, not a replacement. <span class="chip sacred">endorsed — supplement-not-replace recovers most verbatim performance at a fraction of the tokens</span> Push stays notes-only; pull gets depth.</li>
+    </ul>
+    <h4>Why it matters</h4>
+    <p>Pull is what delivers the cross-vendor promise: ChatGPT, Claude.ai, Gemini, and any MCP-speaking agent read the same memory. On-demand and model-initiated rather than invisible — the floor, not the premium experience. Precedent: SuperBrain's <code>sb-mcp</code>.</p>
+    <div class="xlinks"><a onclick="openDetail('recall')">← Recall</a><a onclick="openDetail('push')">Push path →</a></div>
+  </article>
+
+  <!-- Exporters -->
+  <article class="detail-article" id="d-exporters">
+    <div class="detail-head">
+      <div class="kind">Components · note-log consumers</div>
+      <h2>Exporters &amp; the vault</h2>
+      <div class="loc"><span class="chip">Obsidian exporter first</span><span class="chip">SQLite mirror second</span></div>
+    </div>
+    <h4>Exporter rules</h4>
+    <ul>
+      <li>Independent note-log consumers; idempotent by <code>note_id</code>; may filter by origin — per-source vault views are exporter configuration, nothing more.</li>
+      <li>One interface: <code>exportNoteRevision(record)</code>. No plugin system.</li>
+      <li><strong>Never</strong> render diagnostics into the vault, in any form — no debug-dashboard exporters.</li>
+    </ul>
+    <h4>The vault split (structural invariant)</h4>
+    <ul>
+      <li><code>vault/generated/**</code> — exporter-owned, deterministic paths, <code>librarian_generated: true</code> frontmatter + <code>&lt;!-- librarian:generated; do not edit --&gt;</code>, overwritten freely.</li>
+      <li><code>vault/curated/**</code> — human-owned, ingested by the human distiller, <code>origin: "human"</code>.</li>
+    </ul>
+    <div class="rule"><strong>Invariant:</strong> generated files are excluded from curated ingestion — enforced by construction (directory split), not policy. No mixed-ownership regions inside one Markdown file. Ever. This kills the generated-export feedback loop.</div>
+    <p>Obsidian remains the human-facing view, but is no longer canonical storage: durable memory records are the domain layer; Obsidian pages are a rendered view or a curated input.</p>
+    <div class="xlinks"><a onclick="openDetail('note-log')">← Note log</a><a onclick="openDetail('distillers')">Human distiller →</a></div>
+  </article>
+
+  <!-- Diagnostics -->
+  <article class="detail-article" id="d-diagnostics">
+    <div class="detail-head">
+      <div class="kind">Log family · self-observation</div>
+      <h2>Diagnostics</h2>
+      <div class="loc"><span class="chip diag">~/.librarian/diagnostics</span><span class="chip diag">freely deletable · never ingested · never in the vault</span></div>
+    </div>
+    <h4>Purpose</h4>
+    <p>Answer "why did this memory surface" — and "why not," and "why wasn't this session remembered." Explainability of deterministic decisions, not OTel-style request tracing. Same NDJSON/cursor/segment machinery as the domain logs; the opposite retention story.</p>
+    <h4>What is logged</h4>
+    <ul>
+      <li><strong>Injection trace</strong> per injection: <code>injection_id</code> (the same ULID threaded into the injected block), query, candidate <code>note_id</code>s with raw and post-weight scores, cut reasons (<code>below_floor</code> | <code>budget</code> | <code>scope_mismatch</code>), records shipped, <code>indexed_through</code>, and a <strong>config snapshot/hash</strong> of the weights/floor in force — day-one and non-retrofittable: traces without the policy-in-force become unexplainable the moment the config is tuned.</li>
+      <li><strong>Distill verdicts:</strong> skip reasons, quarantine events, retry exhaustion.</li>
+      <li><strong>Not logged:</strong> timings, latency spans, counters — retrofittable, currently useless. OTLP export deferred (trigger: wanting an external backend / something feels slow); a converter is a page of code.</li>
+    </ul>
+    <h4>Isolation — structural, enforced three ways</h4>
+    <ul>
+      <li><strong>Placement:</strong> separate root, outside the data-log root and outside the vault. Deletable at any time with zero replay consequences.</li>
+      <li><strong>Poison-pill:</strong> records carry <code>record_class: "diagnostic"</code> and deliberately do not conform to the canonical event shape. Every ingestion-side validator hard-rejects them — quarantine-with-error, not silent skip.</li>
+      <li><strong>Fixture:</strong> feed a diagnostics file to the collector; assert loud rejection.</li>
+    </ul>
+    <div class="rule gray"><strong>Rationale (recorded so the rule is understood, not just obeyed):</strong> self-observation entering memory creates a reflexive loop — the system forming memories about its own memory behavior, which influence recall, which generates new diagnostics. It is the generated-export feedback loop one level up, and it degrades quietly. Diagnostic <em>insights</em> may enter memory through exactly one door: a human writes a curated note. The raw traces never do.</div>
+    <div class="xlinks"><a onclick="openDetail('recall')">← Recall</a><a onclick="openDetail('cli')">CLI →</a></div>
+  </article>
+
+  <!-- CLI -->
+  <article class="detail-article" id="d-cli">
+    <div class="detail-head">
+      <div class="kind">Interface · glass-box on demand</div>
+      <h2>CLI</h2>
+      <div class="loc"><span class="chip stamp">more important than any daemon</span></div>
+    </div>
+    <h4>Commands</h4>
+    <ul>
+      <li><code>librarian drain</code> — process everything pending. The manual recovery and debug tool.</li>
+      <li><code>librarian why &lt;injection_id&gt;</code> — replay the recorded injection trace.</li>
+      <li><code>librarian why-not &lt;query&gt; &lt;note_id&gt;</code> — a pure function, no logging needed: replay the query against the current index, show where the note ranked and which gate cut it. Determinism makes the negative trace free.</li>
+      <li><code>librarian note show &lt;note_id&gt; --with-provenance</code> — latest revision + source kind, session, event range, source excerpts.</li>
+    </ul>
+    <h4>Why glass-box matters</h4>
+    <p>Vendor memory is invisible <em>and</em> uninspectable <em>and</em> uneditable — that is its weakness. Librarian is plain markdown and NDJSON you can read, correct, author, and veto. The mechanism behind the glass: provenance on every note, provenance and freshness in every injected block, an <code>injection_id</code> on every injection, and these commands.</p>
+    <div class="xlinks"><a onclick="openDetail('diagnostics')">← Diagnostics</a></div>
+  </article>
+</section>
+
+</main>
+
+<script>
+let currentLevel = 'context';
+let inDetail = false;
+
+const names = {
+  'instrumentation':'Instrumentation','collector':'Collector','event-log':'Event log',
+  'distillers':'Distillers','note-log':'Note log','indexer':'Indexer & Index',
+  'recall':'Recall','push':'Push adapters','mcp':'MCP server',
+  'exporters':'Exporters & vault','diagnostics':'Diagnostics','cli':'CLI'
+};
+
+function showLevel(level){
+  inDetail = false;
+  currentLevel = level;
+  document.getElementById('view-context').style.display = level==='context' ? '' : 'none';
+  document.getElementById('view-system').style.display  = level==='system'  ? '' : 'none';
+  document.getElementById('detail').style.display = 'none';
+  document.getElementById('tab-context').classList.toggle('active', level==='context');
+  document.getElementById('tab-system').classList.toggle('active', level==='system');
+  document.getElementById('crumb').style.display = 'none';
+  fitBoards();
+  window.scrollTo({top:0});
+}
+
+function openDetail(id){
+  inDetail = true;
+  document.getElementById('view-context').style.display = 'none';
+  document.getElementById('view-system').style.display = 'none';
+  document.querySelectorAll('.detail-article').forEach(a => a.classList.remove('open'));
+  const art = document.getElementById('d-'+id);
+  if(art) art.classList.add('open');
+  document.getElementById('detail').style.display = 'block';
+  document.getElementById('tab-context').classList.remove('active');
+  document.getElementById('tab-system').classList.add('active');
+  document.getElementById('crumb').style.display = 'block';
+  document.getElementById('crumb-name').textContent = names[id] || id;
+  window.scrollTo({top:0});
+}
+
+function closeDetail(){
+  showLevel('system');
+}
+
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){
+    if(inDetail) closeDetail();
+    else if(currentLevel === 'system') showLevel('context');
+  }
+});
+
+/* scale fixed-coordinate boards to the container width, like a map */
+function fitBoards(){
+  [['wrap-context','board-context',1360,600],['wrap-system','board-system',1360,960]].forEach(([w,b,bw,bh])=>{
+    const wrap = document.getElementById(w), board = document.getElementById(b);
+    if(!wrap || wrap.offsetParent === null) return;
+    const s = Math.min(1, wrap.clientWidth / bw);
+    board.style.transform = 'scale(' + s + ')';
+    wrap.style.height = (bh * s) + 'px';
+  });
+}
+window.addEventListener('resize', fitBoards);
+fitBoards();
+</script>
+</body>
+</html>
