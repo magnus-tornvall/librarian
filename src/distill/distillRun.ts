@@ -144,11 +144,17 @@ export type DistillRunOptions = {
  * Run one foreground distill pass over every per-session event log under
  * `<dataDir>/events/*.ndjson`.
  *
- * Idempotency (§5/§9): only bytes past the distiller cursor's `byte_offset` are
+ * Idempotency (§5): only bytes past the distiller cursor's `byte_offset` are
  * ever read, and the cursor advances on BOTH a distill and a skip (a skipped
- * delta is processed, not pending forever). So a re-run over an unchanged log
- * reads a zero-length delta and mints nothing — a re-distill of an already-
- * provenanced range is structurally impossible, not merely avoided.
+ * delta is processed, not pending forever). So a clean re-run over an unchanged
+ * log reads a zero-length delta and mints nothing.
+ *
+ * Exactly-once-ish rests on advance-after-success, NOT on provenance dedup
+ * (§5 line 91 pairs the two; only the first half lives here). A crash in the
+ * window between `appendNote` and `advanceCursor`, or a lost/corrupted cursor
+ * file (→ offset 0), re-distills the delta on the next run and mints a
+ * duplicate note under a fresh id. Provenance-based dedup and bounded
+ * retries/quarantine are roadmap item 9 (hardening), not here.
  *
  * Fail loud (§9): if the provider or JSON parse throws for an eligible session,
  * this rethrows WITHOUT advancing that session's cursor and without writing a
@@ -223,7 +229,7 @@ export async function runDistill(options: DistillRunOptions): Promise<void> {
     // If distill()/JSON parse throws, it propagates here: cursor NOT advanced,
     // no success verdict written, non-zero exit, next run retries (§5).
     const note = await distill(events, sessionId, provider, origin);
-    appendNote(dataDir, note as unknown as Record<string, unknown>);
+    appendNote(dataDir, note);
 
     const verdict: DistillVerdict = {
       record_class: 'diagnostic',

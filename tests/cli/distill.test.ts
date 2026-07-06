@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { readAll } from '../../src/log/ndjson.ts';
 import { readAllNotes } from '../../src/log/noteLog.ts';
+import { validateEvent, DiagnosticRecordRejectedError } from '../../src/collector/validateEvent.ts';
 
 // Integration tests: spawn the real CLI (`node src/cli.ts`) against real temp
 // dirs so a run never touches ~/.librarian (§14). Events are ingested through
@@ -116,6 +117,38 @@ function noteRevisions(dataDir: string): Array<Record<string, unknown>> {
   return (readAllNotes(dataDir) as Array<Record<string, unknown>>).filter(
     (n) => n.kind === 'note_revision',
   );
+}
+
+/** Write a provider fixture with arbitrary content (used to force a parse error). */
+function writeFixtureContent(dir: string, content: string): string {
+  const fixturePath = path.join(dir, 'llm-response.json');
+  fs.writeFileSync(fixturePath, content);
+  return fixturePath;
+}
+
+function eventLogPath(dataDir: string, sessionId: string): string {
+  return path.join(dataDir, 'events', `${sessionId}.ndjson`);
+}
+
+function cursorPath(dataDir: string, sessionId: string): string {
+  return path.join(dataDir, 'cursors', 'distiller', `${sessionId}.json`);
+}
+
+/** The distiller cursor for a session, or null when no pass has advanced it. */
+function readCursorOrNull(dataDir: string, sessionId: string): Record<string, unknown> | null {
+  const p = cursorPath(dataDir, sessionId);
+  return fs.existsSync(p) ? (JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, unknown>) : null;
+}
+
+/**
+ * Write events straight to the per-session event log, bypassing `collect`.
+ * Needed only to exercise distill-side guards on inputs `collect`/`validateEvent`
+ * would reject up front (e.g. a missing `resource.agent`).
+ */
+function writeEventLogDirect(dataDir: string, sessionId: string, events: Array<Record<string, unknown>>): void {
+  const logPath = eventLogPath(dataDir, sessionId);
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.writeFileSync(logPath, events.map((e) => JSON.stringify(e) + '\n').join(''));
 }
 
 test('distill: an eligible session lands one note with correct origin and provenance; cursor advances', () => {
@@ -264,5 +297,137 @@ test('distill: events appended after a successful distill are distilled as the d
     (secondNote!.provenance as Record<string, unknown>).event_ids,
     secondIds,
     'the second note must be provenanced to the delta only',
+  );
+});
+
+test('distill: a provider whose output is not JSON fails loud — non-zero exit, no note, cursor not advanced', () => {
+  const root = tempDir('cli-distill-badjson-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixtureContent(root, 'not json at all — a model that ignored the instruction');
+  const sessionId = 'sess-badjson';
+
+  ingest(dataDir, eligibleEvents(sessionId));
+
+  const result = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.notEqual(result.status, 0, 'a JSON parse failure must cause a non-zero exit');
+  assert.match(result.stderr, /librarian:/, 'the CLI must name the failure on stderr');
+
+  // Fail loud (§9): nothing durable happened — no note, cursor never advanced.
+  assert.equal(noteRevisions(dataDir).length, 0, 'a failed distill must mint no note');
+  assert.equal(
+    readCursorOrNull(dataDir, sessionId),
+    null,
+    'the cursor must not advance when distillation throws (next run retries)',
+  );
+});
+
+test('distill: an eligible delta missing resource.agent fails loud — non-zero exit, no note, cursor not advanced', () => {
+  const root = tempDir('cli-distill-noagent-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixture(root);
+  const sessionId = 'sess-noagent';
+
+  // Build an otherwise-eligible delta (11 events, 2 prompts, 1 write tool) whose
+  // events carry NO resource.agent, then strip resource.agent. `collect`/
+  // validateEvent would reject this up front, so write the log directly to reach
+  // the distill-side origin guard.
+  const events = eligibleEvents(sessionId).map((e) => {
+    const resource = { ...(e.resource as Record<string, unknown>) };
+    delete resource.agent;
+    return { ...e, resource };
+  });
+  writeEventLogDirect(dataDir, sessionId, events);
+
+  const result = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.notEqual(result.status, 0, 'a missing resource.agent must cause a non-zero exit');
+  assert.match(result.stderr, /resource\.agent/, 'the error must name the missing resource.agent');
+
+  assert.equal(noteRevisions(dataDir).length, 0, 'no origin-less note may be minted (§4 fail-closed)');
+  assert.equal(
+    readCursorOrNull(dataDir, sessionId),
+    null,
+    'the cursor must not advance when the origin guard throws',
+  );
+});
+
+test('distill: a written verdict is a collector poison-pill — validateEvent hard-rejects it', () => {
+  const root = tempDir('cli-distill-poison-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixture(root);
+  const sessionId = 'sess-poison';
+
+  // A skip produces a verdict record; read it back from the diagnostics dir.
+  ingest(dataDir, [
+    readToolEvent(sessionId, 1, 'README.md'),
+    readToolEvent(sessionId, 2, 'src/index.ts'),
+    readToolEvent(sessionId, 3, 'package.json'),
+  ]);
+  const result = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(result.status, 0, `distill should exit 0; stderr: ${result.stderr}`);
+
+  const verdictDir = path.join(diagnosticsDir, 'distill');
+  const verdicts = fs
+    .readdirSync(verdictDir)
+    .filter((n) => n.endsWith('.ndjson'))
+    .flatMap((n) => readAll(path.join(verdictDir, n)) as Array<Record<string, unknown>>);
+  assert.equal(verdicts.length, 1, 'exactly one verdict should be written');
+
+  // §8 poison-pill: if a verdict ever leaked into the collector it would be
+  // hard-rejected by construction. Prove it cross-module (mirrors the
+  // injection-trace invariant test).
+  assert.throws(
+    () => validateEvent(verdicts[0]),
+    DiagnosticRecordRejectedError,
+    'a distill verdict must be hard-rejected by validateEvent',
+  );
+});
+
+test('distill: a partial trailing line is left unconsumed until it completes', () => {
+  const root = tempDir('cli-distill-partial-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixture(root);
+  const sessionId = 'sess-partial';
+
+  // Ingest a complete eligible batch through the real collect path.
+  ingest(dataDir, eligibleEvents(sessionId));
+  const logPath = eventLogPath(dataDir, sessionId);
+  const completeBytes = fs.statSync(logPath).size;
+
+  // Append a partial (newline-less) JSON fragment, as a still-being-written line.
+  const partialFragment = '{"schema_version":1,"type":"prompt","event_id":"01J8X7QK99Z9R4M2N6P0S5T7WY"';
+  fs.appendFileSync(logPath, partialFragment);
+  assert.ok(fs.statSync(logPath).size > completeBytes, 'the partial fragment should be on disk');
+
+  // First pass: the complete events distill; the partial line is ignored, so the
+  // cursor stops exactly at the last complete newline (§5), not at EOF.
+  const first = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(first.status, 0, `distill should exit 0; stderr: ${first.stderr}`);
+  assert.equal(noteRevisions(dataDir).length, 1, 'the complete events should distill into one note');
+  const cursorAfterFirst = readCursorOrNull(dataDir, sessionId);
+  assert.ok(cursorAfterFirst, 'a cursor should exist after the first pass');
+  assert.equal(
+    cursorAfterFirst!.byte_offset,
+    completeBytes,
+    'the cursor must stop before the partial trailing line, not at EOF',
+  );
+
+  // Complete the partial line; now the pending delta becomes processable.
+  fs.appendFileSync(logPath, ',"prompt":"finish the thought","ts":"2026-07-05T09:99:00.000Z","resource":{"agent":"claude-code","machine_id":"m","cwd":"/x"},"context":{"session_id":"' + sessionId + '","cwd":"/x"}}\n');
+  const eof = fs.statSync(logPath).size;
+
+  // Second pass: the now-complete line is a 1-event delta — below MIN_EVENTS, so
+  // it is skipped, but it IS processed (a skipped delta advances the cursor to
+  // EOF). The key invariant: the completed line is no longer pending.
+  const second = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(second.status, 0, `distill should exit 0; stderr: ${second.stderr}`);
+  const cursorAfterSecond = readCursorOrNull(dataDir, sessionId);
+  assert.equal(
+    cursorAfterSecond!.byte_offset,
+    eof,
+    'once completed, the trailing line is consumed and the cursor reaches EOF',
   );
 });
