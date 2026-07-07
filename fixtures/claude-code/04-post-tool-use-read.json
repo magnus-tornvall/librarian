@@ -1,0 +1,60 @@
+{
+  "name": "post-tool-use-read",
+  "description": "A Claude Code PostToolUse hook for the Read tool maps to a ToolEvent (canonical_name read, category file_read) with files[] populated (action read) from tool_input.file_path. A read carries NO salience hint (only file_write / vcs_commit do).",
+  "native": {
+    "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+    "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
+    "cwd": "/Users/magnus/dev/librarian",
+    "permission_mode": "default",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/Users/magnus/dev/librarian/src/auth/session.ts",
+      "offset": 1,
+      "limit": 80
+    },
+    "tool_response": "     1\texport function refreshSession() {\n     2\t  // ...\n",
+    "tool_use_id": "toolu_01MNO345PQR678",
+    "duration_ms": 5
+  },
+  "env": {
+    "event_id": "01J8X7QK43W7Y1Q4N8R2T6V0XY",
+    "ts": "2026-07-06T09:15:22.004Z",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK43W7Y1Q4N8R2T6V0XY",
+    "ts": "2026-07-06T09:15:22.004Z",
+    "type": "tool",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "Read",
+      "canonical_name": "read",
+      "category": "file_read"
+    },
+    "files": [{ "path": "/Users/magnus/dev/librarian/src/auth/session.ts", "action": "read" }]
+  }
+}
