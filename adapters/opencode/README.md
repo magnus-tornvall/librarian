@@ -27,8 +27,8 @@ record its absolute path in `~/.librarian/config.json`, and symlink this plugin 
 repo-root `.opencode/plugins/`):
 
 ```sh
-./scripts/opencode-setup.sh      # build + write config bin + symlink plugin into .opencode/plugins/
-./scripts/opencode-teardown.sh   # remove the symlink + drop the config bin
+./scripts/opencode-setup.sh      # build + write config bin/runtime + symlink plugin into .opencode/plugins/
+./scripts/opencode-teardown.sh   # remove the symlink + drop the config bin/runtime
 ```
 
 See the top-level [`README.md`](../../README.md#opencode-plugin-local-smoke-test) for
@@ -47,11 +47,18 @@ what they do. To install by hand instead:
       default for a repo checkout), else
    4. a bare `librarian` on `PATH` (last-resort convenience).
 
-   A resolved `.js` path is run with the plugin's own runtime (no `#!/usr/bin/env node`
-   shebang lookup). Why not rely on `PATH`: OpenCode is a native binary, and the `PATH`
-   its plugin child inherits depends on how OpenCode was launched (terminal vs desktop app
-   vs login service vs package manager) — nvm/asdf/Homebrew/GUI launches routinely leave a
-   bare `librarian` unresolvable.
+   When the resolved CLI is a `.js` file it needs a JS runtime to run it, and the plugin
+   **cannot** assume its own `process.execPath` is one: inside OpenCode that is the compiled
+   `opencode` binary, which, handed a `.js`, just re-invokes itself and prints its help —
+   the collector never runs and no events are written. So a `.js` is paired with a runtime
+   resolved as: `LIBRARIAN_RUNTIME` env / config `{ "runtime": "/abs/path/to/node" }` (the
+   setup script records the `node` it validated with, making this deterministic), else
+   `process.execPath` only when it looks like `node`/`bun`/`deno`, else a `node`/`bun`
+   discovered from `NVM_BIN`/`BUN_INSTALL`, else the `.js` is spawned directly via its
+   `#!/usr/bin/env node` shebang (the setup script sets its exec bit). Why not rely on
+   `PATH`: OpenCode is a native binary, and the `PATH` its plugin child inherits depends on
+   how OpenCode was launched (terminal vs desktop app vs login service vs package manager) —
+   nvm/asdf/Homebrew/GUI launches routinely leave a bare `librarian` unresolvable.
 
 2. **Drop the plugin file where OpenCode loads plugins from:**
    - `~/.config/opencode/plugins/` — global (all projects), or

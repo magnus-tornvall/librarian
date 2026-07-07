@@ -52,15 +52,24 @@ if [[ ! -f "${CLI_TARGET}" ]]; then
   exit 1
 fi
 
-# 2. Record the absolute CLI path in ~/.librarian/config.json. Merge (set/replace only the
-#    `bin` key) so any other config keys are preserved; use node (already a build dep) to
-#    do the JSON safely rather than hand-rolling it in bash.
-echo "==> [2/4] writing ${CONFIG_PATH} (bin → ${CLI_TARGET})"
+# 2. Record the absolute CLI path AND the JS runtime that runs it in ~/.librarian/config.json.
+#    The plugin cannot assume its own process.execPath is a JS runtime — under OpenCode that
+#    is the compiled `opencode` binary, which cannot execute dist/cli.js. So we record the
+#    exact `node` this script validated with, making the plugin's invocation deterministic and
+#    independent of PATH. Merge (set/replace only `bin` and `runtime`) so other keys survive;
+#    use node (already a build dep) to edit the JSON safely rather than hand-rolling it in bash.
+NODE_BIN="$(command -v node)"
+if [[ -z "${NODE_BIN}" ]]; then
+  echo "ERROR: could not locate 'node' on PATH; cannot record a runtime for the plugin." >&2
+  exit 1
+fi
+echo "==> [2/4] writing ${CONFIG_PATH} (bin → ${CLI_TARGET}, runtime → ${NODE_BIN})"
 mkdir -p "$(dirname "${CONFIG_PATH}")"
-CONFIG_PATH="${CONFIG_PATH}" CLI_TARGET="${CLI_TARGET}" node <<'NODE'
+CONFIG_PATH="${CONFIG_PATH}" CLI_TARGET="${CLI_TARGET}" NODE_BIN="${NODE_BIN}" node <<'NODE'
 const fs = require('node:fs');
 const p = process.env.CONFIG_PATH;
 const bin = process.env.CLI_TARGET;
+const runtime = process.env.NODE_BIN;
 let cfg = {};
 try {
   const raw = fs.readFileSync(p, 'utf8');
@@ -70,14 +79,19 @@ try {
   // absent or unreadable/corrupt — start fresh
 }
 cfg.bin = bin;
+cfg.runtime = runtime;
 fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
 NODE
 
-# Prove the recorded CLI actually runs, the same way the plugin will invoke it (current
+# Make dist/cli.js executable so the plugin's last-resort direct-spawn (shebang) path works
+# too. `tsc` does not set the exec bit, so a fresh build leaves it off — set it explicitly.
+chmod +x "${CLI_TARGET}"
+
+# Prove the recorded CLI actually runs, the same way the plugin will invoke it (recorded
 # runtime + dist/cli.js). A failure here means the build or config is broken — fail loud
 # now rather than letting the plugin silently fall back to an ephemeral id.
-machine_id="$(node "${CLI_TARGET}" machine-id)"
-echo "    cli → ${CLI_TARGET}  (runtime: $(command -v node || echo '???'))"
+machine_id="$("${NODE_BIN}" "${CLI_TARGET}" machine-id)"
+echo "    cli → ${CLI_TARGET}  (runtime: ${NODE_BIN})"
 echo "    machine-id → ${machine_id}"
 
 # 3. Symlink the plugin as a single flat file directly in .opencode/plugins/. OpenCode

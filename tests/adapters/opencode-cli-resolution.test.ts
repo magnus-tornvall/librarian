@@ -26,37 +26,29 @@ function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-/** Run the resolver with a controlled env: an explicit LIBRARIAN_BIN, HOME (which
- *  os.homedir() honors), and MACHINE_ID_PATH, restoring all afterward so tests do not
- *  leak into each other or touch the real ~/.librarian. A value of null deletes that
- *  variable. */
-function withEnv<T>(
-  env: { LIBRARIAN_BIN?: string | null; HOME?: string | null; MACHINE_ID_PATH?: string | null },
-  fn: () => T,
-): T {
-  const prev = {
-    LIBRARIAN_BIN: process.env.LIBRARIAN_BIN,
-    HOME: process.env.HOME,
-    MACHINE_ID_PATH: process.env.MACHINE_ID_PATH,
-  };
-  const apply = (key: 'LIBRARIAN_BIN' | 'HOME' | 'MACHINE_ID_PATH', value: string | null | undefined) => {
-    if (value === undefined) return; // key not mentioned — leave as-is
-    if (value === null) delete process.env[key];
-    else process.env[key] = value;
-  };
-  const restore = (key: 'LIBRARIAN_BIN' | 'HOME' | 'MACHINE_ID_PATH', value: string | undefined) => {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  };
+/** The environment variables these tests manipulate. */
+type ControlledVar = 'LIBRARIAN_BIN' | 'LIBRARIAN_RUNTIME' | 'HOME' | 'MACHINE_ID_PATH';
+
+/** Run the resolver with a controlled env, restoring every touched variable afterward so
+ *  tests do not leak into each other or touch the real ~/.librarian. A value of null
+ *  deletes that variable; an omitted key is left as-is. */
+function withEnv<T>(env: Partial<Record<ControlledVar, string | null>>, fn: () => T): T {
+  const keys: ControlledVar[] = ['LIBRARIAN_BIN', 'LIBRARIAN_RUNTIME', 'HOME', 'MACHINE_ID_PATH'];
+  const prev = new Map<ControlledVar, string | undefined>(keys.map((k) => [k, process.env[k]]));
   try {
-    apply('LIBRARIAN_BIN', env.LIBRARIAN_BIN);
-    apply('HOME', env.HOME);
-    apply('MACHINE_ID_PATH', env.MACHINE_ID_PATH);
+    for (const key of keys) {
+      if (!(key in env)) continue; // not mentioned — leave as-is
+      const value = env[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
     return fn();
   } finally {
-    restore('LIBRARIAN_BIN', prev.LIBRARIAN_BIN);
-    restore('HOME', prev.HOME);
-    restore('MACHINE_ID_PATH', prev.MACHINE_ID_PATH);
+    for (const key of keys) {
+      const value = prev.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 }
 
@@ -82,11 +74,15 @@ function homeWithMachineId(id: string): string {
  *  from a file rung, never the CLI. */
 const UNRUNNABLE_BIN = '/nonexistent/librarian-cli-that-cannot-run';
 
-test('resolution: LIBRARIAN_BIN pointing at a .js runs it under the current runtime (process.execPath)', () => {
-  const argv = withEnv({ LIBRARIAN_BIN: '/opt/librarian/dist/cli.js', HOME: tempDir('empty-home-') }, () =>
-    resolveLibrarianArgv(),
+test('resolution: a .js bin is paired with the resolved JS runtime (LIBRARIAN_RUNTIME wins)', () => {
+  // Pin the runtime explicitly so this does not silently depend on the test runner being
+  // node. Under OpenCode process.execPath is the opencode binary — not a runtime — which is
+  // exactly why an explicit runtime rung exists.
+  const argv = withEnv(
+    { LIBRARIAN_BIN: '/opt/librarian/dist/cli.js', LIBRARIAN_RUNTIME: '/opt/node/bin/node', HOME: tempDir('empty-home-') },
+    () => resolveLibrarianArgv(),
   );
-  assert.deepEqual(argv, [process.execPath, '/opt/librarian/dist/cli.js']);
+  assert.deepEqual(argv, ['/opt/node/bin/node', '/opt/librarian/dist/cli.js']);
 });
 
 test('resolution: LIBRARIAN_BIN pointing at a non-.js executable is spawned directly (no runtime prefix)', () => {
@@ -172,6 +168,80 @@ test('end-to-end: an event handed to the resolved argv (via config `bin`) lands 
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, `collect via the resolved argv should exit 0; stderr: ${result.stderr}`);
+
+  const logFilePath = path.join(dataDir, 'events', `${sessionId}.ndjson`);
+  assert.ok(fs.existsSync(logFilePath), 'the event must land in the per-session log');
+  const persisted = readAll(logFilePath) as Array<Record<string, unknown>>;
+  assert.equal(persisted.length, 1, 'exactly one event should be appended');
+  assert.equal(persisted[0].event_id, event.event_id, 'the delivered event must round-trip');
+});
+
+/**
+ * Runtime resolution for a `.js` CLI — the "events never land under OpenCode" regression.
+ *
+ * The plugin used to run a resolved `.js` with `process.execPath`, assuming it was a JS
+ * runtime. Inside OpenCode `process.execPath` is the compiled `opencode` binary: given a
+ * `.js` positional it re-invokes itself, prints its help, and exits 1 — so `collect` never
+ * ran and no events were written, silently. The fix resolves a real runtime (explicit env /
+ * config `runtime`, else process.execPath only when it looks like node/bun/deno, else a
+ * discovered node/bun). These tests pin that a `.js` is paired with the RIGHT runtime and
+ * never with a non-runtime host binary.
+ */
+
+test('runtime: config `runtime` is used for a .js bin when no env override is set', () => {
+  const home = homeWithConfig({ bin: '/opt/librarian/dist/cli.js', runtime: '/opt/node/bin/node' });
+  const argv = withEnv({ LIBRARIAN_BIN: null, LIBRARIAN_RUNTIME: null, HOME: home }, () => resolveLibrarianArgv());
+  assert.deepEqual(argv, ['/opt/node/bin/node', '/opt/librarian/dist/cli.js']);
+});
+
+test('runtime: LIBRARIAN_RUNTIME overrides config `runtime`', () => {
+  const home = homeWithConfig({ bin: '/opt/librarian/dist/cli.js', runtime: '/opt/node/bin/node' });
+  const argv = withEnv({ LIBRARIAN_BIN: null, LIBRARIAN_RUNTIME: '/override/bun', HOME: home }, () =>
+    resolveLibrarianArgv(),
+  );
+  assert.deepEqual(argv, ['/override/bun', '/opt/librarian/dist/cli.js'], 'the env runtime must win');
+});
+
+test('runtime: a non-.js bin is spawned directly even when a runtime is configured', () => {
+  // A real executable needs no interpreter; the runtime must not be prepended to it.
+  const home = homeWithConfig({ runtime: '/opt/node/bin/node' });
+  const argv = withEnv({ LIBRARIAN_BIN: '/usr/local/bin/librarian', HOME: home }, () => resolveLibrarianArgv());
+  assert.deepEqual(argv, ['/usr/local/bin/librarian'], 'an executable target is never runtime-prefixed');
+});
+
+test('runtime: the resolved [runtime, dist/cli.js] argv actually delivers an event to the log', (t) => {
+  // The production shape end-to-end: config points bin → built dist/cli.js and runtime →
+  // this test runner's own node (a guaranteed-good JS runtime). Proves the paired argv runs
+  // the collector and lands the event — the exact path that was silently broken under
+  // OpenCode. Skips if the CLI has not been built.
+  const distCli = path.join(import.meta.dirname, '..', '..', 'dist', 'cli.js');
+  if (!fs.existsSync(distCli)) {
+    t.skip('dist/cli.js not built (run `npm run build`); the resolution tests still cover the seam');
+    return;
+  }
+
+  const home = homeWithConfig({ bin: distCli, runtime: process.execPath });
+  const argv = withEnv({ LIBRARIAN_BIN: null, LIBRARIAN_RUNTIME: null, HOME: home }, () => resolveLibrarianArgv());
+  assert.deepEqual(argv, [process.execPath, distCli], 'config bin+runtime should resolve to [runtime, dist/cli.js]');
+
+  const dataDir = tempDir('opencode-runtime-e2e-');
+  const sessionId = 'opencode-runtime-resolution-session';
+  const event = {
+    schema_version: 1,
+    type: 'prompt',
+    event_id: '01J8X7QK45Y0A6S9P7T1U6W8YY',
+    ts: '2026-07-07T00:00:00.000Z',
+    resource: { agent: 'opencode', machine_id: '01J8X7QK3VZ9R4M2N6P0S5T7WX', cwd: '/repo' },
+    context: { session_id: sessionId, cwd: '/repo' },
+    prompt: 'what is 1+1?',
+  };
+
+  const [cmd, ...prefix] = argv;
+  const result = spawnSync(cmd, [...prefix, 'collect', '--data-dir', dataDir], {
+    input: JSON.stringify(event) + '\n',
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, `collect via [runtime, dist/cli.js] should exit 0; stderr: ${result.stderr}`);
 
   const logFilePath = path.join(dataDir, 'events', `${sessionId}.ndjson`);
   assert.ok(fs.existsSync(logFilePath), 'the event must land in the per-session log');

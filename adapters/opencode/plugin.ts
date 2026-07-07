@@ -78,12 +78,23 @@ function tryRun(command: string, args: string[], cwd: string): string | undefine
 //      production mechanism: it is read from disk at runtime, so it survives whatever
 //      launch environment OpenCode came from (unlike an env var or a shell PATH).
 //   3. The built dist/cli.js resolved relative to THIS file — the zero-config default
-//      for a repo checkout. No PATH, and no `#!/usr/bin/env node` shebang lookup either.
+//      for a repo checkout. No PATH lookup for the CLI itself (the runtime that runs it is
+//      resolved separately; see below).
 //   4. Bare `librarian` on PATH — last-resort convenience.
 //
-// A resolved `.js` path is run with `process.execPath` (the same runtime already running
-// this plugin) so we never depend on the shebang finding `node`; an executable (no .js)
-// is spawned directly. The result is an argv PREFIX; the subcommand + args are appended.
+// A resolved `.js` path needs a JS runtime to run it. We must NOT assume `process.execPath`
+// is one: under OpenCode `process.execPath` is the compiled `opencode` binary, which, given
+// a `.js` positional, just re-invokes itself and prints its help (exit 1) — the collector
+// never runs. So a `.js` target is paired with a runtime resolved in this order:
+//   a. LIBRARIAN_RUNTIME env / config `runtime` — an explicit interpreter path (the setup
+//      script records the node it validated here, making the production path deterministic).
+//   b. process.execPath, but ONLY when it actually looks like a JS runtime (node/bun/deno) —
+//      true for `node --test` and Node-hosted plugins, false for the opencode binary.
+//   c. A node/bun discovered from environment hints (NVM_BIN, BUN_INSTALL) — best effort.
+//   d. Last resort: spawn the `.js` directly and let its `#!/usr/bin/env node` shebang find
+//      node on PATH (requires the file's exec bit; the setup script sets it).
+// A non-.js target (a real executable) is always spawned directly. The result is an argv
+// PREFIX; the subcommand + args are appended.
 // ---------------------------------------------------------------------------
 
 /** The config file the collector already owns (src/paths.ts CONFIG_PATH). We do not
@@ -102,30 +113,76 @@ function machineIdPath(): string {
   return path.join(os.homedir(), '.librarian', 'machine-id');
 }
 
-/** Turn a resolved CLI location into a spawn argv prefix: a `.js` file runs under the
- *  current runtime (process.execPath) so no shebang/PATH `node` lookup is needed; an
- *  executable is spawned directly. */
-function argvFor(bin: string): string[] {
-  return bin.endsWith('.js') ? [process.execPath, bin] : [bin];
+/** Does this executable path look like a JS runtime that can run a `.js` file directly?
+ *  We match the basename against known runtimes so we never mistake a host app (e.g. the
+ *  `opencode` binary, which is `process.execPath` inside the plugin) for an interpreter. */
+function looksLikeJsRuntime(execPath: string): boolean {
+  const base = path.basename(execPath).toLowerCase().replace(/\.exe$/, '');
+  return base === 'node' || base === 'bun' || base === 'deno';
 }
 
-/** Read `bin` out of ~/.librarian/config.json, best-effort: a missing file, malformed
- *  JSON, or an absent/blank `bin` key yields undefined (fall through to the next rung),
- *  never a throw — resolution must not break the session. */
-function binFromConfig(): string | undefined {
+/** Best-effort discovery of a JS runtime from environment hints, without trusting a bare
+ *  PATH lookup. nvm exports NVM_BIN (…/bin containing `node`); Bun exports BUN_INSTALL
+ *  (…/bin/bun). Returns the first interpreter that exists on disk, or undefined. */
+function discoverRuntime(): string | undefined {
+  const candidates: string[] = [];
+  const nvmBin = process.env.NVM_BIN;
+  if (nvmBin) candidates.push(path.join(nvmBin, 'node'));
+  const bunInstall = process.env.BUN_INSTALL;
+  if (bunInstall) candidates.push(path.join(bunInstall, 'bin', 'bun'));
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      // ignore and try the next candidate
+    }
+  }
+  return undefined;
+}
+
+/** Resolve a JS runtime to run a `.js` CLI (see the block comment above for the order and
+ *  why `process.execPath` cannot be assumed). Returns undefined when no runtime is known,
+ *  in which case the caller spawns the `.js` directly via its shebang. */
+function resolveRuntime(): string | undefined {
+  const fromEnv = process.env.LIBRARIAN_RUNTIME;
+  if (fromEnv && fromEnv.trim().length > 0) return fromEnv;
+  const fromConfig = stringFromConfig('runtime');
+  if (fromConfig) return fromConfig;
+  if (looksLikeJsRuntime(process.execPath)) return process.execPath;
+  return discoverRuntime();
+}
+
+/** Turn a resolved CLI location into a spawn argv prefix. A real executable (no `.js`) is
+ *  spawned directly. A `.js` is paired with a resolved JS runtime; if none can be found we
+ *  fall back to spawning it directly and rely on its shebang + exec bit. */
+function argvFor(bin: string): string[] {
+  if (!bin.endsWith('.js')) return [bin];
+  const runtime = resolveRuntime();
+  return runtime ? [runtime, bin] : [bin];
+}
+
+/** Read a string-valued key out of ~/.librarian/config.json, best-effort: a missing file,
+ *  malformed JSON, or an absent/blank value yields undefined (fall through to the next
+ *  rung), never a throw — resolution must not break the session. */
+function stringFromConfig(key: string): string | undefined {
   try {
     const raw = fs.readFileSync(configPath(), 'utf8');
     const parsed = JSON.parse(raw) as unknown;
     if (typeof parsed === 'object' && parsed !== null) {
-      const bin = (parsed as Record<string, unknown>).bin;
-      if (typeof bin === 'string' && bin.trim().length > 0) {
-        return bin;
+      const value = (parsed as Record<string, unknown>)[key];
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value;
       }
     }
   } catch {
     // absent or unreadable config — fall through
   }
   return undefined;
+}
+
+/** The CLI path recorded in config (`bin`), if any. */
+function binFromConfig(): string | undefined {
+  return stringFromConfig('bin');
 }
 
 /** The built CLI (dist/cli.js) resolved relative to this source file, if it exists.

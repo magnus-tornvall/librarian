@@ -37,11 +37,11 @@ rmdir "${PLUGIN_DIR}" 2>/dev/null || true
 rmdir "${REPO_ROOT}/.opencode" 2>/dev/null || true
 echo "    removed (if present): ${PLUGIN_LINK} and stale ${PLUGIN_DIR}/librarian/"
 
-# 2. Drop the `bin` key from ~/.librarian/config.json — but only if it points at THIS
-#    repo's dist/cli.js (never disturb an install by other means). Delete the file only
-#    if removing `bin` leaves it empty. Best-effort; leaves all other keys and all
+# 2. Drop the `bin` (and `runtime`) keys from ~/.librarian/config.json — but only if `bin`
+#    points at THIS repo's dist/cli.js (never disturb an install by other means). Delete the
+#    file only if removing them leaves it empty. Best-effort; leaves all other keys and all
 #    ~/.librarian data untouched. Uses node (a build dep) for safe JSON handling.
-echo "==> [2/2] cleaning up ${CONFIG_PATH} (bin)"
+echo "==> [2/2] cleaning up ${CONFIG_PATH} (bin, runtime)"
 if [[ -f "${CONFIG_PATH}" ]]; then
   CONFIG_PATH="${CONFIG_PATH}" CLI_TARGET="${CLI_TARGET}" node <<'NODE'
 const fs = require('node:fs');
@@ -60,12 +60,13 @@ if (cfg.bin !== ours) {
   process.exit(0);
 }
 delete cfg.bin;
+delete cfg.runtime; // recorded by setup alongside bin; remove it as a pair
 if (Object.keys(cfg).length === 0) {
   fs.rmSync(p);
   process.stdout.write('    removed now-empty config file\n');
 } else {
   fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
-  process.stdout.write('    removed bin key (other config keys preserved)\n');
+  process.stdout.write('    removed bin + runtime keys (other config keys preserved)\n');
 }
 NODE
 else
