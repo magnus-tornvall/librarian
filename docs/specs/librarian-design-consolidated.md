@@ -316,7 +316,7 @@ Golden examples: (1) episodic decision, `distiller: llm`, `origin: opencode`; (2
 4. ✅ **Walking skeleton:** fixture events → renderer → LLM distill (`claude -p`, hard-coded) → note log → Obsidian export → BM25 index → recall query with floor + weights + injection trace. Ugly internals, real data. Revise the note schema from what the skeleton teaches. **Diagnostics log and injection traces start here** — recall telemetry is computed from them.
 5. ✅ Curated Markdown → human distiller → note log → index → recall (with human weight).
 6. ⏳ Real instrumentation (OpenCode first — existing plugin remapped to canonical schema; Claude Code second). *Next — issues #28–#32.*
-7. **MCP server (pull path):** search tool (scored results, origin/scope filters) + **provenance drill-down tool** (note → verbatim event excerpts).
+7. **MCP server (pull path):** search tool (scored results, origin/scope filters) + **provenance drill-down tool** (note → verbatim event excerpts). Transport is an open sub-decision — "pull path" ≠ "MCP"; Claude Code offers three model-initiated pull mechanisms (MCP tool / model-invocable Skill / subagent) over the same recall CLI, and MCP's distinguishing value is cross-vendor reach, not Claude-Code pull. Tradeoff analysis: `docs/research/pull-path-mcp-vs-skill.md`.
 8. Recall injection adapters (push path: OpenCode two-phase hook design; Claude Code parity). Injected-block contract per §6; `librarian why` / `why-not` land here.
 9. Hardening: cursors, locks, retries, quarantine, `librarian drain`.
 10. Second inference provider (OpenAI-compatible ⇒ local) and second exporter (SQLite mirror) — after the first path works end-to-end.
