@@ -85,7 +85,7 @@ function resolveMachineId(): string {
   }
 
   process.stderr.write(
-    'librarian-opencode: could not resolve machine id (is `librarian` on PATH?); ' +
+    'librarian: could not resolve machine id (is `librarian` on PATH?); ' +
       'falling back to an ephemeral id for this run\n',
   );
   return randomUUID();
@@ -307,7 +307,7 @@ interface PluginContext {
  * once, then on each hook: lower native → NativePayload, `map()` → canonical event
  * (stamping a fresh ULID + ISO ts), and `handOff()` to `librarian collect`.
  */
-export const LibrarianOpenCodePlugin = async (ctx: PluginContext) => {
+export const LibrarianPlugin = async (ctx: PluginContext) => {
   const cwd = ctx.worktree ?? ctx.directory ?? process.cwd();
   // Mutable so `session.created` can back-fill `agent_version` (Session.version) into
   // the shared facts, after which every subsequent event in the session carries it.
@@ -325,9 +325,9 @@ export const LibrarianOpenCodePlugin = async (ctx: PluginContext) => {
     // Prefer structured logging through the SDK; fall back to stderr.
     const sink = ctx.client?.app?.log;
     if (sink) {
-      void sink({ body: { service: 'librarian-opencode', level, message } });
+      void sink({ body: { service: 'librarian', level, message } });
     } else {
-      process.stderr.write(`librarian-opencode [${level}]: ${message}\n`);
+      process.stderr.write(`librarian [${level}]: ${message}\n`);
     }
   };
 
@@ -410,4 +410,4 @@ export const LibrarianOpenCodePlugin = async (ctx: PluginContext) => {
   };
 };
 
-export default LibrarianOpenCodePlugin;
+export default LibrarianPlugin;

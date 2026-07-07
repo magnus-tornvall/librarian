@@ -22,6 +22,17 @@ distiller (§4, §5).
 
 ## Install
 
+The fastest path for a per-project smoke test is the repo scripts (they build, `npm
+link` the CLI, and symlink this plugin into the repo-root `.opencode/plugins/librarian/`):
+
+```sh
+./scripts/opencode-setup.sh      # build + npm link + symlink plugin into .opencode/plugins/librarian
+./scripts/opencode-teardown.sh   # remove the symlinks + npm unlink
+```
+
+See the top-level [`README.md`](../../README.md#opencode-plugin-local-smoke-test) for
+what they do. To install by hand instead:
+
 1. **`librarian` must be on `PATH`.** The plugin shells out to `librarian collect`
    (delivery) and `librarian machine-id` (machine id). Build the CLI (`npm run build` at
    the repo root produces `dist/cli.js`, exposed as the `librarian` bin) and make it
@@ -35,9 +46,9 @@ distiller (§4, §5).
    `./map.ts`). For example:
 
    ```sh
-   mkdir -p ~/.config/opencode/plugins/librarian-opencode
+   mkdir -p ~/.config/opencode/plugins/librarian
    cp adapters/opencode/map.ts adapters/opencode/plugin.ts \
-      ~/.config/opencode/plugins/librarian-opencode/
+      ~/.config/opencode/plugins/librarian/
    ```
 
    OpenCode loads TypeScript plugin files directly; no build step for the plugin itself.
