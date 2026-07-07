@@ -1,0 +1,65 @@
+{
+  "name": "post-tool-use-bash-git-commit",
+  "description": "A Claude Code PostToolUse hook for the Bash tool whose tool_input.command is a `git commit` invocation is recategorized to vcs_commit (canonical_name stays bash), ships the raw command, and carries a non-authoritative vcs_commit salience hint.",
+  "native": {
+    "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+    "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
+    "cwd": "/Users/magnus/dev/librarian",
+    "permission_mode": "default",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git commit -m \"fix: expire check before redirect\"",
+      "description": "Commit the redirect fix"
+    },
+    "tool_response": {
+      "stdout": "[feat/claude-code-adapter 1a2b3c4] fix: expire check before redirect\n 1 file changed, 3 insertions(+)",
+      "stderr": "",
+      "interrupted": false,
+      "isImage": false
+    },
+    "tool_use_id": "toolu_01GHI789JKL012",
+    "duration_ms": 214
+  },
+  "env": {
+    "event_id": "01J8X7QK42V5X9P2M6Q0R5S7VW",
+    "ts": "2026-07-06T09:14:59.887Z",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK42V5X9P2M6Q0R5S7VW",
+    "ts": "2026-07-06T09:14:59.887Z",
+    "type": "tool",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "Bash",
+      "canonical_name": "bash",
+      "category": "vcs_commit"
+    },
+    "command": "git commit -m \"fix: expire check before redirect\"",
+    "hints": { "possibly_salient": true, "reason": "vcs_commit" }
+  }
+}

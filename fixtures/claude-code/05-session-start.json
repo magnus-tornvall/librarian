@@ -1,0 +1,47 @@
+{
+  "name": "session-start",
+  "description": "A Claude Code SessionStart hook payload maps to a SessionEvent with action 'start'. Every SessionStart source (startup/resume/clear/compact) maps to 'start' — the canonical SessionAction vocabulary has no per-source variants and the dumb adapter does not editorialize. SessionStart carries no permission_mode.",
+  "native": {
+    "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+    "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
+    "cwd": "/Users/magnus/dev/librarian",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "model": "claude-sonnet-5"
+  },
+  "env": {
+    "event_id": "01J8X7QK44X9Z3R6P0T4V8X2YZ",
+    "ts": "2026-07-06T09:10:00.000Z",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK44X9Z3R6P0T4V8X2YZ",
+    "ts": "2026-07-06T09:10:00.000Z",
+    "type": "session",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "action": "start"
+  }
+}
