@@ -3,21 +3,21 @@
 # opencode-setup.sh — stand up a local OpenCode smoke test for the librarian plugin.
 #
 # It:
-#   1. builds the CLI (`npm run build` → dist/cli.js, which carries the shebang so a
-#      bare `librarian` invocation execs under node),
-#   2. symlinks dist/cli.js to ~/.local/bin/librarian so `librarian` is on PATH (the
-#      plugin shells out to `librarian collect` / `librarian machine-id` by bare name).
-#      We deliberately do NOT use `npm link`: it installs into the *active* nvm node's
-#      per-version global bin dir, which is not on PATH when a different node is active —
-#      and OpenCode is a native binary with no nvm node of its own, so its plugin child
-#      inherits a PATH that need not contain any nvm bin dir. A ~/.local/bin symlink is
-#      node-independent (the shebang still picks whatever node is active) and survives
-#      `nvm use`. See docs/research if this ever needs the GUI-launch (minimal-PATH) case.
-#   3. symlinks this repo's OpenCode adapter (plugin.ts + its map.ts) into the
-#      repo-root .opencode/plugins/librarian/ so OpenCode auto-loads it per-project, and
+#   1. builds the CLI (`npm run build` → dist/cli.js),
+#   2. writes ~/.librarian/config.json with an absolute `bin` pointing at dist/cli.js, so
+#      the plugin can locate the CLI without depending on $PATH. OpenCode is a native
+#      binary whose plugin child inherits whatever PATH it was launched with (terminal,
+#      desktop app, login service, package manager) — which need not contain any dir a
+#      bare `librarian` was linked into. A config file read from disk at runtime sidesteps
+#      that entirely. The plugin's resolution order is LIBRARIAN_BIN → config `bin` →
+#      the built dist/cli.js relative to the plugin → bare `librarian` (see the adapter).
+#   3. symlinks this repo's OpenCode adapter (plugin.ts) into the repo-root
+#      .opencode/plugins/ so OpenCode auto-loads it per-project, and
 #   4. prints the next steps.
 #
-# Idempotent: safe to run repeatedly. Undo with scripts/opencode-teardown.sh.
+# This is throw-away smoke-test tooling, not a production installer (packaging is
+# deferred — see the design spec). Idempotent: safe to run repeatedly. Undo with
+# scripts/opencode-teardown.sh.
 set -euo pipefail
 
 # Resolve the repo root from this script's own location, so it works from any CWD.
@@ -33,56 +33,51 @@ ADAPTER_DIR="${REPO_ROOT}/adapters/opencode"
 # (adapters/opencode/), and a flat map.ts would be wrongly loaded as its own plugin.
 PLUGIN_DIR="${REPO_ROOT}/.opencode/plugins"
 PLUGIN_LINK="${PLUGIN_DIR}/librarian.ts"
-# Node-independent bin dir for the `librarian` symlink (must be on the PATH that
-# OpenCode's plugin child inherits). ~/.local/bin is the conventional per-user choice.
-BIN_DIR="${HOME}/.local/bin"
-CLI_LINK="${BIN_DIR}/librarian"
+# The CLI the plugin will spawn, and the config file that records its absolute path.
 CLI_TARGET="${REPO_ROOT}/dist/cli.js"
+CONFIG_PATH="${HOME}/.librarian/config.json"
 
 echo "==> librarian OpenCode plugin — setup"
 echo "    repo root:    ${REPO_ROOT}"
 echo "    plugin link:  ${PLUGIN_LINK}"
-echo "    cli symlink:  ${CLI_LINK}"
+echo "    config:       ${CONFIG_PATH}  (bin → ${CLI_TARGET})"
 
-# 1. Build the CLI. dist/cli.js is what `librarian` points at; the shebang lets the
-#    symlink exec under node when the plugin spawns it by bare name.
+# 1. Build the CLI. dist/cli.js is what the plugin spawns (via the current runtime, so no
+#    shebang/PATH `node` lookup is needed).
 echo "==> [1/4] building the CLI (npm run build)"
 npm run build
 
-# 2. Put `librarian` on PATH via a node-independent symlink, then prove it actually
-#    runs. A bare `librarian machine-id` failing here means the symlink/shebang is broken
-#    or ~/.local/bin is not on PATH — fail loud now rather than letting the plugin
-#    silently fall back to an ephemeral id (or emit nothing at all).
-echo "==> [2/4] linking dist/cli.js → ${CLI_LINK}"
 if [[ ! -f "${CLI_TARGET}" ]]; then
   echo "ERROR: ${CLI_TARGET} does not exist; did 'npm run build' succeed?" >&2
   exit 1
 fi
-mkdir -p "${BIN_DIR}"
-# Refuse to clobber a real (non-symlink) file sitting where our link should go.
-if [[ -e "${CLI_LINK}" && ! -L "${CLI_LINK}" ]]; then
-  echo "ERROR: ${CLI_LINK} exists and is not a symlink; refusing to overwrite it." >&2
-  echo "       Remove it by hand and re-run." >&2
-  exit 1
-fi
-ln -sfn "${CLI_TARGET}" "${CLI_LINK}"
 
-# The smoke test must be node-honest: verify the bare name resolves to OUR link (not
-# some other `librarian` earlier on PATH, e.g. a stale `npm link` under another node),
-# then that it actually runs. `command -v` reflects the real PATH lookup the plugin does.
-if ! command -v librarian >/dev/null 2>&1; then
-  echo "ERROR: 'librarian' is not on PATH after linking." >&2
-  echo "       Ensure ${BIN_DIR} is on your PATH, then re-run." >&2
-  exit 1
-fi
-resolved="$(command -v librarian)"
-if [[ "$(cd "$(dirname "${resolved}")" && pwd)/$(basename "${resolved}")" != "${CLI_LINK}" ]]; then
-  echo "WARNING: 'librarian' resolves to ${resolved}, not ${CLI_LINK}." >&2
-  echo "         Another 'librarian' is earlier on PATH (e.g. a stale 'npm link')." >&2
-  echo "         The plugin will use ${resolved}; remove it if that is not intended." >&2
-fi
-machine_id="$(librarian machine-id)"
-echo "    librarian → ${resolved}  (node: $(command -v node || echo '???'))"
+# 2. Record the absolute CLI path in ~/.librarian/config.json. Merge (set/replace only the
+#    `bin` key) so any other config keys are preserved; use node (already a build dep) to
+#    do the JSON safely rather than hand-rolling it in bash.
+echo "==> [2/4] writing ${CONFIG_PATH} (bin → ${CLI_TARGET})"
+mkdir -p "$(dirname "${CONFIG_PATH}")"
+CONFIG_PATH="${CONFIG_PATH}" CLI_TARGET="${CLI_TARGET}" node <<'NODE'
+const fs = require('node:fs');
+const p = process.env.CONFIG_PATH;
+const bin = process.env.CLI_TARGET;
+let cfg = {};
+try {
+  const raw = fs.readFileSync(p, 'utf8');
+  const parsed = JSON.parse(raw);
+  if (parsed && typeof parsed === 'object') cfg = parsed;
+} catch {
+  // absent or unreadable/corrupt — start fresh
+}
+cfg.bin = bin;
+fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
+NODE
+
+# Prove the recorded CLI actually runs, the same way the plugin will invoke it (current
+# runtime + dist/cli.js). A failure here means the build or config is broken — fail loud
+# now rather than letting the plugin silently fall back to an ephemeral id.
+machine_id="$(node "${CLI_TARGET}" machine-id)"
+echo "    cli → ${CLI_TARGET}  (runtime: $(command -v node || echo '???'))"
 echo "    machine-id → ${machine_id}"
 
 # 3. Symlink the plugin as a single flat file directly in .opencode/plugins/. OpenCode
@@ -120,12 +115,12 @@ echo "    ${PLUGIN_LINK} -> ${ADAPTER_DIR}/plugin.ts"
 echo "==> [4/4] done"
 cat <<EOF
 
-Setup complete. \`librarian\` is installed at ${CLI_LINK} (symlink → dist/cli.js).
+Setup complete. The plugin locates the CLI via ${CONFIG_PATH} (bin → dist/cli.js),
+so it works regardless of how OpenCode is launched — no PATH setup required.
 
 To smoke-test:
 
   1. Run OpenCode from this repo:   opencode
-     (launch from a terminal so ${BIN_DIR} is on the PATH the plugin inherits)
   2. Send a prompt and run a tool (e.g. a bash 'git status').
   3. End/delete the session.
   4. Check the collected events:

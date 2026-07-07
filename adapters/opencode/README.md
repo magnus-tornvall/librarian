@@ -22,21 +22,36 @@ distiller (§4, §5).
 
 ## Install
 
-The fastest path for a per-project smoke test is the repo scripts (they build, `npm
-link` the CLI, and symlink this plugin into the repo-root `.opencode/plugins/librarian/`):
+The fastest path for a per-project smoke test is the repo scripts (they build the CLI,
+record its absolute path in `~/.librarian/config.json`, and symlink this plugin into the
+repo-root `.opencode/plugins/`):
 
 ```sh
-./scripts/opencode-setup.sh      # build + npm link + symlink plugin into .opencode/plugins/librarian
-./scripts/opencode-teardown.sh   # remove the symlinks + npm unlink
+./scripts/opencode-setup.sh      # build + write config bin + symlink plugin into .opencode/plugins/
+./scripts/opencode-teardown.sh   # remove the symlink + drop the config bin
 ```
 
 See the top-level [`README.md`](../../README.md#opencode-plugin-local-smoke-test) for
 what they do. To install by hand instead:
 
-1. **`librarian` must be on `PATH`.** The plugin shells out to `librarian collect`
+1. **Make the `librarian` CLI locatable.** The plugin shells out to `librarian collect`
    (delivery) and `librarian machine-id` (machine id). Build the CLI (`npm run build` at
-   the repo root produces `dist/cli.js`, exposed as the `librarian` bin) and make it
-   resolvable — e.g. `npm link` in this repo, or symlink `dist/cli.js` onto your `PATH`.
+   the repo root produces `dist/cli.js`), then let the plugin find it. It resolves the CLI
+   in this order — **it does not require `PATH`**:
+
+   1. `LIBRARIAN_BIN` env var (an absolute path to `cli.js` or an executable), else
+   2. `~/.librarian/config.json` `{ "bin": "/abs/path/to/dist/cli.js" }` — the durable
+      choice, read from disk at runtime so it works regardless of how OpenCode was
+      launched (the setup script writes this for you), else
+   3. the built `dist/cli.js` located relative to this plugin file (the zero-config
+      default for a repo checkout), else
+   4. a bare `librarian` on `PATH` (last-resort convenience).
+
+   A resolved `.js` path is run with the plugin's own runtime (no `#!/usr/bin/env node`
+   shebang lookup). Why not rely on `PATH`: OpenCode is a native binary, and the `PATH`
+   its plugin child inherits depends on how OpenCode was launched (terminal vs desktop app
+   vs login service vs package manager) — nvm/asdf/Homebrew/GUI launches routinely leave a
+   bare `librarian` unresolvable.
 
 2. **Drop the plugin file where OpenCode loads plugins from:**
    - `~/.config/opencode/plugins/` — global (all projects), or

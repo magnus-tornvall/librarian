@@ -3,14 +3,13 @@
 # opencode-teardown.sh — undo scripts/opencode-setup.sh.
 #
 # It:
-#   1. removes the plugin symlinks from .opencode/plugins/librarian/ (and the dir if
-#      it is left empty), and
-#   2. removes the ~/.local/bin/librarian symlink created by setup (only if it points at
-#      this repo's dist/cli.js), and also best-effort `npm unlink -g librarian` to clean
-#      up any stale link left by an older setup that used `npm link`.
+#   1. removes the plugin symlink from .opencode/plugins/ (and the dir if left empty), and
+#   2. removes the `bin` key from ~/.librarian/config.json (deleting the file only if it
+#      becomes empty), so nothing points at this repo's dist/cli.js afterward.
 #
-# Idempotent: safe to run even if setup was never run or was already torn down.
-# It does NOT delete collected events under ~/.librarian (that is your data).
+# Throw-away smoke-test tooling; cleanup is best-effort. Idempotent: safe to run even if
+# setup was never run or was already torn down. It does NOT delete collected events under
+# ~/.librarian (that is your data).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,13 +18,13 @@ cd "${REPO_ROOT}"
 
 PLUGIN_DIR="${REPO_ROOT}/.opencode/plugins"
 PLUGIN_LINK="${PLUGIN_DIR}/librarian.ts"
-CLI_LINK="${HOME}/.local/bin/librarian"
 CLI_TARGET="${REPO_ROOT}/dist/cli.js"
+CONFIG_PATH="${HOME}/.librarian/config.json"
 
 echo "==> librarian OpenCode plugin — teardown"
 echo "    repo root:    ${REPO_ROOT}"
 echo "    plugin link:  ${PLUGIN_LINK}"
-echo "    cli symlink:  ${CLI_LINK}"
+echo "    config:       ${CONFIG_PATH}"
 
 # 1. Remove the flat plugin symlink, plus any stale nested install from older setups.
 echo "==> [1/2] removing plugin symlink(s)"
@@ -38,39 +37,39 @@ rmdir "${PLUGIN_DIR}" 2>/dev/null || true
 rmdir "${REPO_ROOT}/.opencode" 2>/dev/null || true
 echo "    removed (if present): ${PLUGIN_LINK} and stale ${PLUGIN_DIR}/librarian/"
 
-# 2. Remove the ~/.local/bin/librarian symlink, but only if it is a symlink that points
-#    at THIS repo's dist/cli.js — never touch a real file or someone else's install.
-echo "==> [2/2] removing the librarian CLI symlink"
-if [[ -L "${CLI_LINK}" ]]; then
-  # Resolve the link's immediate target and compare against our dist/cli.js.
-  link_target="$(readlink "${CLI_LINK}")"
-  case "${link_target}" in
-    /*) resolved_target="${link_target}" ;;               # absolute
-    *)  resolved_target="$(cd "$(dirname "${CLI_LINK}")" && cd "$(dirname "${link_target}")" && pwd)/$(basename "${link_target}")" ;;
-  esac
-  if [[ "${resolved_target}" == "${CLI_TARGET}" ]]; then
-    rm -f "${CLI_LINK}"
-    echo "    removed ${CLI_LINK} -> ${CLI_TARGET}"
-  else
-    echo "    note: ${CLI_LINK} points at ${link_target}, not this repo; leaving it."
-  fi
-elif [[ -e "${CLI_LINK}" ]]; then
-  echo "    note: ${CLI_LINK} exists but is not a symlink; leaving it untouched."
+# 2. Drop the `bin` key from ~/.librarian/config.json — but only if it points at THIS
+#    repo's dist/cli.js (never disturb an install by other means). Delete the file only
+#    if removing `bin` leaves it empty. Best-effort; leaves all other keys and all
+#    ~/.librarian data untouched. Uses node (a build dep) for safe JSON handling.
+echo "==> [2/2] cleaning up ${CONFIG_PATH} (bin)"
+if [[ -f "${CONFIG_PATH}" ]]; then
+  CONFIG_PATH="${CONFIG_PATH}" CLI_TARGET="${CLI_TARGET}" node <<'NODE'
+const fs = require('node:fs');
+const p = process.env.CONFIG_PATH;
+const ours = process.env.CLI_TARGET;
+let cfg;
+try {
+  cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+} catch {
+  process.stdout.write('    config unreadable/corrupt; leaving it untouched\n');
+  process.exit(0);
+}
+if (!cfg || typeof cfg !== 'object') process.exit(0);
+if (cfg.bin !== ours) {
+  process.stdout.write(`    config bin is ${JSON.stringify(cfg.bin)}, not this repo; leaving it.\n`);
+  process.exit(0);
+}
+delete cfg.bin;
+if (Object.keys(cfg).length === 0) {
+  fs.rmSync(p);
+  process.stdout.write('    removed now-empty config file\n');
+} else {
+  fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
+  process.stdout.write('    removed bin key (other config keys preserved)\n');
+}
+NODE
 else
-  echo "    ${CLI_LINK} not present (nothing to do)"
-fi
-
-# Also best-effort clean up a stale global link from an older setup that used `npm link`.
-# `npm unlink -g` exits non-zero when nothing is linked; that is a fine end-state.
-unlink_out=""
-unlink_rc=0
-unlink_out="$(npm unlink -g librarian 2>&1)" || unlink_rc=$?
-if [[ ${unlink_rc} -eq 0 ]]; then
-  echo "    also unlinked a global 'librarian' (stale 'npm link' cleanup)"
-fi
-
-if command -v librarian >/dev/null 2>&1; then
-  echo "    note: 'librarian' still resolves at $(command -v librarian) (installed by other means)"
+  echo "    ${CONFIG_PATH} not present (nothing to do)"
 fi
 
 echo "==> done. Collected events under ~/.librarian were left untouched."

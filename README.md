@@ -10,19 +10,22 @@ down. Both are idempotent (safe to re-run) and resolve the repo root themselves,
 work from any directory.
 
 ```sh
-./scripts/opencode-setup.sh      # build, npm link, install the plugin for this project
-./scripts/opencode-teardown.sh   # remove the plugin symlinks, npm unlink
+./scripts/opencode-setup.sh      # build, record the CLI path in config, install the plugin
+./scripts/opencode-teardown.sh   # remove the plugin symlink, drop the config entry
 ```
 
 **`opencode-setup.sh`** does four things:
 
-1. `npm run build` — produces `dist/cli.js`. It carries a `#!/usr/bin/env node` shebang
-   so the bare `librarian` command execs under node.
-2. `npm link` — puts `librarian` on `PATH` (the plugin shells out to `librarian collect`
-   and `librarian machine-id` by bare name), then verifies it runs.
-3. Symlinks the adapter — `adapters/opencode/plugin.ts` and its `map.ts` — into the
-   repo-root `.opencode/plugins/librarian/`, which OpenCode auto-loads per-project. Using
-   symlinks means edits to the adapter are picked up on the next session with no re-copy.
+1. `npm run build` — produces `dist/cli.js` (the `librarian` CLI).
+2. Writes `~/.librarian/config.json` with an absolute `bin` pointing at `dist/cli.js`,
+   then verifies it runs. The plugin reads this at runtime to locate the CLI, so it works
+   no matter how OpenCode was launched — no `PATH` setup required. (Resolution order:
+   `LIBRARIAN_BIN` → config `bin` → the built `dist/cli.js` next to the plugin → bare
+   `librarian` on `PATH` as a last resort.)
+3. Symlinks the adapter — `adapters/opencode/plugin.ts` — into the repo-root
+   `.opencode/plugins/` as `librarian.ts`, which OpenCode auto-loads per-project. Using a
+   symlink means edits to the adapter are picked up on the next session with no re-copy.
+   (`map.ts` is not symlinked; the plugin imports it via the symlink's real location.)
 4. Prints the next steps.
 
 Then, to smoke-test:
@@ -37,9 +40,9 @@ Then, to smoke-test:
    # per-session NDJSON: ~/.librarian/data/events/<session_id>.ndjson
    ```
 
-**`opencode-teardown.sh`** removes the plugin symlinks (and the now-empty
-`.opencode/plugins/librarian/` dir) and unlinks the global `librarian`. Collected events
-under `~/.librarian` are left untouched.
+**`opencode-teardown.sh`** removes the plugin symlink (and the now-empty
+`.opencode/plugins/` dir) and drops the `bin` entry it wrote to `~/.librarian/config.json`.
+Collected events under `~/.librarian` are left untouched.
 
 `.opencode/plugins/` is git-ignored, so the per-project install never shows up as a repo
 change. See [`adapters/opencode/README.md`](adapters/opencode/README.md) for a manual

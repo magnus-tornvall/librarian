@@ -29,7 +29,9 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ulid } from 'ulid';
 import {
   map,
@@ -61,14 +63,108 @@ function tryRun(command: string, args: string[], cwd: string): string | undefine
   }
 }
 
+// ---------------------------------------------------------------------------
+// CLI resolution: find the `librarian` executable without trusting $PATH.
+//
+// OpenCode is a native (Bun) binary; the PATH its plugin child inherits depends on
+// how OpenCode was launched (terminal, desktop app, login service, package manager)
+// and need not contain the dir a bare `librarian` was linked into. nvm/asdf/Homebrew/
+// npm-global-bins/GUI launches all make bare-name lookup unreliable, and a shell rc
+// (.zshrc) is not guaranteed to have run. So bare-name PATH lookup is a *convenience
+// fallback*, never the contract. Resolution order (first hit wins):
+//
+//   1. LIBRARIAN_BIN env var — explicit override (dev, smoke tests).
+//   2. ~/.librarian/config.json `{ "bin": "…" }` — written at install time. This is the
+//      production mechanism: it is read from disk at runtime, so it survives whatever
+//      launch environment OpenCode came from (unlike an env var or a shell PATH).
+//   3. The built dist/cli.js resolved relative to THIS file — the zero-config default
+//      for a repo checkout. No PATH, and no `#!/usr/bin/env node` shebang lookup either.
+//   4. Bare `librarian` on PATH — last-resort convenience.
+//
+// A resolved `.js` path is run with `process.execPath` (the same runtime already running
+// this plugin) so we never depend on the shebang finding `node`; an executable (no .js)
+// is spawned directly. The result is an argv PREFIX; the subcommand + args are appended.
+// ---------------------------------------------------------------------------
+
+/** The config file the collector already owns (src/paths.ts CONFIG_PATH). We do not
+ *  import it — the adapter stays dependency-free of `src/` (§4) — so we recompute the
+ *  same path here. Resolved lazily (at call time, not module load) so it honors the
+ *  current home directory. */
+function configPath(): string {
+  return path.join(os.homedir(), '.librarian', 'config.json');
+}
+
+/** Turn a resolved CLI location into a spawn argv prefix: a `.js` file runs under the
+ *  current runtime (process.execPath) so no shebang/PATH `node` lookup is needed; an
+ *  executable is spawned directly. */
+function argvFor(bin: string): string[] {
+  return bin.endsWith('.js') ? [process.execPath, bin] : [bin];
+}
+
+/** Read `bin` out of ~/.librarian/config.json, best-effort: a missing file, malformed
+ *  JSON, or an absent/blank `bin` key yields undefined (fall through to the next rung),
+ *  never a throw — resolution must not break the session. */
+function binFromConfig(): string | undefined {
+  try {
+    const raw = fs.readFileSync(configPath(), 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed === 'object' && parsed !== null) {
+      const bin = (parsed as Record<string, unknown>).bin;
+      if (typeof bin === 'string' && bin.trim().length > 0) {
+        return bin;
+      }
+    }
+  } catch {
+    // absent or unreadable config — fall through
+  }
+  return undefined;
+}
+
+/** The built CLI (dist/cli.js) resolved relative to this source file, if it exists.
+ *  This file lives at adapters/opencode/plugin.ts; the built CLI is at dist/cli.js —
+ *  two directories up. Returns undefined when the CLI has not been built. */
+function binFromRepo(): string | undefined {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const candidate = path.resolve(here, '..', '..', 'dist', 'cli.js');
+    return fs.existsSync(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the `librarian` invocation as an argv prefix (see the block comment above for
+ * the ordering and rationale). Always returns something: the final rung is the bare
+ * name, preserving the pre-hardening behavior so nothing regresses when neither an
+ * override, a config, nor a built CLI is present.
+ *
+ * Exported for the seam test (the only reason this is not module-private).
+ */
+export function resolveLibrarianArgv(): string[] {
+  const fromEnv = process.env.LIBRARIAN_BIN;
+  if (fromEnv && fromEnv.trim().length > 0) {
+    return argvFor(fromEnv);
+  }
+  const fromConfig = binFromConfig();
+  if (fromConfig) {
+    return argvFor(fromConfig);
+  }
+  const fromRepo = binFromRepo();
+  if (fromRepo) {
+    return argvFor(fromRepo);
+  }
+  return ['librarian'];
+}
+
 /**
  * Resolve the machine id the way the spec mandates (§10.1, §11): a generated,
  * persisted id — never the hostname. Prefer `MACHINE_ID_PATH` when it is set and the
  * file exists (the collector's own path constant); otherwise ask the CLI
- * (`librarian machine-id`), which generates-and-persists on first call. If both fail
- * (librarian not on PATH — a misconfiguration the README calls out), fall back to a
- * random UUID so an event still carries a non-empty machine_id and the pipeline does
- * not wedge; a warning is logged so the operator can fix PATH.
+ * (`librarian machine-id`, resolved via `resolveLibrarianArgv`), which generates-and-
+ * persists on first call. If both fail (the CLI could not be located or run), fall back
+ * to a random UUID so an event still carries a non-empty machine_id and the pipeline
+ * does not wedge; a warning is logged so the operator can fix the install.
  */
 function resolveMachineId(): string {
   const fromEnv = process.env.MACHINE_ID_PATH;
@@ -79,13 +175,15 @@ function resolveMachineId(): string {
     }
   }
 
-  const fromCli = tryRun('librarian', ['machine-id'], process.cwd());
+  const [cmd, ...prefix] = resolveLibrarianArgv();
+  const fromCli = tryRun(cmd, [...prefix, 'machine-id'], process.cwd());
   if (fromCli) {
     return fromCli;
   }
 
   process.stderr.write(
-    'librarian: could not resolve machine id (is `librarian` on PATH?); ' +
+    'librarian: could not resolve machine id (could not locate/run the librarian CLI; ' +
+      'set LIBRARIAN_BIN or ~/.librarian/config.json "bin", or build the CLI); ' +
       'falling back to an ephemeral id for this run\n',
   );
   return randomUUID();
@@ -135,15 +233,21 @@ function buildResource(cwd: string): Resource {
  * for v1 — correctness over throughput, and it keeps the plugin stateless with no
  * long-lived child to supervise. The ceiling is obvious: a chatty session pays a
  * process spawn per event. When that bites, the fix is a single long-lived `collect`
- * child (or a batching buffer flushed on idle), not more logic here. `librarian` must
- * be on PATH (see README). A collector rejection (fail-loud, §9) is surfaced to the
- * OpenCode log but never rethrown — instrumentation must not break the session.
+ * child (or a batching buffer flushed on idle), not more logic here. The CLI is located
+ * via `resolveLibrarianArgv` (LIBRARIAN_BIN → config → built dist → bare name), so it does
+ * not depend on $PATH. A collector rejection (fail-loud, §9) is surfaced to the OpenCode
+ * log but never rethrown — instrumentation must not break the session.
  */
 function handOff(event: CanonicalEvent, log: (level: string, message: string) => void): void {
   const line = JSON.stringify(event) + '\n';
-  const result = spawnSync('librarian', ['collect'], { input: line, encoding: 'utf8' });
+  const [cmd, ...prefix] = resolveLibrarianArgv();
+  const result = spawnSync(cmd, [...prefix, 'collect'], { input: line, encoding: 'utf8' });
   if (result.error) {
-    log('error', `librarian collect failed to spawn: ${result.error.message} (is librarian on PATH?)`);
+    log(
+      'error',
+      `librarian collect failed to spawn: ${result.error.message} ` +
+        '(could not locate/run the librarian CLI; set LIBRARIAN_BIN or ~/.librarian/config.json "bin", or build the CLI)',
+    );
     return;
   }
   if (result.status !== 0) {
