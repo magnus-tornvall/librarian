@@ -5,7 +5,9 @@
 # It:
 #   1. removes the plugin symlinks from .opencode/plugins/librarian/ (and the dir if
 #      it is left empty), and
-#   2. unlinks the global `librarian` created by `npm link`.
+#   2. removes the ~/.local/bin/librarian symlink created by setup (only if it points at
+#      this repo's dist/cli.js), and also best-effort `npm unlink -g librarian` to clean
+#      up any stale link left by an older setup that used `npm link`.
 #
 # Idempotent: safe to run even if setup was never run or was already torn down.
 # It does NOT delete collected events under ~/.librarian (that is your data).
@@ -15,37 +17,56 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-PLUGIN_DIR="${REPO_ROOT}/.opencode/plugins/librarian"
+PLUGIN_DIR="${REPO_ROOT}/.opencode/plugins"
+PLUGIN_LINK="${PLUGIN_DIR}/librarian.ts"
+CLI_LINK="${HOME}/.local/bin/librarian"
+CLI_TARGET="${REPO_ROOT}/dist/cli.js"
 
 echo "==> librarian OpenCode plugin — teardown"
-echo "    repo root:   ${REPO_ROOT}"
-echo "    plugin dir:  ${PLUGIN_DIR}"
+echo "    repo root:    ${REPO_ROOT}"
+echo "    plugin link:  ${PLUGIN_LINK}"
+echo "    cli symlink:  ${CLI_LINK}"
 
-# 1. Remove the plugin symlinks. rm -f is a no-op if they are already gone.
-echo "==> [1/2] removing plugin symlinks"
-rm -f "${PLUGIN_DIR}/plugin.ts" "${PLUGIN_DIR}/map.ts"
-# Prune the now-empty librarian dir (and empty parents up to .opencode), best-effort.
+# 1. Remove the flat plugin symlink, plus any stale nested install from older setups.
+echo "==> [1/2] removing plugin symlink(s)"
+rm -f "${PLUGIN_LINK}"
+# Older setup versions used a nested .opencode/plugins/librarian/ dir; clean it too.
+rm -f "${PLUGIN_DIR}/librarian/plugin.ts" "${PLUGIN_DIR}/librarian/map.ts"
+rmdir "${PLUGIN_DIR}/librarian" 2>/dev/null || true
+# Prune now-empty parents (best-effort).
 rmdir "${PLUGIN_DIR}" 2>/dev/null || true
-rmdir "${REPO_ROOT}/.opencode/plugins" 2>/dev/null || true
 rmdir "${REPO_ROOT}/.opencode" 2>/dev/null || true
-echo "    removed (if present): ${PLUGIN_DIR}/{plugin.ts,map.ts}"
+echo "    removed (if present): ${PLUGIN_LINK} and stale ${PLUGIN_DIR}/librarian/"
 
-# 2. Unlink the global `librarian`. `npm unlink -g` can exit non-zero when nothing is
-#    linked; that is a fine end-state, so don't let it abort the script. Capture output
-#    so a genuine npm error is still surfaced rather than silently swallowed.
-echo "==> [2/2] unlinking the librarian CLI (npm unlink -g librarian)"
+# 2. Remove the ~/.local/bin/librarian symlink, but only if it is a symlink that points
+#    at THIS repo's dist/cli.js — never touch a real file or someone else's install.
+echo "==> [2/2] removing the librarian CLI symlink"
+if [[ -L "${CLI_LINK}" ]]; then
+  # Resolve the link's immediate target and compare against our dist/cli.js.
+  link_target="$(readlink "${CLI_LINK}")"
+  case "${link_target}" in
+    /*) resolved_target="${link_target}" ;;               # absolute
+    *)  resolved_target="$(cd "$(dirname "${CLI_LINK}")" && cd "$(dirname "${link_target}")" && pwd)/$(basename "${link_target}")" ;;
+  esac
+  if [[ "${resolved_target}" == "${CLI_TARGET}" ]]; then
+    rm -f "${CLI_LINK}"
+    echo "    removed ${CLI_LINK} -> ${CLI_TARGET}"
+  else
+    echo "    note: ${CLI_LINK} points at ${link_target}, not this repo; leaving it."
+  fi
+elif [[ -e "${CLI_LINK}" ]]; then
+  echo "    note: ${CLI_LINK} exists but is not a symlink; leaving it untouched."
+else
+  echo "    ${CLI_LINK} not present (nothing to do)"
+fi
+
+# Also best-effort clean up a stale global link from an older setup that used `npm link`.
+# `npm unlink -g` exits non-zero when nothing is linked; that is a fine end-state.
 unlink_out=""
 unlink_rc=0
 unlink_out="$(npm unlink -g librarian 2>&1)" || unlink_rc=$?
 if [[ ${unlink_rc} -eq 0 ]]; then
-  echo "    global 'librarian' unlinked"
-elif ! command -v librarian >/dev/null 2>&1; then
-  # Non-zero, but librarian is not on PATH anyway → nothing was linked. Fine.
-  echo "    global 'librarian' was not linked (nothing to do)"
-else
-  # Non-zero AND librarian still resolves → a real failure worth showing.
-  echo "    warning: 'npm unlink -g librarian' failed:" >&2
-  echo "${unlink_out}" >&2
+  echo "    also unlinked a global 'librarian' (stale 'npm link' cleanup)"
 fi
 
 if command -v librarian >/dev/null 2>&1; then
