@@ -82,8 +82,10 @@ what they do. To install by hand instead:
 | File tool (read/write/edit)       | `ToolEvent`     | `files[]` populated; file writes get `hints.possibly_salient` (`reason: file_write`). |
 | Session start / stop / compact    | `SessionEvent`  | `action` ∈ start/stop/compact/checkpoint. |
 
-`resource` carries `agent: "opencode"`, `machine_id` (via `librarian machine-id` or
-`MACHINE_ID_PATH`), `cwd`, and `git_root`/`git_remote`/`git_branch` when resolvable —
+`resource` carries `agent: "opencode"`, `machine_id` (read from the persisted
+`~/.librarian/machine-id`, or `MACHINE_ID_PATH` when set; the CLI's `machine-id` is only
+the bootstrap that first writes that file), `cwd`, and `git_root`/`git_remote`/`git_branch`
+when resolvable —
 **facts, not identity**. `agent_version` is back-filled from `Session.version` once
 `session.created` is observed (OpenCode surfaces its version only on the full `Session`
 object), after which every later event in the session carries it. There is deliberately

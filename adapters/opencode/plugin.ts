@@ -94,6 +94,14 @@ function configPath(): string {
   return path.join(os.homedir(), '.librarian', 'config.json');
 }
 
+/** The persisted machine-id file the collector owns (src/paths.ts MACHINE_ID_PATH).
+ *  As with configPath, we recompute rather than import it (§4) and resolve it lazily so
+ *  it honors the current home directory. This is the file `librarian machine-id`
+ *  writes on first run, so reading it directly lets the plugin skip spawning the CLI. */
+function machineIdPath(): string {
+  return path.join(os.homedir(), '.librarian', 'machine-id');
+}
+
 /** Turn a resolved CLI location into a spawn argv prefix: a `.js` file runs under the
  *  current runtime (process.execPath) so no shebang/PATH `node` lookup is needed; an
  *  executable is spawned directly. */
@@ -159,20 +167,32 @@ export function resolveLibrarianArgv(): string[] {
 
 /**
  * Resolve the machine id the way the spec mandates (§10.1, §11): a generated,
- * persisted id — never the hostname. Prefer `MACHINE_ID_PATH` when it is set and the
- * file exists (the collector's own path constant); otherwise ask the CLI
- * (`librarian machine-id`, resolved via `resolveLibrarianArgv`), which generates-and-
- * persists on first call. If both fail (the CLI could not be located or run), fall back
- * to a random UUID so an event still carries a non-empty machine_id and the pipeline
- * does not wedge; a warning is logged so the operator can fix the install.
+ * persisted id — never the hostname. Resolution order (first hit wins):
+ *
+ *   1. `MACHINE_ID_PATH` env var, when set and the file is non-empty (explicit override).
+ *   2. The default persisted file `~/.librarian/machine-id` — the same file the CLI
+ *      writes. Reading it directly means the common case needs no subprocess at all,
+ *      so the machine id no longer depends on locating/spawning the CLI under whatever
+ *      launch environment OpenCode inherited.
+ *   3. The CLI (`librarian machine-id`, via `resolveLibrarianArgv`), which generates-and-
+ *      persists on first call — the bootstrap path when the file does not yet exist.
+ *   4. A random UUID, so an event still carries a non-empty machine_id and the pipeline
+ *      does not wedge; a warning is logged so the operator can fix the install.
+ *
+ * Exported for the seam test (the only reason this is not module-private).
  */
-function resolveMachineId(): string {
-  const fromEnv = process.env.MACHINE_ID_PATH;
-  if (fromEnv && fs.existsSync(fromEnv)) {
-    const id = fs.readFileSync(fromEnv, 'utf8').trim();
-    if (id.length > 0) {
+export function resolveMachineId(): string {
+  const fromEnvPath = process.env.MACHINE_ID_PATH;
+  if (fromEnvPath) {
+    const id = readIdFile(fromEnvPath);
+    if (id) {
       return id;
     }
+  }
+
+  const id = readIdFile(machineIdPath());
+  if (id) {
+    return id;
   }
 
   const [cmd, ...prefix] = resolveLibrarianArgv();
@@ -182,11 +202,25 @@ function resolveMachineId(): string {
   }
 
   process.stderr.write(
-    'librarian: could not resolve machine id (could not locate/run the librarian CLI; ' +
-      'set LIBRARIAN_BIN or ~/.librarian/config.json "bin", or build the CLI); ' +
-      'falling back to an ephemeral id for this run\n',
+    'librarian: could not resolve machine id (no persisted id at ~/.librarian/machine-id ' +
+      'and could not locate/run the librarian CLI; set LIBRARIAN_BIN or ~/.librarian/config.json ' +
+      '"bin", or build the CLI); falling back to an ephemeral id for this run\n',
   );
   return randomUUID();
+}
+
+/** Read a persisted id from a file: trimmed non-empty contents, or undefined if the file
+ *  is absent, unreadable, or blank. Never throws — id resolution must not break init. */
+function readIdFile(file: string): string | undefined {
+  try {
+    if (!fs.existsSync(file)) {
+      return undefined;
+    }
+    const id = fs.readFileSync(file, 'utf8').trim();
+    return id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Resolve the git facts for a directory, all best-effort (§10.1: facts, not identity). */
