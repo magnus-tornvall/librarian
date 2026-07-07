@@ -426,11 +426,16 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
   const seenMessageIds = new Set<string>();
 
   const log = (level: string, message: string): void => {
-    // Prefer structured logging through the SDK; fall back to stderr.
-    const sink = ctx.client?.app?.log;
-    if (sink) {
-      void sink({ body: { service: 'librarian', level, message } });
-    } else {
+    try {
+      // Prefer structured logging through the SDK; fall back to stderr.
+      // Call .log() directly on the app object to preserve `this` (§4).
+      if (ctx.client?.app?.log) {
+        void ctx.client.app.log({ body: { service: 'librarian', level, message } });
+      } else {
+        process.stderr.write(`librarian [${level}]: ${message}\n`);
+      }
+    } catch {
+      // Instrumentation must never break the session (§4).
       process.stderr.write(`librarian [${level}]: ${message}\n`);
     }
   };
