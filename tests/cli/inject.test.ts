@@ -77,8 +77,8 @@ test('inject CLI renders §6 block, writes matching push trace, and leaves note 
   assert.equal(result.status, 0, `inject should exit 0; stderr: ${result.stderr}`);
   assert.match(result.stdout, /^<librarian-memory injection_id="[^"]+" indexed_through="[^"]+">/);
   assert.match(result.stdout, /Possibly relevant prior context\. Prefer current repository evidence and current user instructions if they conflict\./);
-  assert.match(result.stdout, /1\. \[decision · llm\/opencode · 2026-07-06 · medium authority\] Inject title 1/);
-  assert.match(result.stdout, /src: fact:inject-1#rev-1/);
+  assert.match(result.stdout, /1\. \[decision · llm\/opencode · 2026-07-06 · medium authority\]\n {3}Inject title 1/);
+  assert.match(result.stdout, /^ {3}src: fact:inject-1#rev-1$/m);
   assert.match(result.stdout, /<\/librarian-memory>\n$/);
 
   const injectionId = result.stdout.match(/injection_id="([^"]+)"/)?.[1];
@@ -154,8 +154,16 @@ test('inject --session-start returns project brief and curated notes, or empty w
   assert.equal(result.status, 0, `session-start inject should exit 0; stderr: ${result.stderr}`);
   assert.match(result.stdout, /project_summary · llm\/opencode · 2026-07-06 · medium authority/);
   assert.match(result.stdout, /curated · human\/human · 2026-07-06 · high authority/);
-  assert.match(result.stdout, /src: project:alpha:summary#summary-rev/);
-  assert.match(result.stdout, /src: curated:alpha-runbook#curated-rev/);
+  assert.match(result.stdout, /^ {3}src: project:alpha:summary#summary-rev$/m);
+  assert.match(result.stdout, /^ {3}src: curated:alpha-runbook#curated-rev$/m);
+
+  const sessionTrace = readTraces(t.diagnosticsDir).find((trace) => trace.injection_id === result.stdout.match(/injection_id="([^"]+)"/)?.[1]);
+  assert.ok(sessionTrace, 'session-start inject must write a trace');
+  assert.deepEqual(
+    sessionTrace.candidates.map((candidate) => candidate.note_id).sort(),
+    [...sessionTrace.shipped_note_ids].sort(),
+    'shipped notes must all appear as trace candidates',
+  );
 
   const empty = tempRoot();
   const emptyResult = runCli(['inject', '--session-start', '--project', 'alpha', '--data-dir', empty.dataDir, '--diagnostics-dir', empty.diagnosticsDir]);

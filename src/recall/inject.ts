@@ -5,7 +5,7 @@ import { migrate } from '../index/schema.ts';
 import { readAllNotes } from '../log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from '../note.ts';
 import { DEFAULT_SCORING_CONFIG } from './scoring.ts';
-import { recallWithTrace, type RecallTraceCandidate } from './query.ts';
+import { recallWithTrace } from './query.ts';
 
 const PUSH_CAP = 5;
 const PUSH_TOKEN_BUDGET = 600;
@@ -50,8 +50,8 @@ function inScope(note: NoteRevision, projectSlug: string | undefined, global: bo
 
 function renderEntry(entry: Entry, index: number): string {
   const note = entry.note;
-  const header = `${index}. [${note.note_type} · ${note.source.distiller}/${note.source.origin} · ${note.created_at.slice(0, 10)} · ${authority(note)}] ${note.title}`;
-  return [header, note.body.summary, `src: ${note.note_id}#${note.revision_id}`].join('\n');
+  const header = `${index}. [${note.note_type} · ${note.source.distiller}/${note.source.origin} · ${note.created_at.slice(0, 10)} · ${authority(note)}]`;
+  return [header, `   ${note.title}`, `   ${note.body.summary}`, `   src: ${note.note_id}#${note.revision_id}`].join('\n');
 }
 
 function renderBlock(injectionId: string, indexed: string, entries: Entry[]): string {
@@ -59,7 +59,7 @@ function renderBlock(injectionId: string, indexed: string, entries: Entry[]): st
     `<librarian-memory injection_id="${injectionId}" indexed_through="${indexed}">`,
     FRAME,
     '',
-    ...entries.map((entry, index) => renderEntry(entry, index + 1)),
+    entries.map((entry, index) => renderEntry(entry, index + 1)).join('\n\n'),
     '</librarian-memory>',
   ].join('\n') + '\n';
 }
@@ -81,8 +81,8 @@ function writePushTrace(
   injectionId: string,
   ts: string,
   indexed: string,
-  candidates: RecallTraceCandidate[],
-  shippedIds: Set<string>,
+  candidates: InjectionTrace['candidates'],
+  shippedIds: string[],
 ): void {
   const trace: InjectionTrace = {
     record_class: 'diagnostic',
@@ -90,13 +90,8 @@ function writePushTrace(
     path: 'push',
     ts,
     query: options.sessionStart ? '' : (options.query ?? ''),
-    candidates: candidates.map((candidate) => ({
-      note_id: candidate.note_id,
-      raw_score: candidate.raw_bm25,
-      post_weight_score: candidate.score,
-      cut_reason: shippedIds.has(candidate.note_id) ? undefined : (candidate.cut_reason ?? 'budget'),
-    })),
-    shipped_note_ids: [...shippedIds],
+    candidates,
+    shipped_note_ids: shippedIds,
     indexed_through: indexed,
     config_snapshot: DEFAULT_SCORING_CONFIG,
   };
@@ -124,8 +119,15 @@ export function buildInjection(options: InjectionOptions): string | undefined {
   if (options.sessionStart) {
     const entries = sessionStartEntries(notes, options.projectSlug, options.global);
     const shipped = trimToBudget(injectionId, indexed, entries);
-    const shippedIds = new Set(shipped.map((entry) => entry.note.note_id));
-    writePushTrace(options, injectionId, ts, indexed, [], shippedIds);
+    const shippedIds = shipped.map((entry) => entry.note.note_id);
+    // Session-start has no query and no BM25 scores, but the shipped notes must still appear
+    // as candidates so `shipped_note_ids` stays a subset of `candidates` for trace replay (§8).
+    const candidates: InjectionTrace['candidates'] = shipped.map((entry) => ({
+      note_id: entry.note.note_id,
+      raw_score: 0,
+      post_weight_score: 0,
+    }));
+    writePushTrace(options, injectionId, ts, indexed, candidates, shippedIds);
     return shipped.length === 0 ? undefined : renderBlock(injectionId, indexed, shipped);
   }
 
@@ -147,7 +149,13 @@ export function buildInjection(options: InjectionOptions): string | undefined {
     });
     const shipped = trimToBudget(injectionId, indexed, entries);
     const shippedIds = new Set(shipped.map((entry) => entry.note.note_id));
-    writePushTrace(options, injectionId, ts, indexed, candidates, shippedIds);
+    const traceCandidates: InjectionTrace['candidates'] = candidates.map((candidate) => ({
+      note_id: candidate.note_id,
+      raw_score: candidate.raw_bm25,
+      post_weight_score: candidate.score,
+      cut_reason: shippedIds.has(candidate.note_id) ? undefined : (candidate.cut_reason ?? 'budget'),
+    }));
+    writePushTrace(options, injectionId, ts, indexed, traceCandidates, [...shippedIds]);
     return shipped.length === 0 ? undefined : renderBlock(injectionId, indexed, shipped);
   } finally {
     db.close();
