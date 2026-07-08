@@ -58,8 +58,23 @@ test('splice pins turn-1 brief on the first user message', () => {
 
   const spliced = spliceLibrarianInjection(messages, '<librarian-memory>recall</librarian-memory>\n', '<librarian-memory>brief</librarian-memory>\n');
   assert.equal((spliced[0].parts?.[0] as Record<string, unknown>).librarian, 'librarian-recall');
-  assert.match((spliced[0].parts?.[0] as Record<string, string>).text, /brief/);
   assert.match((spliced[0].parts?.[0] as Record<string, string>).text, /recall/);
+  assert.equal((spliced[0].parts?.[1] as Record<string, unknown>).librarian, 'librarian-brief');
+  assert.match((spliced[0].parts?.[1] as Record<string, string>).text, /brief/);
+});
+
+test('splice keeps steady-state recall by the latest user while brief stays on the first user', () => {
+  const messages: OpenCodeMessage[] = [
+    { info: { role: 'user' }, parts: [{ type: 'text', text: 'first prompt' }] },
+    { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'answer' }] },
+    { info: { role: 'user' }, parts: [{ type: 'text', text: 'latest prompt' }] },
+  ];
+
+  const spliced = spliceLibrarianInjection(messages, '<librarian-memory>latest recall</librarian-memory>\n', '<librarian-memory>startup brief</librarian-memory>\n');
+  assert.equal((spliced[0].parts?.[0] as Record<string, unknown>).librarian, 'librarian-brief');
+  assert.match((spliced[0].parts?.[0] as Record<string, string>).text, /startup brief/);
+  assert.equal((spliced[2].parts?.[0] as Record<string, unknown>).librarian, 'librarian-recall');
+  assert.match((spliced[2].parts?.[0] as Record<string, string>).text, /latest recall/);
 });
 
 test('splice replaces prior tagged parts and is idempotent across repeated transforms', () => {
@@ -93,6 +108,26 @@ test('spawned inject output is spliced verbatim', () => {
 
   const spliced = spliceLibrarianInjection([{ role: 'user', parts: [{ type: 'text', text: 'wombat failover' }] }], result.stdout);
   assert.equal((spliced[0].parts?.[0] as Record<string, unknown>).text, result.stdout);
+});
+
+test('spawned inject output stays verbatim when a brief is also present', () => {
+  const t = tempRoot();
+  appendNote(t.dataDir, note(1));
+  for (let i = 0; i < 8; i += 1) {
+    appendNote(t.dataDir, note(20 + i, { body: { summary: `Unrelated filler ${i}.` } }));
+  }
+  const result = runInject(t.dataDir, t.diagnosticsDir, 'wombat failover');
+  assert.equal(result.status, 0, `inject should exit 0; stderr: ${result.stderr}`);
+
+  const spliced = spliceLibrarianInjection(
+    [
+      { role: 'user', parts: [{ type: 'text', text: 'first' }] },
+      { role: 'user', parts: [{ type: 'text', text: 'wombat failover' }] },
+    ],
+    result.stdout,
+    '<librarian-memory>brief</librarian-memory>\n',
+  );
+  assert.equal((spliced[1].parts?.[0] as Record<string, unknown>).text, result.stdout);
 });
 
 test('below-floor prompt adds zero parts', () => {

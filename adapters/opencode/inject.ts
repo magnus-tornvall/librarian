@@ -1,4 +1,5 @@
-const LIBRARIAN_PART = 'librarian-recall';
+const LIBRARIAN_BRIEF_PART = 'librarian-brief';
+const LIBRARIAN_RECALL_PART = 'librarian-recall';
 
 export type OpenCodeMessage = {
   info?: { role?: string };
@@ -11,7 +12,7 @@ type TextPart = {
   type: 'text';
   text: string;
   synthetic: true;
-  librarian: typeof LIBRARIAN_PART;
+  librarian: typeof LIBRARIAN_BRIEF_PART | typeof LIBRARIAN_RECALL_PART;
 };
 
 function roleOf(message: OpenCodeMessage): string | undefined {
@@ -21,16 +22,15 @@ function roleOf(message: OpenCodeMessage): string | undefined {
 function isLibrarianPart(part: unknown): boolean {
   if (typeof part !== 'object' || part === null) return false;
   const rec = part as Record<string, unknown>;
-  return rec.librarian === LIBRARIAN_PART || (rec.type === 'text' && typeof rec.text === 'string' && rec.text.includes('<librarian-memory'));
+  return (
+    rec.librarian === LIBRARIAN_BRIEF_PART ||
+    rec.librarian === LIBRARIAN_RECALL_PART ||
+    (rec.type === 'text' && typeof rec.text === 'string' && rec.text.includes('<librarian-memory'))
+  );
 }
 
-function part(text: string): TextPart {
-  return { type: 'text', text, synthetic: true, librarian: LIBRARIAN_PART };
-}
-
-function joined(briefBlock: string | undefined, recallBlock: string | undefined): string | undefined {
-  const blocks = [briefBlock, recallBlock].filter((block): block is string => block !== undefined && block.length > 0);
-  return blocks.length > 0 ? blocks.join('\n') : undefined;
+function part(text: string, kind: TextPart['librarian']): TextPart {
+  return { type: 'text', text, synthetic: true, librarian: kind };
 }
 
 export function spliceLibrarianInjection(
@@ -38,8 +38,9 @@ export function spliceLibrarianInjection(
   recallBlock: string | undefined,
   briefBlock?: string | undefined,
 ): OpenCodeMessage[] {
-  const text = joined(briefBlock, recallBlock);
-  if (text === undefined && !messages.some((message) => (message.parts ?? []).some(isLibrarianPart))) {
+  const brief = briefBlock && briefBlock.length > 0 ? briefBlock : undefined;
+  const recall = recallBlock && recallBlock.length > 0 ? recallBlock : undefined;
+  if (brief === undefined && recall === undefined && !messages.some((message) => (message.parts ?? []).some(isLibrarianPart))) {
     return messages;
   }
 
@@ -47,12 +48,17 @@ export function spliceLibrarianInjection(
     ...message,
     parts: (message.parts ?? []).filter((candidate) => !isLibrarianPart(candidate)),
   }));
-  if (text === undefined) return cleaned;
+  if (brief === undefined && recall === undefined) return cleaned;
 
   const firstUser = cleaned.findIndex((message) => roleOf(message) === 'user');
   if (firstUser < 0) return cleaned;
 
-  const target = briefBlock ? firstUser : cleaned.findLastIndex((message) => roleOf(message) === 'user');
-  cleaned[target] = { ...cleaned[target], parts: [part(text), ...(cleaned[target].parts ?? [])] };
+  if (brief !== undefined) {
+    cleaned[firstUser] = { ...cleaned[firstUser], parts: [part(brief, LIBRARIAN_BRIEF_PART), ...(cleaned[firstUser].parts ?? [])] };
+  }
+  if (recall !== undefined) {
+    const latestUser = cleaned.findLastIndex((message) => roleOf(message) === 'user');
+    cleaned[latestUser] = { ...cleaned[latestUser], parts: [part(recall, LIBRARIAN_RECALL_PART), ...(cleaned[latestUser].parts ?? [])] };
+  }
   return cleaned;
 }

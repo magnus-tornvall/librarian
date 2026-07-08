@@ -20,7 +20,8 @@ distiller (§4, §5).
   resulting NDJSON to `librarian collect` (one spawn per event for v1 — see the ceiling
   note below).
 - **`inject.ts`** — a pure outgoing-message splice helper for recall injection. It removes
-  prior librarian synthetic parts, adds at most one fresh part, and never shells out.
+  prior librarian synthetic parts, adds fresh brief/recall parts when present, and never
+  shells out.
 
 ## Install
 
@@ -90,11 +91,11 @@ the plugin splices that exact stdout into the outgoing payload as a synthetic te
 after removing any prior librarian part so repeated transform fires stay idempotent.
 
 The first user turn also asks `librarian inject --session-start` for the startup brief;
-that brief rides in the same synthetic part and is pinned to the first user message. The
-adapter deliberately avoids `experimental.chat.system.transform`: that hook lacks the user
-message, while `messages.transform` is ephemeral and does not persist injected text to chat
-history. If an injected block has an `injection_id`, run `librarian why <injection_id>` to
-see why it was selected.
+that brief is pinned to the first user message, while per-turn recall stays adjacent to the
+latest user message. The adapter deliberately avoids `experimental.chat.system.transform`:
+that hook lacks the user message, while `messages.transform` is ephemeral and does not
+persist injected text to chat history. If an injected block has an `injection_id`, run
+`librarian why <injection_id>` to see why it was selected.
 
 ## What gets emitted (mapping rules, §10.1)
 
