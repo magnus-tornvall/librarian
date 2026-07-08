@@ -14,6 +14,8 @@ import {
 import { runHook } from '../../adapters/claude-code/hook.ts';
 import { validateEvent } from '../../src/collector/validateEvent.ts';
 import { readAll } from '../../src/log/ndjson.ts';
+import { appendNote } from '../../src/log/noteLog.ts';
+import type { NoteRevision } from '../../src/note.ts';
 
 /**
  * Claude Code adapter integration tests (issue #31 / spec §9).
@@ -248,6 +250,68 @@ function runCollect(dataDir: string, stdin: string): ReturnType<typeof spawnSync
   return spawnSync('node', [CLI, 'collect', '--data-dir', dataDir], { input: stdin, encoding: 'utf8' });
 }
 
+function note(index: number, projectSlug: string, overrides: Partial<NoteRevision> = {}): NoteRevision {
+  return {
+    kind: 'note_revision',
+    schema_version: 1,
+    note_id: `fact:claude-code-${index}`,
+    revision_id: `rev-${index}`,
+    created_at: `2026-07-06T10:${String(index).padStart(2, '0')}:00.000Z`,
+    identity: { mode: 'episodic' },
+    source: { origin: 'claude-code', distiller: 'llm' },
+    note_type: 'decision',
+    title: `Claude adapter title ${index}`,
+    scope: { project_slug: projectSlug },
+    provenance: {},
+    links: [],
+    body: { summary: `Claude adapter summary ${index} about narwhal failover.` },
+    ...overrides,
+  };
+}
+
+function makeGitRepo(projectSlug = 'alpha'): string {
+  const root = tempDir('claude-code-hook-');
+  const repo = path.join(root, projectSlug);
+  fs.mkdirSync(repo);
+  const init = spawnSync('git', ['init'], { cwd: repo, encoding: 'utf8' });
+  assert.equal(init.status, 0, `git init failed: ${init.stderr}`);
+  return repo;
+}
+
+function makeLibrarianBin(dataDir: string, diagnosticsDir: string, failInject = false): string {
+  const bin = tempDir('claude-code-bin-');
+  const script = path.join(bin, 'librarian');
+  const body = `#!/usr/bin/env bash
+set -euo pipefail
+cmd="$1"
+shift || true
+case "$cmd" in
+  collect) exec node ${JSON.stringify(CLI)} collect --data-dir ${JSON.stringify(dataDir)} ;;
+  inject) ${failInject ? 'exit 99' : `exec node ${JSON.stringify(CLI)} inject "$@" --data-dir ${JSON.stringify(dataDir)} --diagnostics-dir ${JSON.stringify(diagnosticsDir)}`} ;;
+  machine-id) printf 'test-machine-id\n' ;;
+  *) exec node ${JSON.stringify(CLI)} "$cmd" "$@" ;;
+esac
+`;
+  fs.writeFileSync(script, body);
+  fs.chmodSync(script, 0o755);
+  return bin;
+}
+
+function runHookEntry(payload: unknown, repo: string, bin: string): ReturnType<typeof spawnSync> {
+  return spawnSync('node', [HOOK], {
+    input: JSON.stringify(payload),
+    cwd: repo,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+  });
+}
+
+function normalizeInjectionId(block: string): string {
+  return block
+    .replace(/injection_id="[^"]+"/, 'injection_id="<id>"')
+    .replace(/indexed_through="[^"]+"/, 'indexed_through="<ts>"');
+}
+
 test('claude-code e2e: every mapped fixture event pipes through real `librarian collect` onto its per-session log', () => {
   const dataDir = tempDir('claude-code-e2e-');
 
@@ -316,6 +380,131 @@ test('claude-code e2e: the adapter ships a raw secret-bearing command; the colle
 
   const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
   assert.match(persisted.command as string, /\[REDACTED:token:sha256:[0-9a-f]{8}\]/);
+});
+
+test('claude-code hook injects UserPromptSubmit context exactly as `librarian inject` renders it', () => {
+  const projectSlug = 'alpha';
+  const dataDir = tempDir('claude-code-inject-data-');
+  const diagnosticsDir = tempDir('claude-code-inject-diag-');
+  const repo = makeGitRepo(projectSlug);
+  appendNote(dataDir, note(1, projectSlug));
+  for (let i = 0; i < 8; i += 1) {
+    appendNote(dataDir, note(20 + i, projectSlug, { body: { summary: `Unrelated filler ${i}.` } }));
+  }
+
+  const direct = spawnSync(
+    'node',
+    [CLI, 'inject', '--global', '--project', projectSlug, '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir],
+    { input: 'narwhal failover', encoding: 'utf8' },
+  );
+  assert.equal(direct.status, 0, `direct inject should exit 0; stderr: ${direct.stderr}`);
+  assert.notEqual(direct.stdout, '', 'fixture prompt should produce an inject block');
+
+  const bin = makeLibrarianBin(dataDir, diagnosticsDir);
+  const payload = {
+    session_id: 'cc-inject-session',
+    cwd: repo,
+    hook_event_name: 'UserPromptSubmit',
+    prompt: 'narwhal failover',
+  };
+  const result = runHookEntry(payload, repo, bin);
+  assert.equal(result.status, 0, `hook should exit 0; stderr: ${result.stderr}`);
+  const output = JSON.parse(result.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
+  assert.equal(output.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.equal(normalizeInjectionId(output.hookSpecificOutput.additionalContext), normalizeInjectionId(direct.stdout));
+
+  const persisted = readAll(path.join(dataDir, 'events', 'cc-inject-session.ndjson')) as Array<Record<string, unknown>>;
+  assert.equal(persisted.length, 1, 'instrumentation collect still records the prompt event');
+  assert.equal(persisted[0]?.type, 'prompt');
+});
+
+test('claude-code hook emits no additionalContext for a below-floor prompt but still collects', () => {
+  const projectSlug = 'alpha';
+  const dataDir = tempDir('claude-code-floor-data-');
+  const diagnosticsDir = tempDir('claude-code-floor-diag-');
+  const repo = makeGitRepo(projectSlug);
+  for (let i = 0; i < 12; i += 1) {
+    appendNote(dataDir, note(i, projectSlug, { body: { summary: `commonfloor token in every note ${i}` } }));
+  }
+
+  const bin = makeLibrarianBin(dataDir, diagnosticsDir);
+  const result = runHookEntry(
+    { session_id: 'cc-floor-session', cwd: repo, hook_event_name: 'UserPromptSubmit', prompt: 'commonfloor' },
+    repo,
+    bin,
+  );
+  assert.equal(result.status, 0, `hook should exit 0; stderr: ${result.stderr}`);
+  assert.equal(result.stdout, '', 'empty inject stdout must produce no hookSpecificOutput');
+  const persisted = readAll(path.join(dataDir, 'events', 'cc-floor-session.ndjson')) as Array<Record<string, unknown>>;
+  assert.equal(persisted.length, 1, 'below-floor injection must not suppress instrumentation');
+});
+
+test('claude-code hook injects SessionStart brief from `librarian inject --session-start`', () => {
+  const projectSlug = 'alpha';
+  const dataDir = tempDir('claude-code-session-data-');
+  const diagnosticsDir = tempDir('claude-code-session-diag-');
+  const repo = makeGitRepo(projectSlug);
+  appendNote(
+    dataDir,
+    note(1, projectSlug, {
+      note_id: 'project:alpha:summary',
+      revision_id: 'summary-rev',
+      note_type: 'project_summary',
+      title: 'Alpha project summary',
+      body: { summary: 'Alpha summary brief for session start.' },
+    }),
+  );
+  appendNote(
+    dataDir,
+    note(2, projectSlug, {
+      note_id: 'curated:alpha-runbook',
+      revision_id: 'curated-rev',
+      source: { origin: 'human', distiller: 'human', source_path: 'curated/alpha.md' },
+      note_type: 'curated',
+      title: 'Alpha curated runbook',
+      body: { summary: 'Curated alpha runbook for startup context.' },
+    }),
+  );
+
+  const direct = spawnSync(
+    'node',
+    [CLI, 'inject', '--session-start', '--global', '--project', projectSlug, '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir],
+    { encoding: 'utf8' },
+  );
+  assert.equal(direct.status, 0, `direct session inject should exit 0; stderr: ${direct.stderr}`);
+  assert.notEqual(direct.stdout, '', 'session-start fixture should produce a brief');
+
+  const bin = makeLibrarianBin(dataDir, diagnosticsDir);
+  const result = runHookEntry(
+    { session_id: 'cc-session-start', cwd: repo, hook_event_name: 'SessionStart', source: 'startup' },
+    repo,
+    bin,
+  );
+  assert.equal(result.status, 0, `hook should exit 0; stderr: ${result.stderr}`);
+  const output = JSON.parse(result.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
+  assert.equal(output.hookSpecificOutput.hookEventName, 'SessionStart');
+  assert.equal(normalizeInjectionId(output.hookSpecificOutput.additionalContext), normalizeInjectionId(direct.stdout));
+  const persisted = readAll(path.join(dataDir, 'events', 'cc-session-start.ndjson')) as Array<Record<string, unknown>>;
+  assert.equal(persisted.length, 1, 'SessionStart still collects instrumentation');
+});
+
+test('claude-code hook contains inject failure: exits 0, emits no context, and still collects', () => {
+  const projectSlug = 'alpha';
+  const dataDir = tempDir('claude-code-fail-data-');
+  const diagnosticsDir = tempDir('claude-code-fail-diag-');
+  const repo = makeGitRepo(projectSlug);
+  appendNote(dataDir, note(1, projectSlug));
+
+  const bin = makeLibrarianBin(dataDir, diagnosticsDir, true);
+  const result = runHookEntry(
+    { session_id: 'cc-inject-fail', cwd: repo, hook_event_name: 'UserPromptSubmit', prompt: 'narwhal failover' },
+    repo,
+    bin,
+  );
+  assert.equal(result.status, 0, `hook should exit 0; stderr: ${result.stderr}`);
+  assert.equal(result.stdout, '', 'failed inject must not emit additionalContext');
+  const persisted = readAll(path.join(dataDir, 'events', 'cc-inject-fail.ndjson')) as Array<Record<string, unknown>>;
+  assert.equal(persisted.length, 1, 'failed inject must not suppress instrumentation');
 });
 
 // --- Hook-safety: a malformed payload must never break the host session ----------------

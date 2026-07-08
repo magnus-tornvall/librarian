@@ -30,11 +30,13 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import { ulid } from 'ulid';
 import { map, type CanonicalEvent, type Context, type NativePayload, type Resource } from './map.ts';
 
 // A namespaced tag so operators can grep the host session's hook logs for our lines.
 const LOG_TAG = 'librarian-claude-code';
+const INJECT_TIMEOUT_MS = 8_000;
 
 function logError(message: string): void {
   // stderr only — never stdout (Claude Code may treat hook stdout as decision/context).
@@ -147,6 +149,52 @@ function handOff(event: CanonicalEvent): void {
   }
 }
 
+function projectSlug(gitRoot: string | undefined): string | undefined {
+  // ponytail: basename is v1 project attribution; replace when §5 grows real project identity.
+  return gitRoot === undefined ? undefined : path.basename(gitRoot);
+}
+
+function injectForPayload(payload: NativePayload, cwd: string, gitRoot?: string): string | undefined {
+  if (payload.hook_event_name !== 'UserPromptSubmit' && payload.hook_event_name !== 'SessionStart') {
+    return undefined;
+  }
+
+  const args = ['inject', '--global'];
+  const slug = projectSlug(gitRoot);
+  if (slug !== undefined) {
+    args.push('--project', slug);
+  }
+  if (payload.hook_event_name === 'SessionStart') {
+    args.push('--session-start');
+  }
+
+  try {
+    const result = spawnSync('librarian', args, {
+      cwd,
+      input: payload.hook_event_name === 'UserPromptSubmit' ? payload.prompt : '',
+      encoding: 'utf8',
+      timeout: INJECT_TIMEOUT_MS,
+    });
+    if (result.error || result.status !== 0 || typeof result.stdout !== 'string' || result.stdout.length === 0) {
+      return undefined;
+    }
+    return result.stdout;
+  } catch {
+    return undefined;
+  }
+}
+
+function emitAdditionalContext(hookEventName: 'UserPromptSubmit' | 'SessionStart', block: string): void {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName,
+        additionalContext: block,
+      },
+    }) + '\n',
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Lowering: raw Claude Code hook JSON → the mapper's NativePayload.
 //
@@ -217,6 +265,8 @@ export function runHook(
   readStdin: () => string,
   deliver: (event: CanonicalEvent) => void,
   buildResourceFn: (cwd: string) => Resource = buildResource,
+  injectFn: (payload: NativePayload, cwd: string, gitRoot?: string) => string | undefined = injectForPayload,
+  emitContext: (hookEventName: 'UserPromptSubmit' | 'SessionStart', block: string) => void = emitAdditionalContext,
 ): void {
   const rawText = readStdin();
   if (rawText.trim().length === 0) {
@@ -251,6 +301,11 @@ export function runHook(
 
   for (const event of events) {
     deliver(event);
+  }
+
+  const block = injectFn(payload, cwd, resource.git_root);
+  if (block !== undefined && (payload.hook_event_name === 'UserPromptSubmit' || payload.hook_event_name === 'SessionStart')) {
+    emitContext(payload.hook_event_name, block);
   }
 }
 
