@@ -16,7 +16,7 @@ type FtsRow = {
 export function recall(
   db: Database.Database,
   query: string,
-  opts: { projectSlug?: string; global?: boolean },
+  opts: { projectSlug?: string; global?: boolean; origin?: string; limit?: number },
   config: ScoringConfig = DEFAULT_SCORING_CONFIG,
   nowIso: string = new Date().toISOString(),
 ): Array<ScoredCandidate & { score: number }> {
@@ -39,12 +39,17 @@ export function recall(
   if (opts.global) {
     scopeClauses.push('is_global = 1');
   }
+  const filterClauses = [`(${scopeClauses.join(' OR ')})`];
+  if (opts.origin !== undefined) {
+    filterClauses.push('origin = ?');
+    params.push(opts.origin);
+  }
 
   const rows = db
     .prepare(
       `SELECT note_id, origin, note_type, created_at, project_slug, is_global, bm25(notes_fts) as raw_score
        FROM notes_fts
-       WHERE notes_fts MATCH ? AND (${scopeClauses.join(' OR ')})`,
+       WHERE notes_fts MATCH ? AND ${filterClauses.join(' AND ')}`,
     )
     .all(...params) as FtsRow[];
 
@@ -61,5 +66,5 @@ export function recall(
     is_project_match: opts.projectSlug !== undefined && row.project_slug === opts.projectSlug,
   }));
 
-  return rankAndFilter(candidates, config, nowIso).slice(0, RESULT_CAP);
+  return rankAndFilter(candidates, config, nowIso).slice(0, opts.limit ?? RESULT_CAP);
 }

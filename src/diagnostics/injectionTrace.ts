@@ -23,6 +23,7 @@ import { appendRecord } from '../log/ndjson.ts';
 export type InjectionTrace = {
   record_class: 'diagnostic';
   injection_id: string;
+  path?: 'pull' | 'push';
   ts: string;
   query: string;
   candidates: Array<{
