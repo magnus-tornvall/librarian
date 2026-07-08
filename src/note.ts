@@ -48,3 +48,17 @@ export type NoteTombstone = {
 };
 
 export type NoteRecord = NoteRevision | NoteTombstone;
+
+export function latestRecordPerNoteId(records: NoteRecord[]): NoteRecord[] {
+  const latest = new Map<string, NoteRecord>();
+  for (const record of records) {
+    const existing = latest.get(record.note_id);
+    // Tombstones and revisions compete as peers on created_at; latest-wins is symmetric, so a
+    // tombstone can retire a note and a newer revision can revive it. <=, not <: on a created_at
+    // tie, prefer whichever record was appended later in the log.
+    if (!existing || existing.created_at <= record.created_at) {
+      latest.set(record.note_id, record);
+    }
+  }
+  return [...latest.values()];
+}

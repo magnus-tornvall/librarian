@@ -6,6 +6,9 @@ import { appendEvent } from './collector/append.ts';
 import { makeFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { runDistill } from './distill/distillRun.ts';
+import { readAll } from './log/ndjson.ts';
+import { readAllNotes } from './log/noteLog.ts';
+import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from './note.ts';
 import { DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
 
 /**
@@ -19,6 +22,8 @@ const USAGE = `usage:
   librarian collect [--data-dir <dir>]     read canonical-event NDJSON on stdin
   librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
+  librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
+                                           print a note, optionally with source provenance
   librarian machine-id [--path <file>]     print the persisted machine id
 `;
 
@@ -38,6 +43,161 @@ function parseFlags(argv: string[]): Map<string, string> {
     i += 1;
   }
   return flags;
+}
+
+type NoteShowOptions = { noteId: string; dataDir: string; withProvenance: boolean; json: boolean };
+
+function parseNoteShowArgs(argv: string[]): NoteShowOptions {
+  const [noteId, ...rest] = argv;
+  if (!noteId || noteId.startsWith('--')) {
+    throw new Error('note show requires <note_id>');
+  }
+
+  const options: NoteShowOptions = { noteId, dataDir: DATA_DIR, withProvenance: false, json: false };
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === '--with-provenance') {
+      options.withProvenance = true;
+    } else if (arg === '--json') {
+      options.json = true;
+    } else if (arg === '--data-dir') {
+      const value = rest[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --data-dir requires a value');
+      }
+      options.dataDir = value;
+      i += 1;
+    } else {
+      throw new Error(`unexpected argument: ${arg}`);
+    }
+  }
+  return options;
+}
+
+function findLatestNote(dataDir: string, noteId: string): NoteRecord | undefined {
+  const latest = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[]);
+  return latest.find((note) => note.note_id === noteId);
+}
+
+function formatScope(scope: NoteRevision['scope']): string {
+  const parts = [
+    scope.project_slug ? `project_slug=${scope.project_slug}` : undefined,
+    scope.git_root ? `git_root=${scope.git_root}` : undefined,
+    scope.git_remote ? `git_remote=${scope.git_remote}` : undefined,
+    scope.global === true ? 'global=true' : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length > 0 ? parts.join(', ') : '(none)';
+}
+
+function formatNote(note: NoteRevision): string {
+  const lines = [
+    `Title: ${note.title}`,
+    `Note ID: ${note.note_id}`,
+    `Revision ID: ${note.revision_id}`,
+    `Type: ${note.note_type}`,
+    `Origin: ${note.source.origin}`,
+    `Distiller: ${note.source.distiller}`,
+    `Created At: ${note.created_at}`,
+    `Scope: ${formatScope(note.scope)}`,
+    '',
+    note.body.summary,
+  ];
+
+  if (note.body.bullets && note.body.bullets.length > 0) {
+    lines.push('', ...note.body.bullets.map((bullet) => `- ${bullet}`));
+  }
+  if (note.body.details) {
+    lines.push('', note.body.details);
+  }
+  return lines.join('\n') + '\n';
+}
+
+function eventLogPath(dataDir: string, sessionId: string): string {
+  return path.join(dataDir, 'events', `${sessionId}.ndjson`);
+}
+
+function eventId(event: Record<string, unknown>): string | undefined {
+  return typeof event.event_id === 'string' ? event.event_id : undefined;
+}
+
+function provenanceEvents(dataDir: string, note: NoteRevision): Array<Record<string, unknown>> {
+  const sessionId = note.provenance.session_id;
+  if (!sessionId) {
+    throw new Error(`note ${note.note_id} has no provenance.session_id`);
+  }
+
+  const logPath = eventLogPath(dataDir, sessionId);
+  if (!fs.existsSync(logPath)) {
+    throw new Error(`missing provenance session log: expected ${logPath}`);
+  }
+
+  const events = readAll(logPath) as Array<Record<string, unknown>>;
+  const ids = note.provenance.event_ids;
+  if (ids && ids.length > 0) {
+    const wanted = new Set(ids);
+    const found = events.filter((event) => {
+      const id = eventId(event);
+      return id !== undefined && wanted.has(id);
+    });
+    const foundIds = new Set(found.map(eventId).filter((id): id is string => id !== undefined));
+    const missing = ids.filter((id) => !foundIds.has(id));
+    if (missing.length > 0) {
+      throw new Error(`provenance events missing from ${logPath}: ${missing.join(', ')}`);
+    }
+    return found;
+  }
+
+  const range = note.provenance.event_range;
+  if (range) {
+    const from = range.from_event_id;
+    const to = range.to_event_id;
+    const found = events.filter((event) => {
+      const id = eventId(event);
+      return id !== undefined && from <= id && id <= to;
+    });
+    if (found.length === 0) {
+      throw new Error(`provenance event range ${from}..${to} matched no events in ${logPath}`);
+    }
+    return found;
+  }
+
+  throw new Error(`note ${note.note_id} has no event_ids or event_range provenance`);
+}
+
+function payloadSummary(event: Record<string, unknown>): string {
+  if (event.type === 'prompt') {
+    return `prompt: ${(event.prompt as string | undefined) ?? ''}`;
+  }
+  if (event.type === 'tool') {
+    const tool = (event.tool ?? {}) as Record<string, unknown>;
+    return `tool: ${(tool.native_name as string | undefined) ?? ''}; files: ${JSON.stringify(event.files ?? [])}`;
+  }
+  if (event.type === 'session') {
+    return `session action: ${(event.action as string | undefined) ?? ''}`;
+  }
+  return `payload: ${JSON.stringify(event)}`;
+}
+
+function formatProvenanceEvents(events: Array<Record<string, unknown>>): string {
+  return [
+    '',
+    'Provenance events:',
+    ...events.flatMap((event) => [
+      `Event: ${String(event.type ?? '')} ${String(event.ts ?? '')}`,
+      `Payload: ${payloadSummary(event)}`,
+      `Verbatim: ${JSON.stringify(event)}`,
+    ]),
+  ].join('\n') + '\n';
+}
+
+function formatHumanProvenance(note: NoteRevision): string {
+  return [
+    '',
+    'Human provenance:',
+    `Source path: ${note.source.source_path ?? '(none)'}`,
+    `Content hash: ${note.source.content_hash ?? '(none)'}`,
+    'Human-distilled notes have no event provenance.',
+  ].join('\n') + '\n';
 }
 
 /**
@@ -143,6 +303,40 @@ function machineId(flags: Map<string, string>): void {
   process.stdout.write(id + '\n');
 }
 
+function noteShow(options: NoteShowOptions): void {
+  const note = findLatestNote(options.dataDir, options.noteId);
+  if (!note) {
+    throw new Error(`unknown note_id: ${options.noteId}`);
+  }
+
+  if (note.kind === 'note_tombstone') {
+    if (options.json) {
+      process.stdout.write(JSON.stringify({ note, provenance_events: null }) + '\n');
+      return;
+    }
+    process.stdout.write(
+      `Note ${note.note_id} is tombstoned as of ${note.created_at}. Reason: ${note.reason ?? '(none)'}\n`,
+    );
+    return;
+  }
+
+  if (options.json) {
+    const events = options.withProvenance && note.source.distiller !== 'human' ? provenanceEvents(options.dataDir, note) : [];
+    process.stdout.write(JSON.stringify({ note, provenance_events: events }) + '\n');
+    return;
+  }
+
+  process.stdout.write(formatNote(note));
+  if (!options.withProvenance) {
+    return;
+  }
+  if (note.source.distiller === 'human') {
+    process.stdout.write(formatHumanProvenance(note));
+    return;
+  }
+  process.stdout.write(formatProvenanceEvents(provenanceEvents(options.dataDir, note)));
+}
+
 async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
 
@@ -153,6 +347,14 @@ async function main(argv: string[]): Promise<void> {
     case 'distill':
       await distillCommand(parseFlags(rest));
       break;
+    case 'note': {
+      const [subcommand, ...subRest] = rest;
+      if (subcommand !== 'show') {
+        throw new Error('expected note subcommand: show');
+      }
+      noteShow(parseNoteShowArgs(subRest));
+      break;
+    }
     case 'machine-id':
       machineId(parseFlags(rest));
       break;
