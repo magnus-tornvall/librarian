@@ -20,6 +20,17 @@ export type RecallTraceCandidate = ScoredCandidate & {
   cut_reason?: 'below_floor' | 'budget';
 };
 
+export type WhyNotResult =
+  | {
+      matched: true;
+      note_id: string;
+      rank: number;
+      raw_score: number;
+      post_weight_score: number;
+      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch';
+    }
+  | { matched: false; note_id: string; gate: 'not_matched_by_bm25' };
+
 export type RecallWithTraceResult = {
   results: Array<ScoredCandidate & { score: number }>;
   candidates: RecallTraceCandidate[];
@@ -124,4 +135,72 @@ export function recallWithTrace(
   });
 
   return { results: shipped, candidates: traceCandidates };
+}
+
+function inScope(row: Pick<FtsRow, 'project_slug' | 'is_global'>, opts: RecallOptions): boolean {
+  return (opts.projectSlug !== undefined && row.project_slug === opts.projectSlug) || (opts.global === true && row.is_global === 1);
+}
+
+export function whyNot(
+  db: Database.Database,
+  query: string,
+  noteId: string,
+  opts: RecallOptions,
+  config: ScoringConfig = DEFAULT_SCORING_CONFIG,
+  nowIso: string = new Date().toISOString(),
+): WhyNotResult {
+  const ftsQuery = plainTextFtsQuery(query);
+  if (ftsQuery === undefined) {
+    return { matched: false, note_id: noteId, gate: 'not_matched_by_bm25' };
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT note_id, origin, note_type, created_at, project_slug, is_global, bm25(notes_fts) as raw_score
+       FROM notes_fts
+       WHERE notes_fts MATCH ?`,
+    )
+    .all(ftsQuery) as FtsRow[];
+  const target = rows.find((row) => row.note_id === noteId);
+  if (target === undefined) {
+    return { matched: false, note_id: noteId, gate: 'not_matched_by_bm25' };
+  }
+
+  const scopedRows = rows.filter((row) => inScope(row, opts));
+  const scored = (inScope(target, opts) ? scopedRows : rows)
+    .map((row) => ({
+      note_id: row.note_id,
+      raw_bm25: -row.raw_score,
+      origin: row.origin,
+      note_type: row.note_type,
+      created_at: row.created_at,
+      is_project_match: opts.projectSlug !== undefined && row.project_slug === opts.projectSlug,
+    }))
+    .map((candidate) => ({ ...candidate, score: weightedCandidateScore(candidate, config, nowIso) }))
+    .sort((a, b) => b.score - a.score);
+  const scoredTarget = scored.find((row) => row.note_id === noteId);
+  if (scoredTarget === undefined) {
+    throw new Error(`internal error: matched note disappeared from scoring: ${noteId}`);
+  }
+
+  const rank = scored.findIndex((row) => row.note_id === noteId) + 1;
+  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch';
+  if (!inScope(target, opts)) {
+    gate = 'scope_mismatch';
+  } else if (scoredTarget.score < config.relevanceFloor || scoredTarget.score <= 0) {
+    gate = 'below_floor';
+  } else if (rank > (opts.limit ?? RESULT_CAP)) {
+    gate = 'budget';
+  } else {
+    gate = 'shipped';
+  }
+
+  return {
+    matched: true,
+    note_id: noteId,
+    rank,
+    raw_score: scoredTarget.raw_bm25,
+    post_weight_score: scoredTarget.score,
+    gate,
+  };
 }
