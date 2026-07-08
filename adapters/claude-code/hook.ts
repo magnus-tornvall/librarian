@@ -149,19 +149,18 @@ function handOff(event: CanonicalEvent): void {
   }
 }
 
-function projectSlug(cwd: string): string | undefined {
-  const gitRoot = tryRun('git', ['rev-parse', '--show-toplevel'], cwd);
+function projectSlug(gitRoot: string | undefined): string | undefined {
   // ponytail: basename is v1 project attribution; replace when §5 grows real project identity.
   return gitRoot === undefined ? undefined : path.basename(gitRoot);
 }
 
-function injectForPayload(payload: NativePayload, cwd: string): string | undefined {
+function injectForPayload(payload: NativePayload, cwd: string, gitRoot?: string): string | undefined {
   if (payload.hook_event_name !== 'UserPromptSubmit' && payload.hook_event_name !== 'SessionStart') {
     return undefined;
   }
 
   const args = ['inject', '--global'];
-  const slug = projectSlug(cwd);
+  const slug = projectSlug(gitRoot);
   if (slug !== undefined) {
     args.push('--project', slug);
   }
@@ -266,7 +265,7 @@ export function runHook(
   readStdin: () => string,
   deliver: (event: CanonicalEvent) => void,
   buildResourceFn: (cwd: string) => Resource = buildResource,
-  injectFn: (payload: NativePayload, cwd: string) => string | undefined = injectForPayload,
+  injectFn: (payload: NativePayload, cwd: string, gitRoot?: string) => string | undefined = injectForPayload,
   emitContext: (hookEventName: 'UserPromptSubmit' | 'SessionStart', block: string) => void = emitAdditionalContext,
 ): void {
   const rawText = readStdin();
@@ -304,7 +303,7 @@ export function runHook(
     deliver(event);
   }
 
-  const block = injectFn(payload, cwd);
+  const block = injectFn(payload, cwd, resource.git_root);
   if (block !== undefined && (payload.hook_event_name === 'UserPromptSubmit' || payload.hook_event_name === 'SessionStart')) {
     emitContext(payload.hook_event_name, block);
   }
