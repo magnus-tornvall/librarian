@@ -128,7 +128,7 @@ subscribes to (pinned to the `@opencode-ai/plugin`/`sdk` surface) are:
 | ---- | ----- | ----- |
 | `chat.message` | `PromptEvent` (user messages) | One-shot "new message received". Chosen over `experimental.chat.messages.transform`, which is a whole-history transform firing every round-trip (would duplicate prompts). Prompt is captured at first receipt; **updated/edited messages are deferred** (not re-emitted). Deduped by message id. |
 | `tool.execute.after` | `ToolEvent` | Tool args (command line, `filePath`) are read from `input.args`. |
-| `experimental.session.compacting` | `SessionEvent` (`compact`) | Fires **before** compaction (distinct from the post-hoc `session.compacted` event); the plugin is a pure observer and does not modify the compaction prompt. |
+| `experimental.session.compacting` | `SessionEvent` (`compact`) + memory re-supply | Fires **before** compaction (distinct from the post-hoc `session.compacted` event); appends the cached startup brief and latest recall when OpenCode exposes a compaction prompt/context. |
 | `event` → `session.created` | `SessionEvent` (`start`) | Fires **exactly once** per session (unlike Claude Code's repeated `SessionStart`). Also back-fills `agent_version`. |
 | `event` → `session.deleted` | `SessionEvent` (`stop`) | The one-shot "session ended" signal (`session.idle` repeats per turn and is intentionally not used). |
 

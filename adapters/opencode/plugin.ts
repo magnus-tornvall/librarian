@@ -392,6 +392,13 @@ async function runInject(
       log('warn', `librarian inject failed to spawn: ${err.message}`);
       resolve({ ok: false });
     });
+    child.stdin.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      log('warn', `librarian inject stdin failed: ${err.message}`);
+      resolve({ ok: false });
+    });
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
