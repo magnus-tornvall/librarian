@@ -129,3 +129,27 @@ test('why-not explains floor, scope, and BM25 misses without writing diagnostics
 
   assert.deepEqual(snapshotDir(t.diagnosticsDir), beforeDiagnostics, 'why-not must not write diagnostics');
 });
+
+test('why-not budget gate matches the pull-path limit of 10, not the scoring cap of 5', () => {
+  const t = tempRoot();
+  // 8 notes all clear the floor for "narwhal"; ranks 6-8 are cut by the scoring RESULT_CAP (5)
+  // but shipped by the pull path (limit 10). why-not must report them as shipped, not budget.
+  for (let i = 0; i < 8; i += 1) {
+    appendNote(t.dataDir, note(i, { body: { summary: `narwhal routing note ${i} narwhal narwhal.` } }));
+  }
+  // Decoys without the term keep BM25 IDF positive (a term in every doc scores zero).
+  for (let i = 20; i < 50; i += 1) {
+    appendNote(t.dataDir, note(i, { note_id: `fact:decoy-${i}`, body: { summary: `Unrelated filler note ${i}.` } }));
+  }
+
+  const recall = runCli(['recall', 'narwhal', '--project', 'alpha', '--limit', '10', '--json', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir]);
+  assert.equal(recall.status, 0, `recall should exit 0; stderr: ${recall.stderr}`);
+  const shipped = (JSON.parse(recall.stdout) as Array<{ note_id: string }>).map((row) => row.note_id);
+  assert.ok(shipped.length >= 6, `pull path should ship 6+ notes; got ${shipped.length}`);
+
+  for (const noteId of shipped) {
+    const result = runCli(['why-not', 'narwhal', noteId, '--project', 'alpha', '--data-dir', t.dataDir]);
+    assert.equal(result.status, 0, `why-not should exit 0; stderr: ${result.stderr}`);
+    assert.match(result.stdout, /Gate: shipped/, `why-not must report ${noteId} as shipped, not cut, since recall ships it`);
+  }
+});

@@ -30,12 +30,12 @@ const USAGE = `usage:
   librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
   librarian recall <query> --project <slug> [--global] [--origin <origin>] [--limit N] [--json]
-                                              search the recall index for pull-path results
-   librarian why <injection_id> [--json]     explain a diagnostics injection trace
-   librarian why-not <query> <note_id> --project <slug> [--global]
-                                            explain why a note did not ship for a query
-   librarian inject --project <slug> [--global] [--session-start]
-                                              read prompt text on stdin and print push-path memory block
+                                           search the recall index for pull-path results
+  librarian why <injection_id> [--json]    explain a diagnostics injection trace
+  librarian why-not <query> <note_id> --project <slug> [--global]
+                                           explain why a note did not ship for a query
+  librarian inject --project <slug> [--global] [--session-start]
+                                           read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
                                              print a note, optionally with source provenance
   librarian mcp [--data-dir <dir>] [--diagnostics-dir <dir>]
@@ -711,7 +711,10 @@ function whyNotCommand(options: WhyNotOptions): void {
   try {
     migrate(db);
     indexNotes(db, options.dataDir);
-    process.stdout.write(formatWhyNot(whyNot(db, options.query, options.noteId, options, DEFAULT_SCORING_CONFIG, ts)));
+    // Explain against the pull-path result budget the seam actually ships (10), not the
+    // scoring RESULT_CAP default (5), so the budget gate matches `librarian recall`.
+    const opts = { ...options, limit: PULL_RECALL_DEFAULT_LIMIT };
+    process.stdout.write(formatWhyNot(whyNot(db, options.query, options.noteId, opts, DEFAULT_SCORING_CONFIG, ts)));
   } finally {
     db.close();
   }
