@@ -308,15 +308,15 @@ Golden examples: (1) episodic decision, `distiller: llm`, `origin: opencode`; (2
 
 ## 12. Roadmap
 
-**Status (2026-07-08):** items 1–5 complete (issues #2–#9, #16–#21). Item 6 is complete (issues #28–#32, #41–#42). Item 7 is complete (issues #43–#44), pending this capstone PR merge.
+**Status (2026-07-08):** items 1–5 complete (issues #2–#9, #16–#21). Item 6 is complete (issues #28–#32). Item 7 is complete (issues #41–#44), pending this capstone PR merge.
 
 1. ✅ `schema/event.md` — prose + types + golden examples (§10.1).
 2. ✅ `schema/note.md` — same (§10.2).
 3. ✅ Specify curated-note ingestion + generated-file exclusion + diagnostics isolation (short doc; the three structural invariants together).
 4. ✅ **Walking skeleton:** fixture events → renderer → LLM distill (`claude -p`, hard-coded) → note log → Obsidian export → BM25 index → recall query with floor + weights + injection trace. Ugly internals, real data. Revise the note schema from what the skeleton teaches. **Diagnostics log and injection traces start here** — recall telemetry is computed from them.
 5. ✅ Curated Markdown → human distiller → note log → index → recall (with human weight).
-6. ✅ Real instrumentation (OpenCode first — existing plugin remapped to canonical schema; Claude Code second). Complete via issues #28–#32, with follow-up support in #41–#42.
-7. ✅ **MCP server (pull path):** search tool (scored results, origin/scope filters) + **provenance drill-down tool** (note → verbatim event excerpts). Complete via issues #43–#44. Transport analysis remains in `docs/research/pull-path-mcp-vs-skill.md`.
+6. ✅ Real instrumentation (OpenCode first — existing plugin remapped to canonical schema; Claude Code second). Complete via issues #28–#32.
+7. ✅ **MCP server (pull path):** search tool (scored results, origin/scope filters) + **provenance drill-down tool** (note → verbatim event excerpts). Complete via issues #41–#44. Transport analysis remains in `docs/research/pull-path-mcp-vs-skill.md`.
 8. Recall injection adapters (push path: OpenCode two-phase hook design; Claude Code parity). Injected-block contract per §6; `librarian why` / `why-not` land here.
 9. Hardening: cursors, locks, retries, quarantine, `librarian drain`.
 10. Second inference provider (OpenAI-compatible ⇒ local) and second exporter (SQLite mirror) — after the first path works end-to-end.
