@@ -8,6 +8,7 @@ import { appendNote, readAllNotes } from '../../src/log/noteLog.ts';
 import type { NoteRevision, NoteTombstone } from '../../src/note.ts';
 
 const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
+const EVENT_CWD = path.join(os.tmpdir(), 'librarian-note-show-fixture-cwd');
 
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -26,9 +27,9 @@ function makeEvent(sessionId: string, turn: number, overrides: Record<string, un
     resource: {
       agent: 'claude-code',
       machine_id: '01J8X7QK3VZ9R4M2N6P0S5T7WX',
-      cwd: '/Users/magnus/dev/librarian',
+      cwd: EVENT_CWD,
     },
-    context: { session_id: sessionId, turn, cwd: '/Users/magnus/dev/librarian' },
+    context: { session_id: sessionId, turn, cwd: EVENT_CWD },
     ...overrides,
   };
 }
