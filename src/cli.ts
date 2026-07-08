@@ -1,15 +1,21 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { ulid } from 'ulid';
 import { appendEvent } from './collector/append.ts';
+import { makeInjectionId, writeInjectionTrace, type InjectionTrace } from './diagnostics/injectionTrace.ts';
 import { makeFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
+import { indexNotes } from './index/indexer.ts';
+import { migrate } from './index/schema.ts';
 import { runDistill } from './distill/distillRun.ts';
 import { readAll } from './log/ndjson.ts';
 import { readAllNotes } from './log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from './note.ts';
 import { DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
+import { DEFAULT_SCORING_CONFIG } from './recall/scoring.ts';
+import { recallWithTrace, type RecallTraceCandidate } from './recall/query.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -22,10 +28,15 @@ const USAGE = `usage:
   librarian collect [--data-dir <dir>]     read canonical-event NDJSON on stdin
   librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
+  librarian recall <query> --project <slug> [--global] [--origin <origin>] [--limit N] [--json]
+                                           search the recall index for pull-path results
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
                                            print a note, optionally with source provenance
   librarian machine-id [--path <file>]     print the persisted machine id
 `;
+
+const PULL_RECALL_DEFAULT_LIMIT = 10;
+const PULL_RECALL_LIMIT_CEILING = 10;
 
 /** Minimal `--flag value` parser — no CLI framework dependency (§14). */
 function parseFlags(argv: string[]): Map<string, string> {
@@ -46,6 +57,29 @@ function parseFlags(argv: string[]): Map<string, string> {
 }
 
 type NoteShowOptions = { noteId: string; dataDir: string; withProvenance: boolean; json: boolean };
+
+type RecallOptions = {
+  query: string;
+  projectSlug?: string;
+  global: boolean;
+  origin?: string;
+  limit: number;
+  json: boolean;
+  dataDir: string;
+  diagnosticsDir: string;
+};
+
+type RecallResult = {
+  note_id: string;
+  title: string;
+  summary: string;
+  note_type: string;
+  origin: string;
+  created_at: string;
+  project_slug: string;
+  is_global: boolean;
+  score: number;
+};
 
 function parseNoteShowArgs(argv: string[]): NoteShowOptions {
   const [noteId, ...rest] = argv;
@@ -74,9 +108,88 @@ function parseNoteShowArgs(argv: string[]): NoteShowOptions {
   return options;
 }
 
+function parseRecallArgs(argv: string[]): RecallOptions {
+  const [query, ...rest] = argv;
+  if (!query || query.startsWith('--')) {
+    throw new Error('recall requires <query>');
+  }
+
+  const options: RecallOptions = {
+    query,
+    global: false,
+    limit: PULL_RECALL_DEFAULT_LIMIT,
+    json: false,
+    dataDir: DATA_DIR,
+    diagnosticsDir: DIAGNOSTICS_DIR,
+  };
+
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === '--global') {
+      options.global = true;
+    } else if (arg === '--json') {
+      options.json = true;
+    } else if (arg === '--project') {
+      const value = rest[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --project requires a value');
+      }
+      options.projectSlug = value;
+      i += 1;
+    } else if (arg === '--origin') {
+      const value = rest[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --origin requires a value');
+      }
+      options.origin = value;
+      i += 1;
+    } else if (arg === '--limit') {
+      const value = rest[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --limit requires a value');
+      }
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new Error('flag --limit requires a non-negative integer');
+      }
+      options.limit = Math.min(parsed, PULL_RECALL_LIMIT_CEILING);
+      i += 1;
+    } else if (arg === '--data-dir') {
+      const value = rest[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --data-dir requires a value');
+      }
+      options.dataDir = value;
+      i += 1;
+    } else if (arg === '--diagnostics-dir') {
+      const value = rest[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --diagnostics-dir requires a value');
+      }
+      options.diagnosticsDir = value;
+      i += 1;
+    } else {
+      throw new Error(`unexpected argument: ${arg}`);
+    }
+  }
+
+  return options;
+}
+
 function findLatestNote(dataDir: string, noteId: string): NoteRecord | undefined {
   const latest = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[]);
   return latest.find((note) => note.note_id === noteId);
+}
+
+function latestNoteMap(dataDir: string): Map<string, NoteRevision> {
+  // ponytail: v1 hydrates recall results with an O(n) note-log scan; upgrade path is
+  // title/summary indexed columns or a small notes sidecar table keyed by note_id.
+  const records = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[]);
+  return new Map(
+    records
+      .filter((record): record is NoteRevision => record.kind === 'note_revision')
+      .map((note) => [note.note_id, note]),
+  );
 }
 
 function formatScope(scope: NoteRevision['scope']): string {
@@ -337,6 +450,81 @@ function noteShow(options: NoteShowOptions): void {
   process.stdout.write(formatProvenanceEvents(provenanceEvents(options.dataDir, note)));
 }
 
+function formatRecallResult(result: RecallResult): string {
+  const scope = [result.project_slug ? `project=${result.project_slug}` : undefined, result.is_global ? 'global' : undefined]
+    .filter((part): part is string => part !== undefined)
+    .join(', ');
+  const prefix = `${result.note_id} score=${result.score.toFixed(4)} origin=${result.origin} type=${result.note_type}`;
+  return `${prefix} scope=${scope || '(none)'} title=${result.title} summary=${result.summary}`;
+}
+
+function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string): void {
+  const trace: InjectionTrace = {
+    record_class: 'diagnostic',
+    injection_id: makeInjectionId(),
+    path: 'pull',
+    ts,
+    query: options.query,
+    candidates: candidates.map((candidate) => ({
+      note_id: candidate.note_id,
+      raw_score: candidate.raw_bm25,
+      post_weight_score: candidate.score,
+      cut_reason: candidate.cut_reason,
+    })),
+    shipped_note_ids: rows.map((row) => row.note_id),
+    indexed_through: ts,
+    config_snapshot: DEFAULT_SCORING_CONFIG,
+  };
+  writeInjectionTrace(options.diagnosticsDir, trace);
+}
+
+function recallCommand(options: RecallOptions): void {
+  const ts = new Date().toISOString();
+  const db = new Database(':memory:');
+  try {
+    migrate(db);
+    indexNotes(db, options.dataDir);
+
+    const { results: rows, candidates } = recallWithTrace(
+      db,
+      options.query,
+      { projectSlug: options.projectSlug, global: options.global, origin: options.origin, limit: options.limit },
+      DEFAULT_SCORING_CONFIG,
+      ts,
+    );
+    writePullTrace(options, candidates, rows, ts);
+
+    const notesById = latestNoteMap(options.dataDir);
+    const results: RecallResult[] = rows.flatMap((row) => {
+      const note = notesById.get(row.note_id);
+      if (!note) {
+        return [];
+      }
+      return [
+        {
+          note_id: row.note_id,
+          title: note.title,
+          summary: note.body.summary,
+          note_type: row.note_type,
+          origin: row.origin,
+          created_at: row.created_at,
+          project_slug: note.scope.project_slug ?? '',
+          is_global: note.scope.global === true,
+          score: row.score,
+        },
+      ];
+    });
+
+    if (options.json) {
+      process.stdout.write(JSON.stringify(results) + '\n');
+      return;
+    }
+    process.stdout.write(results.map(formatRecallResult).join('\n') + (results.length > 0 ? '\n' : ''));
+  } finally {
+    db.close();
+  }
+}
+
 async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
 
@@ -346,6 +534,9 @@ async function main(argv: string[]): Promise<void> {
       break;
     case 'distill':
       await distillCommand(parseFlags(rest));
+      break;
+    case 'recall':
+      recallCommand(parseRecallArgs(rest));
       break;
     case 'note': {
       const [subcommand, ...subRest] = rest;

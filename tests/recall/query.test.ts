@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { migrate } from '../../src/index/schema.ts';
-import { recall } from '../../src/recall/query.ts';
+import { recall, recallWithTrace } from '../../src/recall/query.ts';
+import { DEFAULT_SCORING_CONFIG } from '../../src/recall/scoring.ts';
 
 const NOW = '2026-07-05T00:00:00.000Z';
 
@@ -40,6 +41,45 @@ test('a no-match query returns [], not an error', () => {
   const db = seededDb();
   const results = recall(db, 'nonexistenttermxyz', { global: true }, undefined, NOW);
   assert.deepEqual(results, []);
+});
+
+test('syntax-like punctuation queries are treated as plain text, not raw FTS syntax', () => {
+  const db = new Database(':memory:');
+  migrate(db);
+  const insert = db.prepare(
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  insert.run('plain-text-note', 'r', 'human', 'curated', '2026-07-01T00:00:00.000Z', '', 1, 'foo bar c operator or payload');
+  for (let i = 0; i < 5; i += 1) {
+    insert.run(`decoy-${i}`, `dr-${i}`, 'human', 'fact', '2026-07-01T00:00:00.000Z', '', 1, `unrelated filler content ${i}`);
+  }
+
+  for (const query of ['foo-bar', 'foo:bar', '"foo bar', '(foo bar)', 'foo OR bar', 'C++']) {
+    const results = recall(db, query, { global: true }, undefined, NOW);
+    assert.equal(results[0]?.note_id, 'plain-text-note', `${query} should search as plain text`);
+  }
+});
+
+test('a query with no FTS terms returns [] instead of issuing broad or invalid MATCH', () => {
+  const db = seededDb();
+  assert.deepEqual(recall(db, '--- "" ()', { global: true }, undefined, NOW), []);
+});
+
+test('recallWithTrace records below-floor candidates with their pre-floor weighted score', () => {
+  const db = seededDb();
+  const result = recallWithTrace(
+    db,
+    'librarian',
+    { global: true },
+    { ...DEFAULT_SCORING_CONFIG, relevanceFloor: 999 },
+    NOW,
+  );
+
+  assert.deepEqual(result.results, []);
+  const candidate = result.candidates.find((row) => row.note_id === 'note-1');
+  assert.ok(candidate, 'the matching candidate should still appear in trace diagnostics');
+  assert.equal(candidate.cut_reason, 'below_floor');
+  assert.ok(candidate.score > 0, 'trace score should be the pre-floor weighted score, not the floored zero');
 });
 
 // --- Scope enforcement (§6 "require project match or explicit global scope") ---

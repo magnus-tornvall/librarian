@@ -16,7 +16,7 @@ function buildSearchText(note: NoteRevision): string {
     .join(' ');
 }
 
-export function indexNotes(db: Database.Database, dataDir: string, cursorPath: string): number {
+export function indexNotes(db: Database.Database, dataDir: string, cursorPath?: string): number {
   // ponytail: v1 re-reads the whole note log and upserts by note_id instead of tracking a
   // true byte-offset cursor — cheap and correct at this scale; real incremental reads are
   // the eventual target per §5 once the log grows large enough to matter.
@@ -69,13 +69,15 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath: s
     indexedCount += 1;
   }
 
-  advanceCursor(cursorPath, {
-    consumer: 'indexer',
-    log_name: 'notes',
-    file_path: dataDir,
-    byte_offset: 0,
-    updated_at: new Date().toISOString(),
-  });
+  if (cursorPath !== undefined) {
+    advanceCursor(cursorPath, {
+      consumer: 'indexer',
+      log_name: 'notes',
+      file_path: dataDir,
+      byte_offset: 0,
+      updated_at: new Date().toISOString(),
+    });
+  }
 
   return indexedCount;
 }
