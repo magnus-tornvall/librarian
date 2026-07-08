@@ -29,6 +29,13 @@ function part(text: string, kind: TextPart['librarian']): TextPart {
   return { type: 'text', text, synthetic: true, librarian: kind };
 }
 
+function latestUserIndex(messages: OpenCodeMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (roleOf(messages[index]) === 'user') return index;
+  }
+  return -1;
+}
+
 export function spliceLibrarianInjection(
   messages: OpenCodeMessage[],
   recallBlock: string | undefined,
@@ -53,7 +60,7 @@ export function spliceLibrarianInjection(
     cleaned[firstUser] = { ...cleaned[firstUser], parts: [part(brief, LIBRARIAN_BRIEF_PART), ...(cleaned[firstUser].parts ?? [])] };
   }
   if (recall !== undefined) {
-    const latestUser = cleaned.findLastIndex((message) => roleOf(message) === 'user');
+    const latestUser = latestUserIndex(cleaned);
     cleaned[latestUser] = { ...cleaned[latestUser], parts: [part(recall, LIBRARIAN_RECALL_PART), ...(cleaned[latestUser].parts ?? [])] };
   }
   return cleaned;

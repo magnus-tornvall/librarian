@@ -58,30 +58,38 @@ async function withEnv<T>(env: Partial<Record<'LIBRARIAN_BIN' | 'MACHINE_ID_PATH
   }
 }
 
-function fakeCli(): { bin: string; machineIdPath: string } {
+function fakeCli(mode: 'ok' | 'exit1' | 'slow' = 'ok'): { bin: string; machineIdPath: string; callsPath: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-fake-cli-'));
   const bin = path.join(root, 'librarian.js');
   const machineIdPath = path.join(root, 'machine-id');
+  const callsPath = path.join(root, 'calls.ndjson');
   fs.writeFileSync(machineIdPath, 'machine-test-id\n');
   fs.writeFileSync(
     bin,
-    `const command = process.argv[2];
+    `const fs = require('fs');
+const callsPath = ${JSON.stringify(callsPath)};
+fs.appendFileSync(callsPath, JSON.stringify(process.argv.slice(2)) + '\\n');
+const mode = ${JSON.stringify(mode)};
+const command = process.argv[2];
 if (command === 'machine-id') { process.stdout.write('machine-test-id\\n'); process.exit(0); }
 if (command === 'collect') { process.stdin.resume(); process.stdin.on('end', () => process.exit(0)); }
 if (command === 'inject') {
+  if (mode === 'exit1') process.exit(7);
   const sessionStart = process.argv.includes('--session-start');
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => { input += chunk; });
   process.stdin.on('end', () => {
-    process.stdout.write(sessionStart
+    const write = () => process.stdout.write(sessionStart
       ? '<librarian-memory injection_id="brief">brief</librarian-memory>\\n'
       : '<librarian-memory injection_id="recall">' + input.trim() + '</librarian-memory>\\n');
+    if (mode === 'slow') setTimeout(write, 1500);
+    else write();
   });
 }
 `,
   );
-  return { bin, machineIdPath };
+  return { bin, machineIdPath, callsPath };
 }
 
 function textParts(messages: OpenCodeMessage[]): string[] {
@@ -91,6 +99,15 @@ function textParts(messages: OpenCodeMessage[]): string[] {
       return rec.type === 'text' && typeof rec.text === 'string' ? [rec.text] : [];
     }),
   );
+}
+
+function readCalls(file: string): string[][] {
+  return fs
+    .readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as string[]);
 }
 
 test('splice pins turn-1 brief on the first user message', () => {
@@ -147,7 +164,9 @@ test('splice does not strip ordinary user text that mentions librarian-memory', 
 test('plugin hooks inject brief on first user and recall on latest user', async () => {
   const cli = fakeCli();
   await withEnv({ LIBRARIAN_BIN: cli.bin, MACHINE_ID_PATH: cli.machineIdPath }, async () => {
-    const hooks = await LibrarianPlugin({ directory: fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-plugin-')) });
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-plugin-project-'));
+    assert.equal(spawnSync('git', ['init'], { cwd: project }).status, 0);
+    const hooks = await LibrarianPlugin({ directory: project });
     await hooks['chat.message']({ sessionID: 's1' }, { message: { id: 'm1', role: 'user', sessionID: 's1' }, parts: [{ type: 'text', text: 'first' }] });
     await hooks['chat.message']({ sessionID: 's1' }, { message: { id: 'm2', role: 'user', sessionID: 's1' }, parts: [{ type: 'text', text: 'wombat failover' }] });
 
@@ -167,6 +186,23 @@ test('plugin hooks inject brief on first user and recall on latest user', async 
     assert.match(compacted?.prompt as string, /compact prompt/);
     assert.match(compacted?.prompt as string, /injection_id="brief"/);
     assert.match(compacted?.prompt as string, /injection_id="recall"/);
+
+    const contextCompacted = await hooks['experimental.session.compacting']({}, { context: 'compact context' });
+    assert.match(contextCompacted?.context as string, /compact context/);
+    assert.match(contextCompacted?.context as string, /injection_id="brief"/);
+    assert.match(contextCompacted?.context as string, /injection_id="recall"/);
+
+    const injectCalls = readCalls(cli.callsPath).filter((args) => args[0] === 'inject');
+    assert.ok(injectCalls.every((args) => args.includes('--global')), 'inject always passes --global');
+    assert.ok(injectCalls.every((args) => args.includes('--project') && args.includes(path.basename(project))), 'inject passes git-root basename as --project');
+  });
+});
+
+test('plugin compacting leaves output alone when no memory is cached', async () => {
+  const cli = fakeCli();
+  await withEnv({ LIBRARIAN_BIN: cli.bin, MACHINE_ID_PATH: cli.machineIdPath }, async () => {
+    const hooks = await LibrarianPlugin({ directory: fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-plugin-empty-')) });
+    assert.equal(await hooks['experimental.session.compacting']({}, { prompt: 'compact prompt' }), undefined);
   });
 });
 
@@ -183,6 +219,22 @@ test('plugin hooks contain missing librarian failures and inject nothing', async
     const transformed = await hooks['experimental.chat.messages.transform']({ sessionID: 's1' }, output);
     assert.deepEqual(transformed?.messages, [{ info: { role: 'user' }, parts: [{ type: 'text', text: 'wombat failover' }] }]);
   });
+});
+
+test('plugin hooks contain non-zero and slow librarian inject failures', async () => {
+  for (const mode of ['exit1', 'slow'] as const) {
+    const cli = fakeCli(mode);
+    await withEnv({ LIBRARIAN_BIN: cli.bin, MACHINE_ID_PATH: cli.machineIdPath }, async () => {
+      const hooks = await LibrarianPlugin({ directory: fs.mkdtempSync(path.join(os.tmpdir(), `opencode-${mode}-cli-`)) });
+      await assert.doesNotReject(() =>
+        hooks['chat.message']({ sessionID: mode }, { message: { id: `m-${mode}`, role: 'user', sessionID: mode }, parts: [{ type: 'text', text: 'wombat failover' }] }),
+      );
+      const transformed = await hooks['experimental.chat.messages.transform']({ sessionID: mode }, {
+        messages: [{ info: { role: 'user' }, parts: [{ type: 'text', text: 'wombat failover' }] }],
+      });
+      assert.deepEqual(transformed?.messages, [{ info: { role: 'user' }, parts: [{ type: 'text', text: 'wombat failover' }] }]);
+    });
+  }
 });
 
 test('spawned inject output is spliced verbatim', () => {

@@ -674,6 +674,7 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
         return;
       }
       const sessionId = asString(_input.sessionID) ?? asString(output.sessionID);
+      // ponytail: fallback assumes one active OpenCode session per plugin instance; key from payload if multi-session interleaving appears.
       const sessionKey = sessionId ? keyFor(sessionId) : latestSessionKey;
       const spliced = spliceLibrarianInjection(messages, latestRecallBySession.get(sessionKey), briefBySession.get(sessionKey));
       output.messages = spliced;
@@ -696,6 +697,7 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
     'experimental.session.compacting': async (input: Loose, output: Loose) => {
       const sessionId = asString(input.sessionID);
       emit({ kind: 'session', action: 'compact' }, sessionId);
+      // ponytail: fallback assumes one active OpenCode session per plugin instance; key from payload if multi-session interleaving appears.
       const sessionKey = sessionId ? keyFor(sessionId) : latestSessionKey;
       const memory = [briefBySession.get(sessionKey), latestRecallBySession.get(sessionKey)].filter((block): block is string => !!block).join('\n');
       if (memory.length === 0) {
