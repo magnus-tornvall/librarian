@@ -9,6 +9,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { appendNote } from '../../src/log/noteLog.ts';
 import type { NoteRevision } from '../../src/note.ts';
 import { appendRecord } from '../../src/log/ndjson.ts';
+import { readAll } from '../../src/log/ndjson.ts';
+import type { InjectionTrace } from '../../src/diagnostics/injectionTrace.ts';
 
 const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
 
@@ -56,6 +58,18 @@ function parseToolJson(result: Awaited<ReturnType<Client['callTool']>>): Record<
   const [content] = result.content;
   assert.equal(content?.type, 'text');
   return JSON.parse(content.text) as Record<string, unknown>;
+}
+
+function readTraces(diagnosticsDir: string): InjectionTrace[] {
+  const injectionsDir = path.join(diagnosticsDir, 'injections');
+  if (!fs.existsSync(injectionsDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(injectionsDir)
+    .filter((name) => name.endsWith('.ndjson'))
+    .sort()
+    .flatMap((name) => readAll(path.join(injectionsDir, name)) as InjectionTrace[]);
 }
 
 async function connectClient(dataDir: string, diagnosticsDir: string): Promise<{ client: Client; transport: StdioClientTransport }> {
@@ -123,6 +137,12 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
     ]);
     assert.equal(cliSearch.status, 0, `recall CLI should exit 0; stderr: ${cliSearch.stderr}`);
     assert.deepEqual(mcpSearch.results, JSON.parse(cliSearch.stdout));
+    assert.ok(
+      readTraces(diagnosticsDir).some(
+        (trace) => trace.path === 'pull' && trace.query === 'narwhal' && trace.candidates.length > 0,
+      ),
+      'MCP search must write a pull-marked diagnostics trace',
+    );
 
     const mcpNote = parseToolJson(
       await client.callTool({ name: 'get_note', arguments: { note_id: 'fact:mcp-provenance', with_provenance: true } }),
