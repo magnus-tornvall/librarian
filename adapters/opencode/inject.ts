@@ -22,11 +22,7 @@ function roleOf(message: OpenCodeMessage): string | undefined {
 function isLibrarianPart(part: unknown): boolean {
   if (typeof part !== 'object' || part === null) return false;
   const rec = part as Record<string, unknown>;
-  return (
-    rec.librarian === LIBRARIAN_BRIEF_PART ||
-    rec.librarian === LIBRARIAN_RECALL_PART ||
-    (rec.type === 'text' && typeof rec.text === 'string' && rec.text.includes('<librarian-memory'))
-  );
+  return rec.librarian === LIBRARIAN_BRIEF_PART || rec.librarian === LIBRARIAN_RECALL_PART;
 }
 
 function part(text: string, kind: TextPart['librarian']): TextPart {

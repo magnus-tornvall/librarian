@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { LibrarianPlugin } from '../../adapters/opencode/plugin.ts';
 import { spliceLibrarianInjection, type OpenCodeMessage } from '../../adapters/opencode/inject.ts';
 import { appendNote } from '../../src/log/noteLog.ts';
 import type { NoteRevision } from '../../src/note.ts';
@@ -39,6 +40,48 @@ function runInject(dataDir: string, diagnosticsDir: string, query: string): Retu
     input: query,
     encoding: 'utf8',
   });
+}
+
+async function withEnv<T>(env: Partial<Record<'LIBRARIAN_BIN' | 'MACHINE_ID_PATH', string | null>>, fn: () => Promise<T>): Promise<T> {
+  const prev = new Map(Object.keys(env).map((key) => [key, process.env[key]]));
+  try {
+    for (const [key, value] of Object.entries(env)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+    return await fn();
+  } finally {
+    for (const [key, value] of prev) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+function fakeCli(): { bin: string; machineIdPath: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-fake-cli-'));
+  const bin = path.join(root, 'librarian.js');
+  const machineIdPath = path.join(root, 'machine-id');
+  fs.writeFileSync(machineIdPath, 'machine-test-id\n');
+  fs.writeFileSync(
+    bin,
+    `const command = process.argv[2];
+if (command === 'machine-id') { process.stdout.write('machine-test-id\\n'); process.exit(0); }
+if (command === 'collect') { process.stdin.resume(); process.stdin.on('end', () => process.exit(0)); }
+if (command === 'inject') {
+  const sessionStart = process.argv.includes('--session-start');
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => { input += chunk; });
+  process.stdin.on('end', () => {
+    process.stdout.write(sessionStart
+      ? '<librarian-memory injection_id="brief">brief</librarian-memory>\\n'
+      : '<librarian-memory injection_id="recall">' + input.trim() + '</librarian-memory>\\n');
+  });
+}
+`,
+  );
+  return { bin, machineIdPath };
 }
 
 function textParts(messages: OpenCodeMessage[]): string[] {
@@ -94,6 +137,47 @@ test('splice replaces prior tagged parts and is idempotent across repeated trans
   assert.equal(textParts(replaced).filter((text) => text.includes('<librarian-memory')).length, 1);
   assert.ok(textParts(replaced).some((text) => text.includes('replacement')));
   assert.ok(!textParts(replaced).some((text) => text.includes('new')));
+});
+
+test('splice does not strip ordinary user text that mentions librarian-memory', () => {
+  const messages: OpenCodeMessage[] = [{ role: 'user', parts: [{ type: 'text', text: 'show <librarian-memory> literally' }] }];
+  assert.equal(spliceLibrarianInjection(messages, undefined), messages);
+});
+
+test('plugin hooks inject brief on first user and recall on latest user', async () => {
+  const cli = fakeCli();
+  await withEnv({ LIBRARIAN_BIN: cli.bin, MACHINE_ID_PATH: cli.machineIdPath }, async () => {
+    const hooks = await LibrarianPlugin({ directory: fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-plugin-')) });
+    await hooks['chat.message']({ sessionID: 's1' }, { message: { id: 'm1', role: 'user', sessionID: 's1' }, parts: [{ type: 'text', text: 'first' }] });
+    await hooks['chat.message']({ sessionID: 's1' }, { message: { id: 'm2', role: 'user', sessionID: 's1' }, parts: [{ type: 'text', text: 'wombat failover' }] });
+
+    const output = {
+      messages: [
+        { info: { role: 'user' }, parts: [{ type: 'text', text: 'first' }] },
+        { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'answer' }] },
+        { info: { role: 'user' }, parts: [{ type: 'text', text: 'wombat failover' }] },
+      ],
+    };
+    const transformed = await hooks['experimental.chat.messages.transform']({ sessionID: 's1' }, output);
+    assert.equal((output.messages[0].parts[0] as Record<string, unknown>).librarian, 'librarian-brief');
+    assert.equal((output.messages[2].parts[0] as Record<string, unknown>).librarian, 'librarian-recall');
+    assert.equal((transformed?.messages[2].parts[0] as Record<string, unknown>).text, '<librarian-memory injection_id="recall">wombat failover</librarian-memory>\n');
+  });
+});
+
+test('plugin hooks contain missing librarian failures and inject nothing', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-missing-cli-'));
+  const machineIdPath = path.join(root, 'machine-id');
+  fs.writeFileSync(machineIdPath, 'machine-test-id\n');
+  await withEnv({ LIBRARIAN_BIN: path.join(root, 'missing-librarian'), MACHINE_ID_PATH: machineIdPath }, async () => {
+    const hooks = await LibrarianPlugin({ directory: root });
+    await assert.doesNotReject(() =>
+      hooks['chat.message']({ sessionID: 's1' }, { message: { id: 'm1', role: 'user', sessionID: 's1' }, parts: [{ type: 'text', text: 'wombat failover' }] }),
+    );
+    const output = { messages: [{ info: { role: 'user' }, parts: [{ type: 'text', text: 'wombat failover' }] }] };
+    const transformed = await hooks['experimental.chat.messages.transform']({ sessionID: 's1' }, output);
+    assert.deepEqual(transformed?.messages, [{ info: { role: 'user' }, parts: [{ type: 'text', text: 'wombat failover' }] }]);
+  });
 });
 
 test('spawned inject output is spliced verbatim', () => {

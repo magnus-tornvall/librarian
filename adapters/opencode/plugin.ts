@@ -367,7 +367,7 @@ async function runInject(
   query: string,
   sessionStart: boolean,
   log: (level: string, message: string) => void,
-): Promise<string | undefined> {
+): Promise<InjectResult> {
   const [cmd, ...prefix] = resolveLibrarianArgv();
   return await new Promise((resolve) => {
     let stdout = '';
@@ -378,7 +378,7 @@ async function runInject(
       settled = true;
       child.kill('SIGKILL');
       log('warn', 'librarian inject timed out; skipping recall injection');
-      resolve(undefined);
+      resolve({ ok: false });
     }, INJECT_TIMEOUT_MS);
 
     child.stdout.setEncoding('utf8');
@@ -390,7 +390,7 @@ async function runInject(
       settled = true;
       clearTimeout(timer);
       log('warn', `librarian inject failed to spawn: ${err.message}`);
-      resolve(undefined);
+      resolve({ ok: false });
     });
     child.on('close', (code) => {
       if (settled) return;
@@ -398,10 +398,10 @@ async function runInject(
       clearTimeout(timer);
       if (code !== 0) {
         log('warn', `librarian inject exited ${code}; skipping recall injection`);
-        resolve(undefined);
+        resolve({ ok: false });
         return;
       }
-      resolve(stdout.length > 0 ? stdout : undefined);
+      resolve({ ok: true, block: stdout.length > 0 ? stdout : undefined });
     });
     child.stdin.end(sessionStart ? '' : query);
   });
@@ -419,6 +419,8 @@ async function runInject(
 type Loose = Record<string, unknown>;
 
 const INJECT_TIMEOUT_MS = 1_000;
+
+type InjectResult = { ok: true; block: string | undefined } | { ok: false };
 
 function asRecord(v: unknown): Loose | undefined {
   return typeof v === 'object' && v !== null ? (v as Loose) : undefined;
@@ -650,10 +652,18 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
       }
       emit(lowered.payload, sessionId);
 
-      if (!briefBySession.has(sessionKey)) {
-        briefBySession.set(sessionKey, await runInject(resource, '', true, log));
+      const [briefResult, recallResult] = await Promise.all([
+        briefBySession.has(sessionKey) ? Promise.resolve<InjectResult>({ ok: false }) : runInject(resource, '', true, log),
+        runInject(resource, lowered.payload.text, false, log),
+      ]);
+      if (briefResult.ok) {
+        briefBySession.set(sessionKey, briefResult.block);
       }
-      latestRecallBySession.set(sessionKey, await runInject(resource, lowered.payload.text, false, log));
+      if (recallResult.ok) {
+        latestRecallBySession.set(sessionKey, recallResult.block);
+      } else {
+        latestRecallBySession.set(sessionKey, undefined);
+      }
     },
 
     'experimental.chat.messages.transform': async (_input: Loose, output: Loose) => {
@@ -664,6 +674,7 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
       const sessionId = asString(_input.sessionID) ?? asString(output.sessionID);
       const sessionKey = keyFor(sessionId);
       const spliced = spliceLibrarianInjection(messages, latestRecallBySession.get(sessionKey), briefBySession.get(sessionKey));
+      output.messages = spliced;
       return { ...output, messages: spliced };
     },
 
