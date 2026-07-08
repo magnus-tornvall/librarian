@@ -43,6 +43,16 @@ function seedRecallCorpus(dataDir: string): void {
     appendNote(dataDir, note(i));
   }
   appendNote(dataDir, note(11, { note_id: 'fact:email-origin', source: { origin: 'email', distiller: 'llm' } }));
+  appendNote(
+    dataDir,
+    note(99, {
+      note_id: 'fact:punctuation-query',
+      revision_id: 'rev-punctuation',
+      created_at: '2026-07-05T09:59:00.000Z',
+      title: 'Punctuation query title',
+      body: { summary: 'The recall CLI should find foo bar syntax safely.' },
+    }),
+  );
   for (let i = 12; i < 42; i += 1) {
     appendNote(
       dataDir,
@@ -93,6 +103,13 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
   }
   assert.equal(cappedPayload[0].project_slug, 'alpha');
   assert.equal(cappedPayload[0].is_global, false);
+  const cappedTrace = readTraces(diagnosticsDir).find((trace) => trace.query === 'platypus');
+  assert.ok(cappedTrace, 'capped recall should write a trace');
+  assert.equal(cappedTrace.shipped_note_ids.length, 10);
+  assert.ok(
+    cappedTrace.candidates.filter((candidate) => candidate.cut_reason === 'budget').length >= 2,
+    'trace should include candidates cut by the pull-path result budget',
+  );
 
   const originFiltered = runCli([
     'recall',
@@ -123,6 +140,21 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
   ]);
   assert.equal(failClosed.status, 0, `bare recall should exit 0; stderr: ${failClosed.stderr}`);
   assert.deepEqual(JSON.parse(failClosed.stdout), []);
+
+  const punctuation = runCli([
+    'recall',
+    'foo-bar',
+    '--project',
+    'alpha',
+    '--json',
+    '--data-dir',
+    dataDir,
+    '--diagnostics-dir',
+    diagnosticsDir,
+  ]);
+  assert.equal(punctuation.status, 0, `punctuation recall should exit 0; stderr: ${punctuation.stderr}`);
+  const punctuationPayload = JSON.parse(punctuation.stdout) as Array<Record<string, unknown>>;
+  assert.equal(punctuationPayload[0]?.note_id, 'fact:punctuation-query');
 
   const traces = readTraces(diagnosticsDir);
   assert.ok(

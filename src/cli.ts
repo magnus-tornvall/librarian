@@ -15,7 +15,7 @@ import { readAllNotes } from './log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from './note.ts';
 import { DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
 import { DEFAULT_SCORING_CONFIG } from './recall/scoring.ts';
-import { recall } from './recall/query.ts';
+import { recallWithTrace, type RecallTraceCandidate } from './recall/query.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -458,17 +458,18 @@ function formatRecallResult(result: RecallResult): string {
   return `${prefix} scope=${scope || '(none)'} title=${result.title} summary=${result.summary}`;
 }
 
-function writePullTrace(options: RecallOptions, rows: ReturnType<typeof recall>, ts: string): void {
+function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string): void {
   const trace: InjectionTrace = {
     record_class: 'diagnostic',
     injection_id: makeInjectionId(),
     path: 'pull',
     ts,
     query: options.query,
-    candidates: rows.map((row) => ({
-      note_id: row.note_id,
-      raw_score: row.raw_bm25,
-      post_weight_score: row.score,
+    candidates: candidates.map((candidate) => ({
+      note_id: candidate.note_id,
+      raw_score: candidate.raw_bm25,
+      post_weight_score: candidate.score,
+      cut_reason: candidate.cut_reason,
     })),
     shipped_note_ids: rows.map((row) => row.note_id),
     indexed_through: ts,
@@ -484,14 +485,14 @@ function recallCommand(options: RecallOptions): void {
     migrate(db);
     indexNotes(db, options.dataDir);
 
-    const rows = recall(
+    const { results: rows, candidates } = recallWithTrace(
       db,
       options.query,
       { projectSlug: options.projectSlug, global: options.global, origin: options.origin, limit: options.limit },
       DEFAULT_SCORING_CONFIG,
       ts,
     );
-    writePullTrace(options, rows, ts);
+    writePullTrace(options, candidates, rows, ts);
 
     const notesById = latestNoteMap(options.dataDir);
     const results: RecallResult[] = rows.flatMap((row) => {
