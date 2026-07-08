@@ -586,6 +586,7 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
   const seenMessageIds = new Set<string>();
   const latestRecallBySession = new Map<string, string | undefined>();
   const briefBySession = new Map<string, string | undefined>();
+  let latestSessionKey = 'unknown';
 
   const log = (level: string, message: string): void => {
     try {
@@ -644,6 +645,7 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
       }
       const sessionId = asString(input.sessionID) ?? asString((asRecord(output.message) ?? {}).sessionID);
       const sessionKey = keyFor(sessionId);
+      latestSessionKey = sessionKey;
       if (lowered.messageId) {
         if (seenMessageIds.has(lowered.messageId)) {
           return;
@@ -672,7 +674,7 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
         return;
       }
       const sessionId = asString(_input.sessionID) ?? asString(output.sessionID);
-      const sessionKey = keyFor(sessionId);
+      const sessionKey = sessionId ? keyFor(sessionId) : latestSessionKey;
       const spliced = spliceLibrarianInjection(messages, latestRecallBySession.get(sessionKey), briefBySession.get(sessionKey));
       output.messages = spliced;
       return { ...output, messages: spliced };
@@ -694,7 +696,7 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
     'experimental.session.compacting': async (input: Loose, output: Loose) => {
       const sessionId = asString(input.sessionID);
       emit({ kind: 'session', action: 'compact' }, sessionId);
-      const sessionKey = keyFor(sessionId);
+      const sessionKey = sessionId ? keyFor(sessionId) : latestSessionKey;
       const memory = [briefBySession.get(sessionKey), latestRecallBySession.get(sessionKey)].filter((block): block is string => !!block).join('\n');
       if (memory.length === 0) {
         return;

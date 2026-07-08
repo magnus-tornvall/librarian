@@ -158,10 +158,15 @@ test('plugin hooks inject brief on first user and recall on latest user', async 
         { info: { role: 'user' }, parts: [{ type: 'text', text: 'wombat failover' }] },
       ],
     };
-    const transformed = await hooks['experimental.chat.messages.transform']({ sessionID: 's1' }, output);
+    const transformed = await hooks['experimental.chat.messages.transform']({}, output);
     assert.equal((output.messages[0].parts[0] as Record<string, unknown>).librarian, 'librarian-brief');
     assert.equal((output.messages[2].parts[0] as Record<string, unknown>).librarian, 'librarian-recall');
     assert.equal((transformed?.messages[2].parts[0] as Record<string, unknown>).text, '<librarian-memory injection_id="recall">wombat failover</librarian-memory>\n');
+
+    const compacted = await hooks['experimental.session.compacting']({}, { prompt: 'compact prompt' });
+    assert.match(compacted?.prompt as string, /compact prompt/);
+    assert.match(compacted?.prompt as string, /injection_id="brief"/);
+    assert.match(compacted?.prompt as string, /injection_id="recall"/);
   });
 });
 
