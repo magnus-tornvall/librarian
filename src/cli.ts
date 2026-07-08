@@ -15,6 +15,7 @@ import { readAllNotes } from './log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from './note.ts';
 import { DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
 import { DEFAULT_SCORING_CONFIG } from './recall/scoring.ts';
+import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, type RecallTraceCandidate } from './recall/query.ts';
 
 /**
@@ -29,9 +30,11 @@ const USAGE = `usage:
   librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
   librarian recall <query> --project <slug> [--global] [--origin <origin>] [--limit N] [--json]
-                                            search the recall index for pull-path results
+                                             search the recall index for pull-path results
+  librarian inject --project <slug> [--global] [--session-start]
+                                             read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
-                                            print a note, optionally with source provenance
+                                             print a note, optionally with source provenance
   librarian mcp [--data-dir <dir>] [--diagnostics-dir <dir>]
                                            start the MCP stdio server
   librarian machine-id [--path <file>]     print the persisted machine id
@@ -56,6 +59,48 @@ function parseFlags(argv: string[]): Map<string, string> {
     i += 1;
   }
   return flags;
+}
+
+function parseInjectArgs(argv: string[]): InjectionOptions {
+  const options: InjectionOptions = {
+    dataDir: DATA_DIR,
+    diagnosticsDir: DIAGNOSTICS_DIR,
+    global: false,
+    sessionStart: false,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--global') {
+      options.global = true;
+    } else if (arg === '--session-start') {
+      options.sessionStart = true;
+    } else if (arg === '--project') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --project requires a value');
+      }
+      options.projectSlug = value;
+      i += 1;
+    } else if (arg === '--data-dir') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --data-dir requires a value');
+      }
+      options.dataDir = value;
+      i += 1;
+    } else if (arg === '--diagnostics-dir') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --diagnostics-dir requires a value');
+      }
+      options.diagnosticsDir = value;
+      i += 1;
+    } else {
+      throw new Error(`unexpected argument: ${arg}`);
+    }
+  }
+  return options;
 }
 
 type NoteShowOptions = { noteId: string; dataDir: string; withProvenance: boolean; json: boolean };
@@ -551,6 +596,14 @@ function recallCommand(options: RecallOptions): void {
   process.stdout.write(payload.results.map(formatRecallResult).join('\n') + (payload.results.length > 0 ? '\n' : ''));
 }
 
+function injectCommand(options: InjectionOptions): void {
+  options.query = options.sessionStart ? '' : fs.readFileSync(0, 'utf8');
+  const block = buildInjection(options);
+  if (block !== undefined) {
+    process.stdout.write(block);
+  }
+}
+
 async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
 
@@ -563,6 +616,9 @@ async function main(argv: string[]): Promise<void> {
       break;
     case 'recall':
       recallCommand(parseRecallArgs(rest));
+      break;
+    case 'inject':
+      injectCommand(parseInjectArgs(rest));
       break;
     case 'note': {
       const [subcommand, ...subRest] = rest;
