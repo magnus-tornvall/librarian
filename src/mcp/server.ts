@@ -1,0 +1,169 @@
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  type CallToolResult,
+  type Tool,
+} from '@modelcontextprotocol/sdk/types.js';
+import { getNoteShowPayload, runRecall, type RecallOptions } from '../cli.ts';
+
+const AUTHORITY_FRAMING =
+  'These results are possibly relevant prior context. Current repository evidence and current user instructions win on conflict.';
+
+const SEARCH_LIMIT_DEFAULT = 10;
+const SEARCH_LIMIT_CEILING = 10;
+
+export type McpServerOptions = { dataDir: string; diagnosticsDir: string };
+
+const SEARCH_TOOL: Tool = {
+  name: 'search',
+  title: 'Search Librarian Recall',
+  description:
+    `Search Librarian's recall index for scored prior-context notes. ${AUTHORITY_FRAMING}`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Required full-text query.' },
+      project_slug: { type: 'string', description: 'Project scope to search.' },
+      global: { type: 'boolean', description: 'Include globally scoped notes.' },
+      origin: { type: 'string', description: 'Optional note origin filter.' },
+      limit: {
+        type: 'integer',
+        minimum: 0,
+        maximum: SEARCH_LIMIT_CEILING,
+        default: SEARCH_LIMIT_DEFAULT,
+        description: 'Maximum number of scored results to return. Defaults to 10 and is capped at 10.',
+      },
+    },
+    required: ['query'],
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+};
+
+const GET_NOTE_TOOL: Tool = {
+  name: 'get_note',
+  title: 'Get Librarian Note',
+  description:
+    `Return a note by note_id, optionally with provenance source events. ${AUTHORITY_FRAMING}`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      note_id: { type: 'string', description: 'Required Librarian note_id.' },
+      with_provenance: { type: 'boolean', description: 'Include source provenance events when available.' },
+    },
+    required: ['note_id'],
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+};
+
+function objectArgs(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function stringArg(args: Record<string, unknown>, name: string, required: boolean): string | undefined {
+  const value = args[name];
+  if (value === undefined) {
+    if (required) {
+      throw new Error(`${name} is required`);
+    }
+    return undefined;
+  }
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+  return value;
+}
+
+function booleanArg(args: Record<string, unknown>, name: string): boolean | undefined {
+  const value = args[name];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error(`${name} must be a boolean`);
+  }
+  return value;
+}
+
+function limitArg(args: Record<string, unknown>): number {
+  const value = args.limit;
+  if (value === undefined) {
+    return SEARCH_LIMIT_DEFAULT;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new Error('limit must be a non-negative integer');
+  }
+  return Math.min(value, SEARCH_LIMIT_CEILING);
+}
+
+function jsonResult(payload: unknown): CallToolResult {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(payload) }],
+    structuredContent: payload as Record<string, unknown>,
+  };
+}
+
+function toolError(err: unknown): CallToolResult {
+  const message = err instanceof Error ? err.message : String(err);
+  return { isError: true, content: [{ type: 'text', text: message }] };
+}
+
+function search(options: McpServerOptions, args: Record<string, unknown>): CallToolResult {
+  const recallOptions: RecallOptions = {
+    query: stringArg(args, 'query', true) ?? '',
+    projectSlug: stringArg(args, 'project_slug', false),
+    global: booleanArg(args, 'global') ?? false,
+    origin: stringArg(args, 'origin', false),
+    limit: limitArg(args),
+    json: true,
+    dataDir: options.dataDir,
+    diagnosticsDir: options.diagnosticsDir,
+  };
+
+  return jsonResult(runRecall(recallOptions));
+}
+
+function getNote(options: McpServerOptions, args: Record<string, unknown>): CallToolResult {
+  const noteId = stringArg(args, 'note_id', true) ?? '';
+  const withProvenance = booleanArg(args, 'with_provenance') ?? false;
+  return jsonResult(getNoteShowPayload(options.dataDir, noteId, withProvenance));
+}
+
+export function createMcpServer(options: McpServerOptions): Server {
+  const server = new Server(
+    { name: 'librarian', version: '0.0.0' },
+    {
+      capabilities: { tools: {} },
+      instructions: AUTHORITY_FRAMING,
+    },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [SEARCH_TOOL, GET_NOTE_TOOL] }));
+
+  server.setRequestHandler(CallToolRequestSchema, (request) => {
+    try {
+      const args = objectArgs(request.params.arguments);
+      switch (request.params.name) {
+        case 'search':
+          return search(options, args);
+        case 'get_note':
+          return getNote(options, args);
+        default:
+          return toolError(`unknown tool: ${request.params.name}`);
+      }
+    } catch (err) {
+      return toolError(err);
+    }
+  });
+
+  return server;
+}
+
+export async function runMcpServer(options: McpServerOptions): Promise<void> {
+  const server = createMcpServer(options);
+  await server.connect(new StdioServerTransport());
+}

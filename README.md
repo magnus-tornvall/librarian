@@ -2,6 +2,10 @@
 
 A personal context layer for AI coding agents. Design: `docs/specs/librarian-design-consolidated.md`. Implementation plan and backlog: `docs/plans/implementation-plan.md`, `backlog/`.
 
+## MCP Server
+
+`librarian mcp` starts the local stdio MCP server with `search` and `get_note` tools. See [`docs/mcp.md`](docs/mcp.md) for Claude Code registration and tool behavior.
+
 ## OpenCode plugin (local smoke test)
 
 The OpenCode instrumentation adapter lives in [`adapters/opencode/`](adapters/opencode/).
