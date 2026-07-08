@@ -29,9 +29,11 @@ const USAGE = `usage:
   librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
   librarian recall <query> --project <slug> [--global] [--origin <origin>] [--limit N] [--json]
-                                           search the recall index for pull-path results
+                                            search the recall index for pull-path results
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
-                                           print a note, optionally with source provenance
+                                            print a note, optionally with source provenance
+  librarian mcp [--data-dir <dir>] [--diagnostics-dir <dir>]
+                                           start the MCP stdio server
   librarian machine-id [--path <file>]     print the persisted machine id
 `;
 
@@ -58,7 +60,7 @@ function parseFlags(argv: string[]): Map<string, string> {
 
 type NoteShowOptions = { noteId: string; dataDir: string; withProvenance: boolean; json: boolean };
 
-type RecallOptions = {
+export type RecallOptions = {
   query: string;
   projectSlug?: string;
   global: boolean;
@@ -69,7 +71,7 @@ type RecallOptions = {
   diagnosticsDir: string;
 };
 
-type RecallResult = {
+export type RecallResult = {
   note_id: string;
   title: string;
   summary: string;
@@ -80,6 +82,10 @@ type RecallResult = {
   is_global: boolean;
   score: number;
 };
+
+export type RecallPayload = { results: RecallResult[]; message?: string };
+
+export type NoteShowPayload = { note: NoteRecord; provenance_events: Array<Record<string, unknown>> | null };
 
 function parseNoteShowArgs(argv: string[]): NoteShowOptions {
   const [noteId, ...rest] = argv;
@@ -176,7 +182,7 @@ function parseRecallArgs(argv: string[]): RecallOptions {
   return options;
 }
 
-function findLatestNote(dataDir: string, noteId: string): NoteRecord | undefined {
+export function findLatestNote(dataDir: string, noteId: string): NoteRecord | undefined {
   const latest = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[]);
   return latest.find((note) => note.note_id === noteId);
 }
@@ -233,7 +239,7 @@ function eventId(event: Record<string, unknown>): string | undefined {
   return typeof event.event_id === 'string' ? event.event_id : undefined;
 }
 
-function provenanceEvents(dataDir: string, note: NoteRevision): Array<Record<string, unknown>> {
+export function provenanceEvents(dataDir: string, note: NoteRevision): Array<Record<string, unknown>> {
   const sessionId = note.provenance.session_id;
   if (!sessionId) {
     throw new Error(`note ${note.note_id} has no provenance.session_id`);
@@ -416,15 +422,27 @@ function machineId(flags: Map<string, string>): void {
   process.stdout.write(id + '\n');
 }
 
-function noteShow(options: NoteShowOptions): void {
-  const note = findLatestNote(options.dataDir, options.noteId);
+export function getNoteShowPayload(dataDir: string, noteId: string, withProvenance: boolean): NoteShowPayload {
+  const note = findLatestNote(dataDir, noteId);
   if (!note) {
-    throw new Error(`unknown note_id: ${options.noteId}`);
+    throw new Error(`unknown note_id: ${noteId}`);
   }
 
   if (note.kind === 'note_tombstone') {
+    return { note, provenance_events: null };
+  }
+
+  const events = withProvenance && note.source.distiller !== 'human' ? provenanceEvents(dataDir, note) : [];
+  return { note, provenance_events: events };
+}
+
+function noteShow(options: NoteShowOptions): void {
+  const payload = getNoteShowPayload(options.dataDir, options.noteId, options.withProvenance);
+  const note = payload.note;
+
+  if (note.kind === 'note_tombstone') {
     if (options.json) {
-      process.stdout.write(JSON.stringify({ note, provenance_events: null }) + '\n');
+      process.stdout.write(JSON.stringify(payload) + '\n');
       return;
     }
     process.stdout.write(
@@ -434,8 +452,7 @@ function noteShow(options: NoteShowOptions): void {
   }
 
   if (options.json) {
-    const events = options.withProvenance && note.source.distiller !== 'human' ? provenanceEvents(options.dataDir, note) : [];
-    process.stdout.write(JSON.stringify({ note, provenance_events: events }) + '\n');
+    process.stdout.write(JSON.stringify(payload) + '\n');
     return;
   }
 
@@ -478,7 +495,7 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
   writeInjectionTrace(options.diagnosticsDir, trace);
 }
 
-function recallCommand(options: RecallOptions): void {
+export function runRecall(options: RecallOptions): RecallPayload {
   const ts = new Date().toISOString();
   const db = new Database(':memory:');
   try {
@@ -515,14 +532,23 @@ function recallCommand(options: RecallOptions): void {
       ];
     });
 
-    if (options.json) {
-      process.stdout.write(JSON.stringify(results) + '\n');
-      return;
-    }
-    process.stdout.write(results.map(formatRecallResult).join('\n') + (results.length > 0 ? '\n' : ''));
+    const message =
+      !options.projectSlug && !options.global
+        ? 'No project_slug and global=false; recall is fail-closed without an explicit scope.'
+        : undefined;
+    return { results, message };
   } finally {
     db.close();
   }
+}
+
+function recallCommand(options: RecallOptions): void {
+  const payload = runRecall(options);
+  if (options.json) {
+    process.stdout.write(JSON.stringify(payload.results) + '\n');
+    return;
+  }
+  process.stdout.write(payload.results.map(formatRecallResult).join('\n') + (payload.results.length > 0 ? '\n' : ''));
 }
 
 async function main(argv: string[]): Promise<void> {
@@ -544,6 +570,15 @@ async function main(argv: string[]): Promise<void> {
         throw new Error('expected note subcommand: show');
       }
       noteShow(parseNoteShowArgs(subRest));
+      break;
+    }
+    case 'mcp': {
+      const flags = parseFlags(rest);
+      const { runMcpServer } = await import('./mcp/server.ts');
+      await runMcpServer({
+        dataDir: flags.get('data-dir') ?? DATA_DIR,
+        diagnosticsDir: flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR,
+      });
       break;
     }
     case 'machine-id':
