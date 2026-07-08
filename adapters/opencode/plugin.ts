@@ -26,7 +26,7 @@
  * below changes — the mapper and its fixtures are untouched.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -39,9 +39,11 @@ import {
   type Context,
   type FileAction,
   type NativePayload,
+  type PromptPayload,
   type Resource,
   type SessionPayload,
 } from './map.ts';
+import { spliceLibrarianInjection, type OpenCodeMessage } from './inject.ts';
 
 // ---------------------------------------------------------------------------
 // Resource-fact resolution (I/O — deliberately kept out of the pure mapper).
@@ -346,6 +348,72 @@ function handOff(event: CanonicalEvent, log: (level: string, message: string) =>
   }
 }
 
+function projectSlug(resource: Resource): string | undefined {
+  if (!resource.git_root) return undefined;
+  // ponytail: basename heuristic; replace with git_root/git_remote attribution when §5 exists.
+  return path.basename(resource.git_root);
+}
+
+function injectArgs(resource: Resource, sessionStart: boolean): string[] {
+  const args = ['inject', '--global'];
+  const slug = projectSlug(resource);
+  if (slug) args.push('--project', slug);
+  if (sessionStart) args.push('--session-start');
+  return args;
+}
+
+async function runInject(
+  resource: Resource,
+  query: string,
+  sessionStart: boolean,
+  log: (level: string, message: string) => void,
+): Promise<InjectResult> {
+  const [cmd, ...prefix] = resolveLibrarianArgv();
+  return await new Promise((resolve) => {
+    let stdout = '';
+    let settled = false;
+    const child = spawn(cmd, [...prefix, ...injectArgs(resource, sessionStart)], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGKILL');
+      log('warn', 'librarian inject timed out; skipping recall injection');
+      resolve({ ok: false });
+    }, INJECT_TIMEOUT_MS);
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      log('warn', `librarian inject failed to spawn: ${err.message}`);
+      resolve({ ok: false });
+    });
+    child.stdin.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      log('warn', `librarian inject stdin failed: ${err.message}`);
+      resolve({ ok: false });
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        log('warn', `librarian inject exited ${code}; skipping recall injection`);
+        resolve({ ok: false });
+        return;
+      }
+      resolve({ ok: true, block: stdout.length > 0 ? stdout : undefined });
+    });
+    child.stdin.end(sessionStart ? '' : query);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Lowering: OpenCode native hook args → the mapper's terse NativePayload.
 //
@@ -357,12 +425,20 @@ function handOff(event: CanonicalEvent, log: (level: string, message: string) =>
 
 type Loose = Record<string, unknown>;
 
+const INJECT_TIMEOUT_MS = 1_000;
+
+type InjectResult = { ok: true; block: string | undefined } | { ok: false };
+
 function asRecord(v: unknown): Loose | undefined {
   return typeof v === 'object' && v !== null ? (v as Loose) : undefined;
 }
 
 function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+function messagesFrom(v: unknown): OpenCodeMessage[] | undefined {
+  return Array.isArray(v) ? (v as OpenCodeMessage[]) : undefined;
 }
 
 /** A parsed `Session` object (present on session.created/deleted under properties.info). */
@@ -432,7 +508,7 @@ function extractUserText(parts: unknown): string | undefined {
  * one message + its parts; we emit only for user messages. Returns the message id too
  * so the caller can dedup (the same message can be delivered more than once).
  */
-function lowerChatMessage(output: Loose): { payload: NativePayload; messageId: string | undefined } | undefined {
+function lowerChatMessage(output: Loose): { payload: PromptPayload; messageId: string | undefined } | undefined {
   const message = asRecord(output.message);
   if (!message || message.role !== 'user') {
     return undefined;
@@ -515,6 +591,9 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
   // plugin restart resets it (at-least-once; an occasional post-restart dup is fine,
   // the collector has no id-dedup today and instrumentation stays dumb).
   const seenMessageIds = new Set<string>();
+  const latestRecallBySession = new Map<string, string | undefined>();
+  const briefBySession = new Map<string, string | undefined>();
+  let latestSessionKey = 'unknown';
 
   const log = (level: string, message: string): void => {
     try {
@@ -537,6 +616,8 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
     session_id: sessionId && sessionId.length > 0 ? sessionId : 'unknown',
     cwd: sessionCwd,
   });
+
+  const keyFor = (sessionId: string | undefined): string => contextFor(sessionId).session_id;
 
   /** Turn a lowered payload into a stamped canonical event and hand it off. */
   const emit = (payload: NativePayload, sessionId: string | undefined): void => {
@@ -569,13 +650,42 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
       if (!lowered) {
         return;
       }
+      const sessionId = asString(input.sessionID) ?? asString((asRecord(output.message) ?? {}).sessionID);
+      const sessionKey = keyFor(sessionId);
+      latestSessionKey = sessionKey;
       if (lowered.messageId) {
         if (seenMessageIds.has(lowered.messageId)) {
           return;
         }
         seenMessageIds.add(lowered.messageId);
       }
-      emit(lowered.payload, asString(input.sessionID) ?? asString((asRecord(output.message) ?? {}).sessionID));
+      emit(lowered.payload, sessionId);
+
+      const [briefResult, recallResult] = await Promise.all([
+        briefBySession.has(sessionKey) ? Promise.resolve<InjectResult>({ ok: false }) : runInject(resource, '', true, log),
+        runInject(resource, lowered.payload.text, false, log),
+      ]);
+      if (briefResult.ok) {
+        briefBySession.set(sessionKey, briefResult.block);
+      }
+      if (recallResult.ok) {
+        latestRecallBySession.set(sessionKey, recallResult.block);
+      } else {
+        latestRecallBySession.set(sessionKey, undefined);
+      }
+    },
+
+    'experimental.chat.messages.transform': async (_input: Loose, output: Loose) => {
+      const messages = messagesFrom(output.messages);
+      if (!messages) {
+        return;
+      }
+      const sessionId = asString(_input.sessionID) ?? asString(output.sessionID);
+      // ponytail: fallback assumes one active OpenCode session per plugin instance; key from payload if multi-session interleaving appears.
+      const sessionKey = sessionId ? keyFor(sessionId) : latestSessionKey;
+      const spliced = spliceLibrarianInjection(messages, latestRecallBySession.get(sessionKey), briefBySession.get(sessionKey));
+      output.messages = spliced;
+      return { ...output, messages: spliced };
     },
 
     /** A tool finished executing → ToolEvent. Args (command/filePath) are on input.args. */
@@ -588,11 +698,25 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
 
     /**
      * Fired BEFORE session compaction runs (hook is "compacting", distinct from the
-     * post-hoc `session.compacted` event) → SessionEvent(compact). We are a pure
-     * observer here: we do not touch `output.context`/`output.prompt`.
+      * post-hoc `session.compacted` event) → SessionEvent(compact), then re-supply the
+      * cached memory blocks to the compaction prompt when OpenCode exposes one.
      */
-    'experimental.session.compacting': async (input: Loose, _output: Loose) => {
-      emit({ kind: 'session', action: 'compact' }, asString(input.sessionID));
+    'experimental.session.compacting': async (input: Loose, output: Loose) => {
+      const sessionId = asString(input.sessionID);
+      emit({ kind: 'session', action: 'compact' }, sessionId);
+      // ponytail: fallback assumes one active OpenCode session per plugin instance; key from payload if multi-session interleaving appears.
+      const sessionKey = sessionId ? keyFor(sessionId) : latestSessionKey;
+      const memory = [briefBySession.get(sessionKey), latestRecallBySession.get(sessionKey)].filter((block): block is string => !!block).join('\n');
+      if (memory.length === 0) {
+        return;
+      }
+      if (typeof output.prompt === 'string') {
+        return { ...output, prompt: `${output.prompt}\n\n${memory}` };
+      }
+      if (typeof output.context === 'string') {
+        return { ...output, context: `${output.context}\n\n${memory}` };
+      }
+      return output;
     },
 
     /** Session lifecycle: only the one-shot session.created (start) / session.deleted

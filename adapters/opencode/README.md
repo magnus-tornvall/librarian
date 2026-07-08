@@ -19,6 +19,9 @@ distiller (§4, §5).
   resolves the `resource` facts, stamps `event_id`/`ts`, calls `map()`, and pipes the
   resulting NDJSON to `librarian collect` (one spawn per event for v1 — see the ceiling
   note below).
+- **`inject.ts`** — a pure outgoing-message splice helper for recall injection. It removes
+  prior librarian synthetic parts, adds fresh brief/recall parts when present, and never
+  shells out.
 
 ## Install
 
@@ -64,19 +67,35 @@ what they do. To install by hand instead:
    - `~/.config/opencode/plugins/` — global (all projects), or
    - `.opencode/plugins/` — per-project.
 
-   Copy (or symlink) `plugin.ts` there, keeping `map.ts` alongside it (the plugin imports
-   `./map.ts`). For example:
+   Copy (or symlink) `plugin.ts` there, keeping `map.ts` and `inject.ts` alongside it (the
+   plugin imports both). For example:
 
    ```sh
    mkdir -p ~/.config/opencode/plugins/librarian
-   cp adapters/opencode/map.ts adapters/opencode/plugin.ts \
+   cp adapters/opencode/map.ts adapters/opencode/inject.ts adapters/opencode/plugin.ts \
       ~/.config/opencode/plugins/librarian/
    ```
 
    OpenCode loads TypeScript plugin files directly; no build step for the plugin itself.
 
 3. That's it. New OpenCode sessions will emit canonical events to
-   `~/.librarian/data/events/<session_id>.ndjson` via the collector.
+   `~/.librarian/data/events/<session_id>.ndjson` via the collector and can receive
+   ephemeral recall blocks from `librarian inject`.
+
+## Recall Injection
+
+On `chat.message`, the plugin runs `librarian inject` with the prompt on stdin, always
+passing `--global` plus `--project <git-root-basename>` when the session is inside a git
+repo. The returned block is cached by session; on `experimental.chat.messages.transform`
+the plugin splices that exact stdout into the outgoing payload as a synthetic text part,
+after removing any prior librarian part so repeated transform fires stay idempotent.
+
+The first user turn also asks `librarian inject --session-start` for the startup brief;
+that brief is pinned to the first user message, while per-turn recall stays adjacent to the
+latest user message. The adapter deliberately avoids `experimental.chat.system.transform`:
+that hook lacks the user message, while `messages.transform` is ephemeral and does not
+persist injected text to chat history. If an injected block has an `injection_id`, run
+`librarian why <injection_id>` to see why it was selected.
 
 ## What gets emitted (mapping rules, §10.1)
 
@@ -109,7 +128,7 @@ subscribes to (pinned to the `@opencode-ai/plugin`/`sdk` surface) are:
 | ---- | ----- | ----- |
 | `chat.message` | `PromptEvent` (user messages) | One-shot "new message received". Chosen over `experimental.chat.messages.transform`, which is a whole-history transform firing every round-trip (would duplicate prompts). Prompt is captured at first receipt; **updated/edited messages are deferred** (not re-emitted). Deduped by message id. |
 | `tool.execute.after` | `ToolEvent` | Tool args (command line, `filePath`) are read from `input.args`. |
-| `experimental.session.compacting` | `SessionEvent` (`compact`) | Fires **before** compaction (distinct from the post-hoc `session.compacted` event); the plugin is a pure observer and does not modify the compaction prompt. |
+| `experimental.session.compacting` | `SessionEvent` (`compact`) + memory re-supply | Fires **before** compaction (distinct from the post-hoc `session.compacted` event); appends the cached startup brief and latest recall when OpenCode exposes a compaction prompt/context. |
 | `event` → `session.created` | `SessionEvent` (`start`) | Fires **exactly once** per session (unlike Claude Code's repeated `SessionStart`). Also back-fills `agent_version`. |
 | `event` → `session.deleted` | `SessionEvent` (`stop`) | The one-shot "session ended" signal (`session.idle` repeats per turn and is intentionally not used). |
 
