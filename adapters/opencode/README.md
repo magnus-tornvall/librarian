@@ -22,10 +22,43 @@ distiller (§4, §5).
 
 ## Install
 
-1. **`librarian` must be on `PATH`.** The plugin shells out to `librarian collect`
+The fastest path for a per-project smoke test is the repo scripts (they build the CLI,
+record its absolute path in `~/.librarian/config.json`, and symlink this plugin into the
+repo-root `.opencode/plugins/`):
+
+```sh
+./scripts/opencode-setup.sh      # build + write config bin/runtime + symlink plugin into .opencode/plugins/
+./scripts/opencode-teardown.sh   # remove the symlink + drop the config bin/runtime
+```
+
+See the top-level [`README.md`](../../README.md#opencode-plugin-local-smoke-test) for
+what they do. To install by hand instead:
+
+1. **Make the `librarian` CLI locatable.** The plugin shells out to `librarian collect`
    (delivery) and `librarian machine-id` (machine id). Build the CLI (`npm run build` at
-   the repo root produces `dist/cli.js`, exposed as the `librarian` bin) and make it
-   resolvable — e.g. `npm link` in this repo, or symlink `dist/cli.js` onto your `PATH`.
+   the repo root produces `dist/cli.js`), then let the plugin find it. It resolves the CLI
+   in this order — **it does not require `PATH`**:
+
+   1. `LIBRARIAN_BIN` env var (an absolute path to `cli.js` or an executable), else
+   2. `~/.librarian/config.json` `{ "bin": "/abs/path/to/dist/cli.js" }` — the durable
+      choice, read from disk at runtime so it works regardless of how OpenCode was
+      launched (the setup script writes this for you), else
+   3. the built `dist/cli.js` located relative to this plugin file (the zero-config
+      default for a repo checkout), else
+   4. a bare `librarian` on `PATH` (last-resort convenience).
+
+   When the resolved CLI is a `.js` file it needs a JS runtime to run it, and the plugin
+   **cannot** assume its own `process.execPath` is one: inside OpenCode that is the compiled
+   `opencode` binary, which, handed a `.js`, just re-invokes itself and prints its help —
+   the collector never runs and no events are written. So a `.js` is paired with a runtime
+   resolved as: `LIBRARIAN_RUNTIME` env / config `{ "runtime": "/abs/path/to/node" }` (the
+   setup script records the `node` it validated with, making this deterministic), else
+   `process.execPath` only when it looks like `node`/`bun`/`deno`, else a `node`/`bun`
+   discovered from `NVM_BIN`/`BUN_INSTALL`, else the `.js` is spawned directly via its
+   `#!/usr/bin/env node` shebang (the setup script sets its exec bit). Why not rely on
+   `PATH`: OpenCode is a native binary, and the `PATH` its plugin child inherits depends on
+   how OpenCode was launched (terminal vs desktop app vs login service vs package manager) —
+   nvm/asdf/Homebrew/GUI launches routinely leave a bare `librarian` unresolvable.
 
 2. **Drop the plugin file where OpenCode loads plugins from:**
    - `~/.config/opencode/plugins/` — global (all projects), or
@@ -35,9 +68,9 @@ distiller (§4, §5).
    `./map.ts`). For example:
 
    ```sh
-   mkdir -p ~/.config/opencode/plugins/librarian-opencode
+   mkdir -p ~/.config/opencode/plugins/librarian
    cp adapters/opencode/map.ts adapters/opencode/plugin.ts \
-      ~/.config/opencode/plugins/librarian-opencode/
+      ~/.config/opencode/plugins/librarian/
    ```
 
    OpenCode loads TypeScript plugin files directly; no build step for the plugin itself.
@@ -56,8 +89,10 @@ distiller (§4, §5).
 | File tool (read/write/edit)       | `ToolEvent`     | `files[]` populated; file writes get `hints.possibly_salient` (`reason: file_write`). |
 | Session start / stop / compact    | `SessionEvent`  | `action` ∈ start/stop/compact/checkpoint. |
 
-`resource` carries `agent: "opencode"`, `machine_id` (via `librarian machine-id` or
-`MACHINE_ID_PATH`), `cwd`, and `git_root`/`git_remote`/`git_branch` when resolvable —
+`resource` carries `agent: "opencode"`, `machine_id` (read from the persisted
+`~/.librarian/machine-id`, or `MACHINE_ID_PATH` when set; the CLI's `machine-id` is only
+the bootstrap that first writes that file), `cwd`, and `git_root`/`git_remote`/`git_branch`
+when resolvable —
 **facts, not identity**. `agent_version` is back-filled from `Session.version` once
 `session.created` is observed (OpenCode surfaces its version only on the full `Session`
 object), after which every later event in the session carries it. There is deliberately

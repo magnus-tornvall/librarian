@@ -69,6 +69,15 @@ Claude Code's hook model differs from OpenCode's plugin model, so:
    If you already have hooks configured, merge these entries into the existing arrays for
    each event rather than replacing the whole `hooks` object.
 
+   > **Future packaging (avoids the manual absolute path).** Claude Code substitutes
+   > [`${CLAUDE_PLUGIN_ROOT}`](https://docs.claude.com/en/docs/claude-code/plugins-reference#environment-variables)
+   > — the absolute path to a plugin's install directory — into hook `command`/`args`. When
+   > this adapter is shipped as a proper Claude Code plugin, the snippet becomes
+   > `"args": ["${CLAUDE_PLUGIN_ROOT}/hook.ts"]` (exec form, no quoting), so the hook path
+   > resolves with no PATH assumption and no user-edited placeholder. This is the Claude
+   > Code analogue of the OpenCode adapter's `~/.librarian/config.json` `bin` resolution;
+   > it is deferred packaging work, not part of the current manual install.
+
 4. That's it. New Claude Code sessions on that machine (or in that project) will emit
    canonical events to `~/.librarian/data/events/<session_id>.ndjson` via the collector.
    This is the **dogfooding moment** (§14): once installed, build sessions on this repo get

@@ -29,7 +29,9 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ulid } from 'ulid';
 import {
   map,
@@ -61,34 +63,221 @@ function tryRun(command: string, args: string[], cwd: string): string | undefine
   }
 }
 
+// ---------------------------------------------------------------------------
+// CLI resolution: find the `librarian` executable without trusting $PATH.
+//
+// OpenCode is a native (Bun) binary; the PATH its plugin child inherits depends on
+// how OpenCode was launched (terminal, desktop app, login service, package manager)
+// and need not contain the dir a bare `librarian` was linked into. nvm/asdf/Homebrew/
+// npm-global-bins/GUI launches all make bare-name lookup unreliable, and a shell rc
+// (.zshrc) is not guaranteed to have run. So bare-name PATH lookup is a *convenience
+// fallback*, never the contract. Resolution order (first hit wins):
+//
+//   1. LIBRARIAN_BIN env var — explicit override (dev, smoke tests).
+//   2. ~/.librarian/config.json `{ "bin": "…" }` — written at install time. This is the
+//      production mechanism: it is read from disk at runtime, so it survives whatever
+//      launch environment OpenCode came from (unlike an env var or a shell PATH).
+//   3. The built dist/cli.js resolved relative to THIS file — the zero-config default
+//      for a repo checkout. No PATH lookup for the CLI itself (the runtime that runs it is
+//      resolved separately; see below).
+//   4. Bare `librarian` on PATH — last-resort convenience.
+//
+// A resolved `.js` path needs a JS runtime to run it. We must NOT assume `process.execPath`
+// is one: under OpenCode `process.execPath` is the compiled `opencode` binary, which, given
+// a `.js` positional, just re-invokes itself and prints its help (exit 1) — the collector
+// never runs. So a `.js` target is paired with a runtime resolved in this order:
+//   a. LIBRARIAN_RUNTIME env / config `runtime` — an explicit interpreter path (the setup
+//      script records the node it validated here, making the production path deterministic).
+//   b. process.execPath, but ONLY when it actually looks like a JS runtime (node/bun/deno) —
+//      true for `node --test` and Node-hosted plugins, false for the opencode binary.
+//   c. A node/bun discovered from environment hints (NVM_BIN, BUN_INSTALL) — best effort.
+//   d. Last resort: spawn the `.js` directly and let its `#!/usr/bin/env node` shebang find
+//      node on PATH (requires the file's exec bit; the setup script sets it).
+// A non-.js target (a real executable) is always spawned directly. The result is an argv
+// PREFIX; the subcommand + args are appended.
+// ---------------------------------------------------------------------------
+
+/** The config file the collector already owns (src/paths.ts CONFIG_PATH). We do not
+ *  import it — the adapter stays dependency-free of `src/` (§4) — so we recompute the
+ *  same path here. Resolved lazily (at call time, not module load) so it honors the
+ *  current home directory. */
+function configPath(): string {
+  return path.join(os.homedir(), '.librarian', 'config.json');
+}
+
+/** The persisted machine-id file the collector owns (src/paths.ts MACHINE_ID_PATH).
+ *  As with configPath, we recompute rather than import it (§4) and resolve it lazily so
+ *  it honors the current home directory. This is the file `librarian machine-id`
+ *  writes on first run, so reading it directly lets the plugin skip spawning the CLI. */
+function machineIdPath(): string {
+  return path.join(os.homedir(), '.librarian', 'machine-id');
+}
+
+/** Does this executable path look like a JS runtime that can run a `.js` file directly?
+ *  We match the basename against known runtimes so we never mistake a host app (e.g. the
+ *  `opencode` binary, which is `process.execPath` inside the plugin) for an interpreter. */
+function looksLikeJsRuntime(execPath: string): boolean {
+  const base = path.basename(execPath).toLowerCase().replace(/\.exe$/, '');
+  return base === 'node' || base === 'bun' || base === 'deno';
+}
+
+/** Best-effort discovery of a JS runtime from environment hints, without trusting a bare
+ *  PATH lookup. nvm exports NVM_BIN (…/bin containing `node`); Bun exports BUN_INSTALL
+ *  (…/bin/bun). Returns the first interpreter that exists on disk, or undefined. */
+function discoverRuntime(): string | undefined {
+  const candidates: string[] = [];
+  const nvmBin = process.env.NVM_BIN;
+  if (nvmBin) candidates.push(path.join(nvmBin, 'node'));
+  const bunInstall = process.env.BUN_INSTALL;
+  if (bunInstall) candidates.push(path.join(bunInstall, 'bin', 'bun'));
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      // ignore and try the next candidate
+    }
+  }
+  return undefined;
+}
+
+/** Resolve a JS runtime to run a `.js` CLI (see the block comment above for the order and
+ *  why `process.execPath` cannot be assumed). Returns undefined when no runtime is known,
+ *  in which case the caller spawns the `.js` directly via its shebang. */
+function resolveRuntime(): string | undefined {
+  const fromEnv = process.env.LIBRARIAN_RUNTIME;
+  if (fromEnv && fromEnv.trim().length > 0) return fromEnv;
+  const fromConfig = stringFromConfig('runtime');
+  if (fromConfig) return fromConfig;
+  if (looksLikeJsRuntime(process.execPath)) return process.execPath;
+  return discoverRuntime();
+}
+
+/** Turn a resolved CLI location into a spawn argv prefix. A real executable (no `.js`) is
+ *  spawned directly. A `.js` is paired with a resolved JS runtime; if none can be found we
+ *  fall back to spawning it directly and rely on its shebang + exec bit. */
+function argvFor(bin: string): string[] {
+  if (!bin.endsWith('.js')) return [bin];
+  const runtime = resolveRuntime();
+  return runtime ? [runtime, bin] : [bin];
+}
+
+/** Read a string-valued key out of ~/.librarian/config.json, best-effort: a missing file,
+ *  malformed JSON, or an absent/blank value yields undefined (fall through to the next
+ *  rung), never a throw — resolution must not break the session. */
+function stringFromConfig(key: string): string | undefined {
+  try {
+    const raw = fs.readFileSync(configPath(), 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed === 'object' && parsed !== null) {
+      const value = (parsed as Record<string, unknown>)[key];
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value;
+      }
+    }
+  } catch {
+    // absent or unreadable config — fall through
+  }
+  return undefined;
+}
+
+/** The CLI path recorded in config (`bin`), if any. */
+function binFromConfig(): string | undefined {
+  return stringFromConfig('bin');
+}
+
+/** The built CLI (dist/cli.js) resolved relative to this source file, if it exists.
+ *  This file lives at adapters/opencode/plugin.ts; the built CLI is at dist/cli.js —
+ *  two directories up. Returns undefined when the CLI has not been built. */
+function binFromRepo(): string | undefined {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const candidate = path.resolve(here, '..', '..', 'dist', 'cli.js');
+    return fs.existsSync(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the `librarian` invocation as an argv prefix (see the block comment above for
+ * the ordering and rationale). Always returns something: the final rung is the bare
+ * name, preserving the pre-hardening behavior so nothing regresses when neither an
+ * override, a config, nor a built CLI is present.
+ *
+ * Exported for the seam test (the only reason this is not module-private).
+ */
+export function resolveLibrarianArgv(): string[] {
+  const fromEnv = process.env.LIBRARIAN_BIN;
+  if (fromEnv && fromEnv.trim().length > 0) {
+    return argvFor(fromEnv);
+  }
+  const fromConfig = binFromConfig();
+  if (fromConfig) {
+    return argvFor(fromConfig);
+  }
+  const fromRepo = binFromRepo();
+  if (fromRepo) {
+    return argvFor(fromRepo);
+  }
+  return ['librarian'];
+}
+
 /**
  * Resolve the machine id the way the spec mandates (§10.1, §11): a generated,
- * persisted id — never the hostname. Prefer `MACHINE_ID_PATH` when it is set and the
- * file exists (the collector's own path constant); otherwise ask the CLI
- * (`librarian machine-id`), which generates-and-persists on first call. If both fail
- * (librarian not on PATH — a misconfiguration the README calls out), fall back to a
- * random UUID so an event still carries a non-empty machine_id and the pipeline does
- * not wedge; a warning is logged so the operator can fix PATH.
+ * persisted id — never the hostname. Resolution order (first hit wins):
+ *
+ *   1. `MACHINE_ID_PATH` env var, when set and the file is non-empty (explicit override).
+ *   2. The default persisted file `~/.librarian/machine-id` — the same file the CLI
+ *      writes. Reading it directly means the common case needs no subprocess at all,
+ *      so the machine id no longer depends on locating/spawning the CLI under whatever
+ *      launch environment OpenCode inherited.
+ *   3. The CLI (`librarian machine-id`, via `resolveLibrarianArgv`), which generates-and-
+ *      persists on first call — the bootstrap path when the file does not yet exist.
+ *   4. A random UUID, so an event still carries a non-empty machine_id and the pipeline
+ *      does not wedge; a warning is logged so the operator can fix the install.
+ *
+ * Exported for the seam test (the only reason this is not module-private).
  */
-function resolveMachineId(): string {
-  const fromEnv = process.env.MACHINE_ID_PATH;
-  if (fromEnv && fs.existsSync(fromEnv)) {
-    const id = fs.readFileSync(fromEnv, 'utf8').trim();
-    if (id.length > 0) {
+export function resolveMachineId(): string {
+  const fromEnvPath = process.env.MACHINE_ID_PATH;
+  if (fromEnvPath) {
+    const id = readIdFile(fromEnvPath);
+    if (id) {
       return id;
     }
   }
 
-  const fromCli = tryRun('librarian', ['machine-id'], process.cwd());
+  const id = readIdFile(machineIdPath());
+  if (id) {
+    return id;
+  }
+
+  const [cmd, ...prefix] = resolveLibrarianArgv();
+  const fromCli = tryRun(cmd, [...prefix, 'machine-id'], process.cwd());
   if (fromCli) {
     return fromCli;
   }
 
   process.stderr.write(
-    'librarian-opencode: could not resolve machine id (is `librarian` on PATH?); ' +
-      'falling back to an ephemeral id for this run\n',
+    'librarian: could not resolve machine id (no persisted id at ~/.librarian/machine-id ' +
+      'and could not locate/run the librarian CLI; set LIBRARIAN_BIN or ~/.librarian/config.json ' +
+      '"bin", or build the CLI); falling back to an ephemeral id for this run\n',
   );
   return randomUUID();
+}
+
+/** Read a persisted id from a file: trimmed non-empty contents, or undefined if the file
+ *  is absent, unreadable, or blank. Never throws — id resolution must not break init. */
+function readIdFile(file: string): string | undefined {
+  try {
+    if (!fs.existsSync(file)) {
+      return undefined;
+    }
+    const id = fs.readFileSync(file, 'utf8').trim();
+    return id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Resolve the git facts for a directory, all best-effort (§10.1: facts, not identity). */
@@ -135,15 +324,21 @@ function buildResource(cwd: string): Resource {
  * for v1 — correctness over throughput, and it keeps the plugin stateless with no
  * long-lived child to supervise. The ceiling is obvious: a chatty session pays a
  * process spawn per event. When that bites, the fix is a single long-lived `collect`
- * child (or a batching buffer flushed on idle), not more logic here. `librarian` must
- * be on PATH (see README). A collector rejection (fail-loud, §9) is surfaced to the
- * OpenCode log but never rethrown — instrumentation must not break the session.
+ * child (or a batching buffer flushed on idle), not more logic here. The CLI is located
+ * via `resolveLibrarianArgv` (LIBRARIAN_BIN → config → built dist → bare name), so it does
+ * not depend on $PATH. A collector rejection (fail-loud, §9) is surfaced to the OpenCode
+ * log but never rethrown — instrumentation must not break the session.
  */
 function handOff(event: CanonicalEvent, log: (level: string, message: string) => void): void {
   const line = JSON.stringify(event) + '\n';
-  const result = spawnSync('librarian', ['collect'], { input: line, encoding: 'utf8' });
+  const [cmd, ...prefix] = resolveLibrarianArgv();
+  const result = spawnSync(cmd, [...prefix, 'collect'], { input: line, encoding: 'utf8' });
   if (result.error) {
-    log('error', `librarian collect failed to spawn: ${result.error.message} (is librarian on PATH?)`);
+    log(
+      'error',
+      `librarian collect failed to spawn: ${result.error.message} ` +
+        '(could not locate/run the librarian CLI; set LIBRARIAN_BIN or ~/.librarian/config.json "bin", or build the CLI)',
+    );
     return;
   }
   if (result.status !== 0) {
@@ -307,7 +502,7 @@ interface PluginContext {
  * once, then on each hook: lower native → NativePayload, `map()` → canonical event
  * (stamping a fresh ULID + ISO ts), and `handOff()` to `librarian collect`.
  */
-export const LibrarianOpenCodePlugin = async (ctx: PluginContext) => {
+export const LibrarianPlugin = async (ctx: PluginContext) => {
   const cwd = ctx.worktree ?? ctx.directory ?? process.cwd();
   // Mutable so `session.created` can back-fill `agent_version` (Session.version) into
   // the shared facts, after which every subsequent event in the session carries it.
@@ -322,12 +517,17 @@ export const LibrarianOpenCodePlugin = async (ctx: PluginContext) => {
   const seenMessageIds = new Set<string>();
 
   const log = (level: string, message: string): void => {
-    // Prefer structured logging through the SDK; fall back to stderr.
-    const sink = ctx.client?.app?.log;
-    if (sink) {
-      void sink({ body: { service: 'librarian-opencode', level, message } });
-    } else {
-      process.stderr.write(`librarian-opencode [${level}]: ${message}\n`);
+    try {
+      // Prefer structured logging through the SDK; fall back to stderr.
+      // Call .log() directly on the app object to preserve `this` (§4).
+      if (ctx.client?.app?.log) {
+        void ctx.client.app.log({ body: { service: 'librarian', level, message } });
+      } else {
+        process.stderr.write(`librarian [${level}]: ${message}\n`);
+      }
+    } catch {
+      // Instrumentation must never break the session (§4).
+      process.stderr.write(`librarian [${level}]: ${message}\n`);
     }
   };
 
@@ -410,4 +610,4 @@ export const LibrarianOpenCodePlugin = async (ctx: PluginContext) => {
   };
 };
 
-export default LibrarianOpenCodePlugin;
+export default LibrarianPlugin;
