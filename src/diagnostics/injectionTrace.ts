@@ -1,6 +1,7 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { appendRecord } from '../log/ndjson.ts';
+import { appendRecord, readAll } from '../log/ndjson.ts';
 
 /**
  * Injection trace (§8): one record per `recall()`/injection, capturing what the
@@ -52,6 +53,19 @@ function segmentPath(diagnosticsDir: string, trace: InjectionTrace): string {
  */
 export function writeInjectionTrace(diagnosticsDir: string, trace: InjectionTrace): void {
   appendRecord(segmentPath(diagnosticsDir, trace), trace);
+}
+
+export function readInjectionTraces(diagnosticsDir: string): InjectionTrace[] {
+  const injectionsDir = path.join(diagnosticsDir, 'injections');
+  if (!fs.existsSync(injectionsDir)) {
+    return [];
+  }
+  // ponytail: O(n) scan is fine for deletable diagnostics segments; add an id index only if this gets slow.
+  return fs
+    .readdirSync(injectionsDir)
+    .filter((name) => name.endsWith('.ndjson'))
+    .sort()
+    .flatMap((name) => readAll(path.join(injectionsDir, name)) as InjectionTrace[]);
 }
 
 /**

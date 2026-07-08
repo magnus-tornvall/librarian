@@ -4,7 +4,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { ulid } from 'ulid';
 import { appendEvent } from './collector/append.ts';
-import { makeInjectionId, writeInjectionTrace, type InjectionTrace } from './diagnostics/injectionTrace.ts';
+import { makeInjectionId, readInjectionTraces, writeInjectionTrace, type InjectionTrace } from './diagnostics/injectionTrace.ts';
 import { makeFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { indexNotes } from './index/indexer.ts';
@@ -16,7 +16,7 @@ import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from './not
 import { DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
 import { DEFAULT_SCORING_CONFIG } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
-import { recallWithTrace, type RecallTraceCandidate } from './recall/query.ts';
+import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -30,9 +30,12 @@ const USAGE = `usage:
   librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
   librarian recall <query> --project <slug> [--global] [--origin <origin>] [--limit N] [--json]
-                                             search the recall index for pull-path results
+                                           search the recall index for pull-path results
+  librarian why <injection_id> [--json]    explain a diagnostics injection trace
+  librarian why-not <query> <note_id> --project <slug> [--global]
+                                           explain why a note did not ship for a query
   librarian inject --project <slug> [--global] [--session-start]
-                                             read prompt text on stdin and print push-path memory block
+                                           read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
                                              print a note, optionally with source provenance
   librarian mcp [--data-dir <dir>] [--diagnostics-dir <dir>]
@@ -132,6 +135,9 @@ export type RecallPayload = { results: RecallResult[]; message?: string };
 
 export type NoteShowPayload = { note: NoteRecord; provenance_events: Array<Record<string, unknown>> | null };
 
+type WhyOptions = { injectionId: string; json: boolean; diagnosticsDir: string };
+type WhyNotOptions = { query: string; noteId: string; projectSlug?: string; global: boolean; dataDir: string };
+
 function parseNoteShowArgs(argv: string[]): NoteShowOptions {
   const [noteId, ...rest] = argv;
   if (!noteId || noteId.startsWith('--')) {
@@ -224,6 +230,69 @@ function parseRecallArgs(argv: string[]): RecallOptions {
     }
   }
 
+  return options;
+}
+
+function parseWhyArgs(argv: string[]): WhyOptions {
+  const [injectionId, ...rest] = argv;
+  if (!injectionId || injectionId.startsWith('--')) {
+    throw new Error('why requires <injection_id>');
+  }
+
+  const options: WhyOptions = { injectionId, json: false, diagnosticsDir: DIAGNOSTICS_DIR };
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === '--json') {
+      options.json = true;
+    } else if (arg === '--diagnostics-dir') {
+      const value = rest[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --diagnostics-dir requires a value');
+      }
+      options.diagnosticsDir = value;
+      i += 1;
+    } else {
+      throw new Error(`unexpected argument: ${arg}`);
+    }
+  }
+  return options;
+}
+
+function parseWhyNotArgs(argv: string[]): WhyNotOptions {
+  const [query, noteId, ...rest] = argv;
+  if (!query || query.startsWith('--')) {
+    throw new Error('why-not requires <query>');
+  }
+  if (!noteId || noteId.startsWith('--')) {
+    throw new Error('why-not requires <note_id>');
+  }
+
+  const options: WhyNotOptions = { query, noteId, global: false, dataDir: DATA_DIR };
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === '--global') {
+      options.global = true;
+    } else if (arg === '--project') {
+      const value = rest[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --project requires a value');
+      }
+      options.projectSlug = value;
+      i += 1;
+    } else if (arg === '--data-dir') {
+      const value = rest[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --data-dir requires a value');
+      }
+      options.dataDir = value;
+      i += 1;
+    } else {
+      throw new Error(`unexpected argument: ${arg}`);
+    }
+  }
+  if (!options.projectSlug && !options.global) {
+    throw new Error('why-not requires --project <slug> or --global');
+  }
   return options;
 }
 
@@ -596,6 +665,61 @@ function recallCommand(options: RecallOptions): void {
   process.stdout.write(payload.results.map(formatRecallResult).join('\n') + (payload.results.length > 0 ? '\n' : ''));
 }
 
+function formatTrace(trace: InjectionTrace): string {
+  const lines = [
+    `Injection: ${trace.injection_id}`,
+    `Path: ${trace.path ?? '(unknown)'}`,
+    `Query: ${trace.query}`,
+    `Indexed Through: ${trace.indexed_through}`,
+    `Config: ${JSON.stringify(trace.config_snapshot)}`,
+    'Candidates:',
+  ];
+  const shipped = new Set(trace.shipped_note_ids);
+  for (const candidate of trace.candidates) {
+    const status = shipped.has(candidate.note_id) ? 'shipped' : `cut=${candidate.cut_reason ?? '(unknown)'}`;
+    lines.push(
+      `- ${candidate.note_id}: raw=${candidate.raw_score.toFixed(4)} -> post=${candidate.post_weight_score.toFixed(4)} ${status}`,
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
+function whyCommand(options: WhyOptions): void {
+  const trace = readInjectionTraces(options.diagnosticsDir).find((row) => row.injection_id === options.injectionId);
+  if (trace === undefined) {
+    throw new Error(`trace not found — diagnostics may have been deleted: ${options.injectionId}`);
+  }
+  process.stdout.write(options.json ? JSON.stringify(trace) + '\n' : formatTrace(trace));
+}
+
+function formatWhyNot(result: WhyNotResult): string {
+  if (!result.matched) {
+    return `${result.note_id}: not matched by BM25 at all\n`;
+  }
+  return [
+    `Note: ${result.note_id}`,
+    `Rank: ${result.rank}`,
+    `Raw Score: ${result.raw_score.toFixed(4)}`,
+    `Post-weight Score: ${result.post_weight_score.toFixed(4)}`,
+    `Gate: ${result.gate}`,
+  ].join('\n') + '\n';
+}
+
+function whyNotCommand(options: WhyNotOptions): void {
+  const ts = new Date().toISOString();
+  const db = new Database(':memory:');
+  try {
+    migrate(db);
+    indexNotes(db, options.dataDir);
+    // Explain against the pull-path result budget the seam actually ships (10), not the
+    // scoring RESULT_CAP default (5), so the budget gate matches `librarian recall`.
+    const opts = { ...options, limit: PULL_RECALL_DEFAULT_LIMIT };
+    process.stdout.write(formatWhyNot(whyNot(db, options.query, options.noteId, opts, DEFAULT_SCORING_CONFIG, ts)));
+  } finally {
+    db.close();
+  }
+}
+
 function injectCommand(options: InjectionOptions): void {
   options.query = options.sessionStart ? '' : fs.readFileSync(0, 'utf8');
   const block = buildInjection(options);
@@ -616,6 +740,12 @@ async function main(argv: string[]): Promise<void> {
       break;
     case 'recall':
       recallCommand(parseRecallArgs(rest));
+      break;
+    case 'why':
+      whyCommand(parseWhyArgs(rest));
+      break;
+    case 'why-not':
+      whyNotCommand(parseWhyNotArgs(rest));
       break;
     case 'inject':
       injectCommand(parseInjectArgs(rest));
