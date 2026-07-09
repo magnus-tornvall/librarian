@@ -13,6 +13,24 @@ import { ulid } from 'ulid';
  * machinery here is the part that survives when a detached child arrives (§3).
  * Deliberately NOT a generic lock manager — one acquire/release pair, one call
  * site today (issue #59 "Do not relitigate").
+ *
+ * KNOWN LIMITATION — stale recovery is not race-free under simultaneous
+ * contention (deferred to #63, the hardening capstone). The mutual-exclusion
+ * this guarantees is exact for the common case: a live, FRESH holder is always
+ * seen (`EEXIST` → not stale → caller yields), so two normally-triggered distill
+ * runs never both drain — which is the issue's DoD. The gap is narrow and
+ * different: IF a crash leaves a STALE lock AND two or more runs start in the
+ * same instant, both can read that one stale lock and both reach the
+ * check-then-`unlink`-by-path recovery below; the second `unlink` can delete the
+ * first's freshly re-created lock, yielding two owners. Root cause: recovery is
+ * read-incumbent → judge-stale → remove → recreate, and POSIX path ops
+ * (`unlink`/`rename`/`rmdir`) act on the path, not the inode inspected, so
+ * "remove only if unchanged" is a compare-and-swap the filesystem does not offer
+ * for free (four hand-rolled POSIX-only designs each still breached ~7% in a
+ * multi-process peak-concurrency stress test). Closing it wants a real
+ * single-writer primitive (a lockfile library / `flock`), which is out of scope
+ * for this v1 and belongs to the #63 hardening pass. Under no contention, and
+ * under contention with a live holder, behaviour is correct.
  */
 
 /** On-disk lock body. `token` proves ownership; only its holder may release. */
@@ -113,6 +131,10 @@ export function acquireLock(lockPath: string, options: AcquireOptions): Lock | n
 
     // Stale: drop it and retry the exclusive create. unlink ENOENT means another
     // recoverer beat us to the delete — fine, the retry create will decide.
+    // ponytail: this unlink-by-path is the stale-recovery race documented in the
+    // file header — under simultaneous stale-recovery it can delete a co-racer's
+    // fresh lock. Correct for the DoD's live-holder case; a CAS-safe primitive
+    // (lockfile lib / flock) is the #63 hardening fix.
     try {
       fs.unlinkSync(lockPath);
     } catch (err) {
