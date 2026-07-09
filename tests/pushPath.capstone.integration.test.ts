@@ -232,6 +232,11 @@ function listFiles(dir: string): string[] {
   return out.sort();
 }
 
+/** Byte-snapshot every file under a directory, keyed by relative path — for whole-tree immutability checks. */
+function snapshotDir(dir: string): Record<string, string> {
+  return Object.fromEntries(listFiles(dir).map((rel) => [rel, fs.readFileSync(path.join(dir, rel), 'utf8')]));
+}
+
 /**
  * The distiller is dumb — it mints an episodic note with a fresh ULID id, not a stable one.
  * Seed enough realistic decoys that the corpus IDF stays positive (a lone note scores below
@@ -384,11 +389,15 @@ test('push path capstone: a real distilled note surfaces unprompted through BOTH
     restoreEnv('MACHINE_ID_PATH', prevMachine);
   }
 
-  // --- Diagnostics isolation: the note log is byte-identical; all injection writes are confined ---
+  // --- Isolation: the NOTE log is byte-identical (memory is read-only across recall) -----
+  // Note the scope of this claim: the adapters DO write to data/events/ — driving the real
+  // hook/plugin collects the prompt as an event (that is instrumentation, by design). What must
+  // never change is data/notes/: recall/injection may not rewrite distilled memory. The stronger
+  // "only diagnostics changes" claim is proven for the bare inject/why seam in its own test below.
   assert.deepEqual(
     snapshotNotes(t.dataDir),
     notesBefore,
-    'neither adapter nor `why` may mutate the note log — recall is read-only',
+    'neither adapter nor `why` may mutate the note log — distilled memory is read-only across recall',
   );
   const diagFiles = listFiles(t.diagnosticsDir);
   assert.ok(
@@ -453,8 +462,11 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
   assert.equal(seam.status, 0, `seam inject should exit 0; stderr: ${seam.stderr}`);
   assert.equal(seam.stdout, '', 'a below-floor query surfaces no block');
 
-  // Adapter A: Claude Code hook emits no additionalContext at all.
-  const bin = makeLibrarianBin(t.root, t.dataDir, t.diagnosticsDir);
+  // Adapter A: Claude Code hook emits no additionalContext at all. Its own diagnostics dir keeps
+  // its trace store separate from the direct-seam one above, so the below_floor assertion below
+  // is proven against the trace THIS transport wrote, not the seam's.
+  const ccDiag = path.join(t.root, 'cc-diag');
+  const bin = makeLibrarianBin(t.root, t.dataDir, ccDiag);
   const ccResult = runHookEntry(
     { session_id: 'cc-floor', cwd: t.repo, hook_event_name: 'UserPromptSubmit', prompt: query },
     t.repo,
@@ -463,8 +475,9 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
   assert.equal(ccResult.status, 0, `claude-code hook should exit 0; stderr: ${ccResult.stderr}`);
   assert.equal(ccResult.stdout, '', 'below-floor: the hook must emit no hookSpecificOutput through the real transport');
 
-  // Adapter B: OpenCode splices zero tagged parts.
-  const ocBin = makeOpenCodeBin(t.root, t.dataDir, t.diagnosticsDir);
+  // Adapter B: OpenCode splices zero tagged parts — likewise against its own diagnostics dir.
+  const ocDiag = path.join(t.root, 'oc-diag');
+  const ocBin = makeOpenCodeBin(t.root, t.dataDir, ocDiag);
   const prevBin = process.env.LIBRARIAN_BIN;
   const prevRuntime = process.env.LIBRARIAN_RUNTIME;
   const prevMachine = process.env.MACHINE_ID_PATH;
@@ -493,14 +506,21 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
   }
 
   // The diagnostics trace proves the drop was a below_floor cut, not a silent miss — the empty
-  // slot beat the distractor on the record, through the real transport.
-  const floorTrace = readTraces(t.diagnosticsDir).find(
-    (row) => row.path === 'push' && row.query === query && row.shipped_note_ids.length === 0,
-  );
-  assert.ok(floorTrace, 'diagnostics must contain a push trace for the below-floor query that shipped nothing');
-  const cut = floorTrace.candidates.find((candidate) => candidate.note_id === floorNoteId);
-  assert.ok(cut, 'the below-floor note must appear as a recorded candidate');
-  assert.equal(cut.cut_reason, 'below_floor', 'the candidate must be cut for below_floor, proving the floor gate fired');
+  // slot beat the distractor on the record. Asserted PER TRANSPORT against each adapter's own
+  // diagnostics dir, so each trace can only have come from that adapter's real inject call.
+  for (const [label, diag] of [
+    ['seam', t.diagnosticsDir],
+    ['claude-code', ccDiag],
+    ['opencode', ocDiag],
+  ] as const) {
+    const floorTrace = readTraces(diag).find(
+      (row) => row.path === 'push' && row.query === query && row.shipped_note_ids.length === 0,
+    );
+    assert.ok(floorTrace, `${label}: diagnostics must contain a push trace for the below-floor query that shipped nothing`);
+    const cut = floorTrace.candidates.find((candidate) => candidate.note_id === floorNoteId);
+    assert.ok(cut, `${label}: the below-floor note must appear as a recorded candidate`);
+    assert.equal(cut.cut_reason, 'below_floor', `${label}: the candidate must be cut for below_floor, proving the floor gate fired`);
+  }
 
   // `why-not` on the same note names the gate the floor applied — the human-facing explanation.
   const whyNot = runCli(['why-not', query, floorNoteId, '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir]);
@@ -508,6 +528,39 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
   assert.match(whyNot.stdout, /Gate: below_floor/, 'why-not must name the below_floor gate for the cut note');
 
   assert.deepEqual(snapshotNotes(t.dataDir), notesBefore, 'the negative path must leave the note log byte-identical too');
+});
+
+test('push path capstone (isolation): the bare inject/why seam confines every write to diagnostics — all of data/ is byte-identical', () => {
+  // The positive/negative tests drive the full adapters, which also collect prompt events (an
+  // expected write to data/events/). This test isolates the injection/recall seam itself — the
+  // one path that must be strictly read-only against the whole data dir — by driving `inject`
+  // and `why` directly, with no `collect` in the loop. Here the strong claim holds: nothing
+  // under data/ may change, and the only new writes land under diagnostics/.
+  const t = makeTempDirs();
+  seedDecoysViaSession(t);
+  collect(t.dataDir, fixtureEvents('push-isolation-session'));
+  distill(t);
+
+  const dataBefore = snapshotDir(t.dataDir);
+  const query = 'quokka index rebuild';
+
+  const seam = runCli(
+    ['inject', '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir],
+    query,
+  );
+  assert.equal(seam.status, 0, `seam inject should exit 0; stderr: ${seam.stderr}`);
+  const injectionId = injectionIdOf(seam.stdout);
+
+  const why = runCli(['why', injectionId, '--diagnostics-dir', t.diagnosticsDir]);
+  assert.equal(why.status, 0, `why should exit 0; stderr: ${why.stderr}`);
+
+  // The whole data dir — events AND notes — is untouched by inject/why.
+  assert.deepEqual(snapshotDir(t.dataDir), dataBefore, 'inject/why must not write anything under data/ — the seam is read-only');
+  // And the only place a write landed is diagnostics/injections/.
+  assert.ok(
+    listFiles(t.diagnosticsDir).some((rel) => rel.startsWith(`injections${path.sep}`)),
+    'the injection trace must land under diagnostics/injections/',
+  );
 });
 
 function restoreEnv(key: string, prev: string | undefined): void {
