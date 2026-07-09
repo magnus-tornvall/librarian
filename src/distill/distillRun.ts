@@ -4,6 +4,7 @@ import type { InferenceProvider } from './provider.ts';
 import { distill } from './llmDistiller.ts';
 import { appendNote } from '../log/noteLog.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
+import { acquireLock } from '../log/lock.ts';
 import {
   writeDistillVerdict,
   makeVerdictId,
@@ -21,6 +22,21 @@ import {
 
 /** Consumer name stamped on every cursor this command owns (§5). */
 const CONSUMER = 'distiller';
+
+/**
+ * A distiller lock older than this (ms) is presumed abandoned and recovered,
+ * even if its PID is still live — a pass that has run this long is wedged, not
+ * working. Ten minutes is far past any real distill pass (a handful of provider
+ * calls) yet short enough that a crashed run doesn't block the next trigger for
+ * long. Named constant, not config, until real usage says otherwise (§4).
+ * ponytail: fixed timeout; make it a flag only if pass durations ever vary enough to matter.
+ */
+const LOCK_STALE_MS = 10 * 60 * 1000;
+
+/** One distiller lock guards the whole data dir against concurrent passes (§5). */
+function lockPathFor(dataDir: string): string {
+  return path.join(dataDir, 'locks', 'distiller.lock');
+}
 
 /**
  * Skip-heuristic thresholds — the SuperBrain-proven values (§3, endorsed in §5:
@@ -160,8 +176,31 @@ export type DistillRunOptions = {
  * this rethrows WITHOUT advancing that session's cursor and without writing a
  * success verdict, so the CLI exits non-zero and the next run retries the same
  * range (bounded retries/quarantine are roadmap item 9, not here).
+ *
+ * Single-writer (§5): the whole pass runs under one lock at
+ * `<dataDir>/locks/distiller.lock`. A live, fresh holder means another run is
+ * already draining the same backlog — a normal outcome under lazy triggering,
+ * not an error — so we print a notice to stderr and return (the CLI exits 0).
+ * The lock is released in `finally`, so no lock file survives a clean run; a
+ * crashed holder is recovered by the next run's stale check (dead PID or
+ * timeout). This guards concurrent invocations only — it does not create a
+ * resident worker or watch loop (§4, "Do not relitigate").
  */
 export async function runDistill(options: DistillRunOptions): Promise<void> {
+  const lock = acquireLock(lockPathFor(options.dataDir), { staleMs: LOCK_STALE_MS });
+  if (lock === null) {
+    // Someone live and fresh is already draining this backlog — not an error.
+    process.stderr.write('librarian: distill already running (lock held); nothing to do\n');
+    return;
+  }
+  try {
+    await runDistillPass(options);
+  } finally {
+    lock.release();
+  }
+}
+
+async function runDistillPass(options: DistillRunOptions): Promise<void> {
   const { dataDir, diagnosticsDir, provider } = options;
   const eventsDir = path.join(dataDir, 'events');
   if (!fs.existsSync(eventsDir)) {
