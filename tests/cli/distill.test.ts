@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -429,5 +429,80 @@ test('distill: a partial trailing line is left unconsumed until it completes', (
     cursorAfterSecond!.byte_offset,
     eof,
     'once completed, the trailing line is consumed and the cursor reaches EOF',
+  );
+});
+
+/** Spawn `librarian distill` without blocking, resolving to {status, stderr}. */
+function distillAsync(
+  dataDir: string,
+  diagnosticsDir: string,
+  fixturePath: string,
+): Promise<{ status: number | null; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      'node',
+      [
+        CLI,
+        'distill',
+        '--data-dir',
+        dataDir,
+        '--diagnostics-dir',
+        diagnosticsDir,
+        '--provider-fixture',
+        fixturePath,
+      ],
+      { stdio: ['ignore', 'ignore', 'pipe'] },
+    );
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('close', (status) => resolve({ status, stderr }));
+  });
+}
+
+test('distill: two concurrent spawns over one eligible session mint exactly one note; both exit 0', async () => {
+  const root = tempDir('cli-distill-concurrent-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixture(root);
+  const sessionId = 'sess-concurrent';
+
+  ingest(dataDir, eligibleEvents(sessionId));
+
+  // Fire both distill processes at once and let them race the same backlog. The
+  // single-writer lock (§5, issue #59) must let exactly one drain it: without
+  // the lock both read the same delta before either advances its cursor, and
+  // both append a note — the duplicate-memory bug the lock exists to close.
+  const [a, b] = await Promise.all([
+    distillAsync(dataDir, diagnosticsDir, fixturePath),
+    distillAsync(dataDir, diagnosticsDir, fixturePath),
+  ]);
+
+  // Both exit 0: the winner distills; the loser finds the lock held by a live
+  // fresh process and returns cleanly — a normal outcome under lazy triggering.
+  assert.equal(a.status, 0, `first spawn should exit 0; stderr: ${a.stderr}`);
+  assert.equal(b.status, 0, `second spawn should exit 0; stderr: ${b.stderr}`);
+
+  // Exactly one note, no matter which process won the lock.
+  assert.equal(
+    noteRevisions(dataDir).length,
+    1,
+    'two concurrent distill runs over one session must mint exactly one note',
+  );
+
+  // At most one spawn reports the lock held: if they truly overlapped the loser
+  // says so; if the first fully finished (acquire→distill→release) before the
+  // second even tried, the second acquires cleanly, reads an already-drained
+  // backlog, and mints nothing — still exactly one note either way. What must
+  // NEVER happen is both draining: that shows up as the note count above.
+  const noticed = [a, b].filter((r) => /already running/.test(r.stderr));
+  assert.ok(noticed.length <= 1, 'the lock notice must never fire on both spawns');
+
+  // No lock file survives a clean run — both released in finally (DoD).
+  assert.equal(
+    fs.existsSync(path.join(dataDir, 'locks', 'distiller.lock')),
+    false,
+    'no lock file may remain after a clean run',
   );
 });
