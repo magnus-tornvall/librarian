@@ -506,3 +506,153 @@ test('distill: two concurrent spawns over one eligible session mint exactly one 
     'no lock file may remain after a clean run',
   );
 });
+
+// ── Re-distill invariant by provenance (issue #61, §5, roadmap item 9) ──────────
+// Nasty-path: the two windows that re-distill an already-provenanced range —
+// (1) a crash between appendNote and advanceCursor, simulated by rolling the
+// cursor back to its pre-run offset; (2) a lost/corrupt cursor rewound to 0,
+// simulated with garbage bytes. Both must yield EXACTLY ONE note for the range,
+// a healthy cursor, and an `already_provenanced` verdict — not a duplicate note.
+
+/** All distill verdicts written under the diagnostics dir, newest-segment last. */
+function readVerdicts(diagnosticsDir: string): Array<Record<string, unknown>> {
+  const verdictDir = path.join(diagnosticsDir, 'distill');
+  if (!fs.existsSync(verdictDir)) return [];
+  return fs
+    .readdirSync(verdictDir)
+    .filter((n) => n.endsWith('.ndjson'))
+    .sort()
+    .flatMap((n) => readAll(path.join(verdictDir, n)) as Array<Record<string, unknown>>);
+}
+
+test('distill: cursor rolled back to its pre-run offset re-runs to exactly one note (append-then-crash window)', () => {
+  const root = tempDir('cli-distill-rollback-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixture(root);
+  const sessionId = 'sess-rollback';
+
+  ingest(dataDir, eligibleEvents(sessionId));
+
+  // First pass distills and advances the cursor to EOF.
+  const first = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(first.status, 0, `first distill should exit 0; stderr: ${first.stderr}`);
+  assert.equal(noteRevisions(dataDir).length, 1, 'first pass mints one note');
+  const advanced = readCursorOrNull(dataDir, sessionId);
+  assert.ok(advanced, 'a cursor should exist after the first pass');
+
+  // Simulate the crash between appendNote and advanceCursor: the note is durable
+  // but the cursor never advanced — roll it back to the pre-run offset (0).
+  const rolledBack = { ...advanced!, byte_offset: 0 };
+  fs.writeFileSync(cursorPath(dataDir, sessionId), JSON.stringify(rolledBack, null, 2));
+
+  // Re-run: the provenance guard sees the existing note covering this range and
+  // skips the second append — exactly one note, cursor re-advanced.
+  const second = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(second.status, 0, `re-run should exit 0; stderr: ${second.stderr}`);
+  assert.equal(
+    noteRevisions(dataDir).length,
+    1,
+    're-distilling a rolled-back cursor must NOT mint a second note for the same range',
+  );
+
+  // Cursor healthy again (advanced past the replayed delta).
+  const healed = readCursorOrNull(dataDir, sessionId);
+  const logBytes = fs.statSync(eventLogPath(dataDir, sessionId)).size;
+  assert.equal(healed!.byte_offset, logBytes, 'cursor must re-advance to EOF after the guarded replay');
+
+  // An already_provenanced verdict was written for the skipped replay.
+  const verdicts = readVerdicts(diagnosticsDir);
+  assert.ok(
+    verdicts.some((v) => v.session_id === sessionId && v.reason === 'already_provenanced'),
+    'an already_provenanced verdict must record the skipped re-distill',
+  );
+});
+
+test('distill: a cursor file of garbage bytes replays from 0 to exactly one note, healthy cursor rebuilt', () => {
+  const root = tempDir('cli-distill-garbage-cursor-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixture(root);
+  const sessionId = 'sess-garbage-cursor';
+
+  ingest(dataDir, eligibleEvents(sessionId));
+
+  const first = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(first.status, 0, `first distill should exit 0; stderr: ${first.stderr}`);
+  assert.equal(noteRevisions(dataDir).length, 1, 'first pass mints one note');
+
+  // Corrupt the cursor file with non-JSON bytes (disk corruption / partial write).
+  fs.writeFileSync(cursorPath(dataDir, sessionId), '\x00\xff not json at all \x01');
+
+  const second = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(second.status, 0, `re-run over a garbage cursor should still exit 0; stderr: ${second.stderr}`);
+
+  // Loud warning on stderr — a corrupt cursor is never silent (§5).
+  assert.match(
+    second.stderr,
+    /cursor.*unreadable|treating as offset 0/i,
+    'a corrupt cursor must be reported loudly on stderr',
+  );
+
+  // Same outcome as rollback: one note (provenance guard), cursor rebuilt healthy.
+  assert.equal(
+    noteRevisions(dataDir).length,
+    1,
+    'a garbage cursor must replay duplicate-free — exactly one note for the range',
+  );
+  const healed = readCursorOrNull(dataDir, sessionId);
+  const logBytes = fs.statSync(eventLogPath(dataDir, sessionId)).size;
+  assert.ok(healed, 'a healthy cursor must be rebuilt after replay');
+  assert.equal(healed!.byte_offset, logBytes, 'the rebuilt cursor must point at EOF');
+});
+
+test('distill: the guard blocks only covered ranges — NEW events after a guarded replay distill normally', () => {
+  const root = tempDir('cli-distill-guard-control-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixture(root);
+  const sessionId = 'sess-guard-control';
+
+  // Distill once, then roll the cursor back so the next run replays the range.
+  ingest(dataDir, eligibleEvents(sessionId));
+  const first = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(first.status, 0, `first distill should exit 0; stderr: ${first.stderr}`);
+  const advanced = readCursorOrNull(dataDir, sessionId);
+  fs.writeFileSync(cursorPath(dataDir, sessionId), JSON.stringify({ ...advanced!, byte_offset: 0 }, null, 2));
+
+  // The guarded replay mints nothing.
+  const replay = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(replay.status, 0, `guarded replay should exit 0; stderr: ${replay.stderr}`);
+  assert.equal(noteRevisions(dataDir).length, 1, 'the guarded replay mints no note');
+
+  // Now append a genuinely NEW eligible delta (turns well past the first batch).
+  const fresh: Array<Record<string, unknown>> = [
+    promptEvent(sessionId, 40, 'add rate limiting to the token endpoint'),
+    writeToolEvent(sessionId, 41, 'src/auth/rateLimit.ts'),
+    promptEvent(sessionId, 42, 'and a test for the 429 path'),
+  ];
+  for (let turn = 43; turn <= 50; turn += 1) {
+    fresh.push(readToolEvent(sessionId, turn, `src/fresh-${turn}.ts`));
+  }
+  ingest(dataDir, fresh);
+
+  // The guard fires only on already-covered ranges: this NEW range distills.
+  const third = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(third.status, 0, `distill of the new delta should exit 0; stderr: ${third.stderr}`);
+  const notes = noteRevisions(dataDir);
+  assert.equal(notes.length, 2, 'a NEW event range after the guard fired must distill into a second note');
+
+  // The second note is provenanced to the NEW delta only, not the guarded range.
+  const freshIds = fresh.map((e) => e.event_id);
+  const freshNote = notes.find((n) => {
+    const ids = (n.provenance as Record<string, unknown>).event_ids as string[];
+    return ids.length === freshIds.length && ids[0] === freshIds[0];
+  });
+  assert.ok(freshNote, 'the second note must cover the new delta');
+  assert.deepEqual(
+    (freshNote!.provenance as Record<string, unknown>).event_ids,
+    freshIds,
+    'the new note must be provenanced to the new events only',
+  );
+});

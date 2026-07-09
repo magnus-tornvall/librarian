@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { InferenceProvider } from './provider.ts';
 import { distill } from './llmDistiller.ts';
-import { appendNote } from '../log/noteLog.ts';
+import { appendNote, readAllNotes } from '../log/noteLog.ts';
+import type { NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
 import { acquireLock } from '../log/lock.ts';
 import {
@@ -150,6 +151,75 @@ function makeCursor(
   };
 }
 
+/**
+ * The [from, to] event-id range a note revision covers, or null if it carries no
+ * range-bearing provenance. Prefers the explicit `event_range`; else derives the
+ * closed range from the min/max of `event_ids`. Event IDs are ULIDs, so min/max
+ * is a lexicographic sort — the same ordering the overlap check relies on.
+ */
+function provenancedRange(note: NoteRevision): { from: string; to: string } | null {
+  const { event_range, event_ids } = note.provenance;
+  if (event_range) {
+    return { from: event_range.from_event_id, to: event_range.to_event_id };
+  }
+  if (event_ids && event_ids.length > 0) {
+    const sorted = [...event_ids].sort();
+    return { from: sorted[0], to: sorted[sorted.length - 1] };
+  }
+  return null;
+}
+
+/** Two closed ranges overlap iff each starts no later than the other ends. */
+function rangesOverlap(a: { from: string; to: string }, b: { from: string; to: string }): boolean {
+  return a.from <= b.to && b.from <= a.to;
+}
+
+/**
+ * Re-distill invariant by provenance (§5, roadmap item 9): a note already
+ * provenanced over an overlapping event range in this session means this delta
+ * was distilled before — a crash between `appendNote` and `advanceCursor`, or a
+ * lost/corrupted cursor rewound to 0, is replaying it. Returns true iff such a
+ * note exists, so the caller skips the append and just advances past the delta.
+ *
+ * ponytail: linear provenance scan; index by session_id when note logs get big.
+ */
+function alreadyProvenanced(
+  dataDir: string,
+  sessionId: string,
+  delta: { from: string; to: string },
+): boolean {
+  for (const record of readAllNotes(dataDir) as NoteRecordLike[]) {
+    if (record.kind !== 'note_revision') continue;
+    const note = record as NoteRevision;
+    if (note.provenance.session_id !== sessionId) continue;
+    const covered = provenancedRange(note);
+    if (covered && rangesOverlap(covered, delta)) return true;
+  }
+  return false;
+}
+
+/** Minimal shape for scanning the note log without asserting full NoteRecord. */
+type NoteRecordLike = { kind?: string } & Partial<NoteRevision>;
+
+/**
+ * Read the distiller cursor, surviving a corrupted/unparseable cursor file. A
+ * cursor is a recovery hint, not memory: a garbage cursor must never wedge the
+ * pass (§5). On any read/parse failure, warn loudly on stderr and return null so
+ * the caller starts from offset 0 and replays — the provenance guard
+ * (`alreadyProvenanced`) makes that replay duplicate-free instead of catastrophic.
+ */
+function readCursorResilient(cursorPath: string): Cursor | null {
+  try {
+    return readCursor(cursorPath);
+  } catch (err) {
+    process.stderr.write(
+      `librarian: distiller cursor ${cursorPath} is unreadable (${(err as Error).message}); ` +
+        `treating as offset 0 and replaying (provenance guard prevents duplicates)\n`,
+    );
+    return null;
+  }
+}
+
 export type DistillRunOptions = {
   dataDir: string;
   diagnosticsDir: string;
@@ -217,7 +287,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
     const logFilePath = path.join(eventsDir, logName);
     const cursorPath = cursorPathFor(dataDir, sessionId);
 
-    const cursor = readCursor(cursorPath);
+    const cursor = readCursorResilient(cursorPath);
     const startOffset = cursor?.byte_offset ?? 0;
 
     const fileBytes = fs.readFileSync(logFilePath);
@@ -252,6 +322,27 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
         session_id: sessionId,
         decision: 'skipped',
         reason: skip,
+        counts,
+      };
+      writeDistillVerdict(diagnosticsDir, verdict);
+      advanceCursor(cursorPath, makeCursor(logFilePath, sessionId, newOffset, lastRecordId));
+      continue;
+    }
+
+    // Re-distill invariant (§5, roadmap item 9): if a note already covers an
+    // overlapping event range for this session, this delta was distilled before
+    // (crash in the appendNote→advanceCursor window, or a rewound/corrupt cursor
+    // replaying from 0). Skip the second note; just advance past the delta.
+    const deltaFrom = events[0].event_id as string;
+    const deltaTo = lastRecordId ?? deltaFrom;
+    if (alreadyProvenanced(dataDir, sessionId, { from: deltaFrom, to: deltaTo })) {
+      const verdict: DistillVerdict = {
+        record_class: 'diagnostic',
+        verdict_id: makeVerdictId(),
+        ts: new Date().toISOString(),
+        session_id: sessionId,
+        decision: 'skipped',
+        reason: 'already_provenanced',
         counts,
       };
       writeDistillVerdict(diagnosticsDir, verdict);
