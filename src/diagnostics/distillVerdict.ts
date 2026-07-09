@@ -4,9 +4,11 @@ import { appendRecord } from '../log/ndjson.ts';
 
 /**
  * Distill verdict (§8 "Distill verdicts"): one record per session delta the
- * `distill` command considered, naming what it decided — distilled or skipped,
- * and (on a skip) why. The counts that drove the skip heuristic (§3) are kept
- * so a verdict is self-explaining without re-reading the event log.
+ * `distill` command considered, naming what it decided — distilled, skipped, or
+ * quarantined (retries exhausted / unparseable line), and why. The counts that
+ * drove the skip heuristic (§3) are kept so a verdict is self-explaining without
+ * re-reading the event log; a quarantine verdict additionally carries the byte
+ * range a human needs to re-attempt.
  *
  * Structural isolation (§8): these records live under the diagnostics dir
  * (`~/.librarian/diagnostics/…` via `paths.ts`), NEVER the data/note log.
@@ -23,7 +25,7 @@ export type DistillVerdict = {
   verdict_id: string;
   ts: string;
   session_id: string;
-  decision: 'distilled' | 'skipped';
+  decision: 'distilled' | 'skipped' | 'quarantined';
   reason: string;
   counts: {
     events: number;
@@ -32,6 +34,21 @@ export type DistillVerdict = {
     salience_hints: number;
   };
   note_id?: string;
+  /**
+   * Quarantine breadcrumb (§5, issue #60): present only on a `quarantined`
+   * verdict. Names the exact byte range in the (sacred, untouched) event log a
+   * human must reset the cursor to in order to re-attempt, the attempt count
+   * that exhausted the retry budget (or `null` for an unparseable line, which
+   * gets no retry loop), and the last error that caused the give-up. The bytes
+   * themselves are never moved or annotated — this verdict IS the recovery.
+   */
+  quarantine?: {
+    file_path: string;
+    byte_start: number;
+    byte_end: number;
+    attempts: number | null;
+    last_error: string;
+  };
 };
 
 /** Monthly segment path, mirroring the note log and injection trace: a verdict
