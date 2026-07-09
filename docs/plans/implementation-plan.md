@@ -60,7 +60,7 @@ Phase 0 (001) explicitly installs neither `better-sqlite3` nor `@modelcontextpro
 
 ## What's deliberately not in this plan
 
-- Roadmap items 5–11 (curated Markdown ingestion, real instrumentation, MCP server, push adapters, hardening, second provider/exporter, non-agent integrations). Not exploded into backlog tasks yet — the prompt that produced this plan scoped backlog generation to roadmap items 1–4. Explode the next phase only after the walking skeleton (026) is merged and has taught whatever it's going to teach about the note schema (§12 says as much: "revise the note schema from what the skeleton teaches").
+- Roadmap items 5–12 (curated Markdown ingestion, real instrumentation, MCP server, push adapters, hardening, second provider/exporter, non-agent integrations, memory correctness & maintenance). Not exploded into backlog tasks yet — the prompt that produced this plan scoped backlog generation to roadmap items 1–4. Explode the next phase only after the walking skeleton (026) is merged and has taught whatever it's going to teach about the note schema (§12 says as much: "revise the note schema from what the skeleton teaches").
 - Anything the spec explicitly deferred (§5 "Deleted / deferred", §13/§15 "Open items"). Building those now would be relitigating a settled decision.
 
 ### Post-skeleton composability work (deferred)
