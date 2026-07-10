@@ -818,3 +818,40 @@ test('distill: a corrupt mid-file JSON line is quarantined; the surrounding line
   // Sacred log: the corrupt bytes were never rewritten or removed by the reader.
   assert.deepEqual(fs.readFileSync(logPath), logAfterSplice, 'the event log must be byte-identical after the run');
 });
+
+test('distill: a corrupt line whose valid remainder keeps failing is quarantined once, not once per retry', () => {
+  const root = tempDir('cli-distill-corrupt-retry-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-corrupt-retry';
+
+  // A non-JSON provider fixture → the valid surrounding delta throws every run.
+  const badFixture = writeFixtureContent(root, 'not json — a model that always ignores the instruction');
+
+  // Ingest an eligible batch, then splice a corrupt COMPLETE line mid-file.
+  const events = eligibleEvents(sessionId);
+  ingest(dataDir, events);
+  const logPath = eventLogPath(dataDir, sessionId);
+  const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter((l) => l.length > 0);
+  const corruptLine = '{"schema_version":1,"type":"prompt","event_id":"BROKEN' + ',,,';
+  fs.writeFileSync(logPath, [...lines.slice(0, 5), corruptLine, ...lines.slice(5)].join('\n') + '\n');
+
+  const corruptVerdicts = () =>
+    quarantineVerdicts(diagnosticsDir).filter((v) => (v.quarantine as Record<string, unknown>).attempts === null);
+
+  // Runs 1..2 are under the retry budget: the valid remainder fails the provider,
+  // the cursor OFFSET stays put, and the corrupt line is NOT re-quarantined —
+  // writing it eagerly would loop a verdict over bytes that never parse.
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const r = distill(dataDir, diagnosticsDir, badFixture);
+    assert.notEqual(r.status, 0, `attempt ${attempt} (< MAX) must exit non-zero`);
+    assert.equal(readCursorOrNull(dataDir, sessionId)!.byte_offset, 0, `attempt ${attempt} leaves the offset unmoved`);
+    assert.equal(corruptVerdicts().length, 0, `no corrupt-line verdict while retrying (attempt ${attempt})`);
+  }
+
+  // Run 3 reaches MAX_ATTEMPTS: the whole delta is quarantined and the cursor
+  // advances past it — the corrupt line is now emitted, exactly once.
+  const r3 = distill(dataDir, diagnosticsDir, badFixture);
+  assert.equal(r3.status, 0, `the run reaching MAX_ATTEMPTS must exit 0; stderr: ${r3.stderr}`);
+  assert.equal(corruptVerdicts().length, 1, 'the corrupt-line verdict is emitted exactly once, on the advancing run');
+});

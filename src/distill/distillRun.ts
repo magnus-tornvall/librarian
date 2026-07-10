@@ -343,33 +343,46 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
     const delta = fileBytes.subarray(startOffset).toString('utf8');
     const { events, consumedBytes, corrupt } = parseComplete(delta);
 
-    // Corrupt complete lines are quarantined up front (§5): one verdict per
-    // unparseable line naming its absolute byte range, no retry loop. Their
-    // bytes are covered by the advancing cursor below along with the good lines.
-    for (const bad of corrupt) {
-      writeDistillVerdict(diagnosticsDir, {
-        record_class: 'diagnostic',
-        verdict_id: makeVerdictId(),
-        ts: new Date().toISOString(),
-        session_id: sessionId,
-        decision: 'quarantined',
-        reason: `unparseable event line at bytes ${startOffset + bad.byteStart}..${startOffset + bad.byteEnd}: ${bad.error}`,
-        counts: { events: 0, prompts: 0, write_tools: 0, salience_hints: 0 },
-        quarantine: {
-          file_path: logFilePath,
-          byte_start: startOffset + bad.byteStart,
-          byte_end: startOffset + bad.byteEnd,
-          attempts: null,
-          last_error: bad.error,
-        },
-      });
-    }
+    // Corrupt complete lines are quarantined once — but ONLY when the cursor
+    // actually advances past their bytes (§5): a delta whose valid remainder
+    // keeps failing the provider stays at `startOffset` for retry, and writing
+    // the corrupt verdict eagerly would re-emit it on every retry (a verdict
+    // loop over bytes that will never parse). Deferring to the advance keeps it
+    // exactly-once. `advancePast` bundles "write the corrupt verdicts, then
+    // advance" so no advance-past-the-delta site can forget one.
+    let corruptVerdictsWritten = false;
+    const writeCorruptVerdicts = (): void => {
+      if (corruptVerdictsWritten) return;
+      corruptVerdictsWritten = true;
+      for (const bad of corrupt) {
+        writeDistillVerdict(diagnosticsDir, {
+          record_class: 'diagnostic',
+          verdict_id: makeVerdictId(),
+          ts: new Date().toISOString(),
+          session_id: sessionId,
+          decision: 'quarantined',
+          reason: `unparseable event line at bytes ${startOffset + bad.byteStart}..${startOffset + bad.byteEnd}: ${bad.error}`,
+          counts: { events: 0, prompts: 0, write_tools: 0, salience_hints: 0 },
+          quarantine: {
+            file_path: logFilePath,
+            byte_start: startOffset + bad.byteStart,
+            byte_end: startOffset + bad.byteEnd,
+            attempts: null,
+            last_error: bad.error,
+          },
+        });
+      }
+    };
+    const advancePast = (offset: number, lastId: string | undefined): void => {
+      writeCorruptVerdicts();
+      advanceCursor(cursorPath, makeCursor(logFilePath, sessionId, offset, lastId));
+    };
 
     if (events.length === 0) {
       if (corrupt.length > 0) {
         // Only corrupt line(s) in this delta — advance past them so the cursor
         // is not wedged re-reading bytes that will never parse.
-        advanceCursor(cursorPath, makeCursor(logFilePath, sessionId, startOffset + consumedBytes, undefined));
+        advancePast(startOffset + consumedBytes, undefined);
       }
       // Otherwise only a partial trailing line — leave the cursor put, retry later.
       continue;
@@ -397,7 +410,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
         counts,
       };
       writeDistillVerdict(diagnosticsDir, verdict);
-      advanceCursor(cursorPath, makeCursor(logFilePath, sessionId, newOffset, lastRecordId));
+      advancePast(newOffset, lastRecordId);
       continue;
     }
 
@@ -418,7 +431,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
         counts,
       };
       writeDistillVerdict(diagnosticsDir, verdict);
-      advanceCursor(cursorPath, makeCursor(logFilePath, sessionId, newOffset, lastRecordId));
+      advancePast(newOffset, lastRecordId);
       continue;
     }
 
@@ -450,7 +463,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
 
       // Advance only after the note is durably appended (§5 advance-after-success),
       // clearing failed_attempts — a fresh range starts its count at zero.
-      advanceCursor(cursorPath, makeCursor(logFilePath, sessionId, newOffset, lastRecordId));
+      advancePast(newOffset, lastRecordId);
     } catch (err) {
       const lastError = err instanceof Error ? err.message : String(err);
       const priorCount =
@@ -460,6 +473,8 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
       if (attempt < MAX_ATTEMPTS) {
         // Under budget: record the attempt on the cursor (offset UNMOVED) and
         // rethrow so the CLI exits non-zero and the next run retries this range.
+        // No corrupt-line verdicts here — the cursor does not advance past them,
+        // so they are emitted once, on the run that finally advances the delta.
         advanceCursor(
           cursorPath,
           makeCursor(logFilePath, sessionId, startOffset, cursor?.last_record_id, {
@@ -490,7 +505,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
           last_error: lastError,
         },
       });
-      advanceCursor(cursorPath, makeCursor(logFilePath, sessionId, newOffset, lastRecordId));
+      advancePast(newOffset, lastRecordId);
     }
   }
 }
