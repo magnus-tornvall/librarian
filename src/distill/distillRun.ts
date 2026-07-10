@@ -265,13 +265,26 @@ export type DistillRunOptions = {
   provider: InferenceProvider;
 };
 
-/** Per-run tally the drain summary reports (§4). `lockHeld` is true when a live
- * fresh holder made this run a no-op. */
+/**
+ * Per-run tally the drain summary reports (§4).
+ *
+ * `status` says whether this call actually ran a pass: `'pass'` means it held
+ * the lock and processed the backlog (counts reflect real work); `'lock-held'`
+ * means a live fresh holder owned the lock, so this call was a no-op and the
+ * counts are all zero — NOT because nothing was pending, but because someone
+ * else is draining it. A discriminated status reads clearer at the call site
+ * than a `lockHeld: false` that has to be read as "a pass happened".
+ *
+ * `quarantined` counts distinct sessions that had a quarantine this run, not
+ * quarantine records — one session with several corrupt lines is one
+ * quarantined session, so the drain summary's "sessions quarantined" noun is
+ * honest.
+ */
 export type DistillRunResult = {
   distilled: number;
   skipped: number;
   quarantined: number;
-  lockHeld: boolean;
+  status: 'pass' | 'lock-held';
 };
 
 /**
@@ -314,7 +327,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
   if (lock === null) {
     // Someone live and fresh is already draining this backlog — not an error.
     process.stderr.write('librarian: distill already running (lock held); nothing to do\n');
-    return { distilled: 0, skipped: 0, quarantined: 0, lockHeld: true };
+    return { distilled: 0, skipped: 0, quarantined: 0, status: 'lock-held' };
   }
   try {
     return await runDistillPass(options);
@@ -324,7 +337,12 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
 }
 
 async function runDistillPass(options: DistillRunOptions): Promise<DistillRunResult> {
-  const result: DistillRunResult = { distilled: 0, skipped: 0, quarantined: 0, lockHeld: false };
+  const result: DistillRunResult = { distilled: 0, skipped: 0, quarantined: 0, status: 'pass' };
+  // Distinct sessions that had ANY quarantine this run (a corrupt line and/or a
+  // budget-exhausted delta). Set, not a counter: several corrupt lines in one
+  // session is still one quarantined session, so the drain summary's "sessions
+  // quarantined" noun stays honest.
+  const quarantinedSessions = new Set<string>();
   const { dataDir, diagnosticsDir, provider } = options;
   const eventsDir = path.join(dataDir, 'events');
   if (!fs.existsSync(eventsDir)) {
@@ -364,7 +382,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
     const writeCorruptVerdicts = (): void => {
       if (corruptVerdictsWritten) return;
       corruptVerdictsWritten = true;
-      result.quarantined += corrupt.length;
+      if (corrupt.length > 0) {
+        quarantinedSessions.add(sessionId);
+      }
       for (const bad of corrupt) {
         writeDistillVerdict(diagnosticsDir, {
           record_class: 'diagnostic',
@@ -520,8 +540,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         },
       });
       advancePast(newOffset, lastRecordId);
-      result.quarantined += 1;
+      quarantinedSessions.add(sessionId);
     }
   }
+  result.quarantined = quarantinedSessions.size;
   return result;
 }

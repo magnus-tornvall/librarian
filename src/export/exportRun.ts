@@ -23,6 +23,12 @@ import { exportNoteToVault } from './obsidian.ts';
  * ponytail: record-count cursor + O(n) rescan of the full note log per run —
  * mirrors the indexer's decision at this scale; a true byte-offset stream is the
  * upgrade path once the log grows large enough to matter.
+ *
+ * ponytail: the record-count cursor is stable only because every writer stamps
+ * `created_at = now` (llmDistiller / humanDistiller), so append order == the
+ * sorted-segment order this counts against. A writer that ever backdates a
+ * record across a month boundary could land it before the cursor and be skipped;
+ * a per-segment (offset-per-file) cursor is the fix if that ever becomes real.
  */
 
 const CONSUMER = 'exporter';
@@ -91,6 +97,12 @@ export function runExport(options: ExportRunOptions): ExportRunResult {
       if (removeGenerated(vaultDir, noteId)) removed += 1;
       continue;
     }
+    // Remove any stale file first: the export path bakes note_type into the
+    // directory, so if a revision ever changed note_type the old file would
+    // linger beside the new one, breaking idempotency-by-note_id. No writer does
+    // this today (episodic note_type is fixed in the note_id), so it's cheap
+    // insurance, not a live bug — and it costs nothing when there's no stale file.
+    removeGenerated(vaultDir, noteId);
     exportNoteToVault(vaultDir, latest as NoteRevision as unknown as Record<string, unknown>);
     exported += 1;
   }

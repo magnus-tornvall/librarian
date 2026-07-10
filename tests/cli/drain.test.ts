@@ -249,6 +249,38 @@ test('drain: a quarantine-destined session does not block healthy sessions in th
   assert.match(result.stdout, /notes exported: 2/);
 });
 
+test('drain: a session with several corrupt lines counts as ONE quarantined session, not one per line', () => {
+  const root = tempDir('cli-drain-multi-corrupt-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const vaultDir = path.join(root, 'vault');
+  const goodFixture = writeFixture(root);
+
+  // One session, THREE corrupt complete lines spliced into its event log. The
+  // summary counts distinct quarantined SESSIONS, so this must read as 1, not 3
+  // — the "sessions quarantined" noun would otherwise be a lie.
+  ingest(dataDir, eligibleEvents('sess-poison'));
+  const poisonLog = path.join(dataDir, 'events', 'sess-poison.ndjson');
+  const lines = fs.readFileSync(poisonLog, 'utf8').split('\n').filter((l) => l.length > 0);
+  const bad = (n: number): string => `{"schema_version":1,"type":"prompt","event_id":"BROKEN${n}` + ',,,';
+  const spliced = [
+    ...lines.slice(0, 3),
+    bad(1),
+    ...lines.slice(3, 5),
+    bad(2),
+    ...lines.slice(5, 7),
+    bad(3),
+    ...lines.slice(7),
+  ].join('\n') + '\n';
+  fs.writeFileSync(poisonLog, spliced);
+
+  const result = drain(dataDir, diagnosticsDir, goodFixture, vaultDir);
+  assert.equal(result.status, 0, `drain should exit 0; stderr: ${result.stderr}`);
+  assert.match(result.stdout, /sessions quarantined: 1/, 'three corrupt lines in one session is ONE quarantined session');
+  // The surviving events still distilled — the session was not lost.
+  assert.equal(noteRevisions(dataDir).length, 1, 'the surrounding valid events still distill');
+});
+
 test('drain: a tombstoned note has its generated file removed on the next drain', () => {
   const root = tempDir('cli-drain-tombstone-');
   const dataDir = path.join(root, 'data');

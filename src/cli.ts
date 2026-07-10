@@ -549,7 +549,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
 
   const distillWork = distilled.distilled + distilled.skipped + distilled.quarantined;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
-  if (distillWork === 0 && exportWork === 0 && !distilled.lockHeld) {
+  if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
     process.stdout.write('Nothing pending\n');
     return;
   }
