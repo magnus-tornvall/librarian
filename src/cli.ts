@@ -10,6 +10,7 @@ import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { indexNotes } from './index/indexer.ts';
 import { migrate } from './index/schema.ts';
 import { runDistill } from './distill/distillRun.ts';
+import { runExport } from './export/exportRun.ts';
 import { readAll } from './log/ndjson.ts';
 import { readAllNotes } from './log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from './note.ts';
@@ -29,6 +30,8 @@ const USAGE = `usage:
   librarian collect [--data-dir <dir>]     read canonical-event NDJSON on stdin
   librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
+  librarian drain [--data-dir <dir>] [--diagnostics-dir <dir>] [--vault <dir>] [--provider-fixture <file>]
+                                           process everything pending: distill, then export to a vault
   librarian recall <query> --project <slug> [--global] [--origin <origin>] [--limit N] [--json]
                                            search the recall index for pull-path results
   librarian why <injection_id> [--json]    explain a diagnostics injection trace
@@ -520,6 +523,50 @@ async function distillCommand(flags: Map<string, string>): Promise<void> {
 }
 
 /**
+ * `librarian drain` (spec §4: "the manual recovery and debug tool; more
+ * important than any daemon") — one command that processes everything pending
+ * across every log consumer and exits. It COMPOSES the existing consumers; it
+ * never reimplements locking (#59) or failure handling (#60).
+ *
+ *   1. Distill everything pending, under the distiller's own lock. A live lock
+ *      holder is reported on stderr and does NOT abort the drain — the export
+ *      step still runs over whatever notes already exist.
+ *   2. Export everything pending to `<vault>/generated/**` — skipped entirely
+ *      when `--vault` is absent.
+ *   3. Print a one-line-per-fact summary to stdout. "Nothing pending" prints
+ *      exactly that and exits 0 — success, not an error.
+ *
+ * The summary goes to stdout only — never rendered into the vault (§8).
+ */
+async function drainCommand(flags: Map<string, string>): Promise<void> {
+  const dataDir = flags.get('data-dir') ?? DATA_DIR;
+  const diagnosticsDir = flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR;
+  const vaultDir = flags.get('vault');
+  const provider = resolveProvider(flags);
+
+  const distilled = await runDistill({ dataDir, diagnosticsDir, provider });
+  const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
+
+  const distillWork = distilled.distilled + distilled.skipped + distilled.quarantined;
+  const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
+  if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
+    process.stdout.write('Nothing pending\n');
+    return;
+  }
+
+  const lines = [
+    `sessions distilled: ${distilled.distilled}`,
+    `sessions skipped: ${distilled.skipped}`,
+    `sessions quarantined: ${distilled.quarantined}`,
+  ];
+  if (vaultDir !== undefined) {
+    lines.push(`notes exported: ${exported!.exported}`);
+    lines.push(`notes removed: ${exported!.removed}`);
+  }
+  process.stdout.write(lines.join('\n') + '\n');
+}
+
+/**
  * Print the persisted machine id, generating and persisting a ULID on first
  * call (§11: a generated persisted id, never the hostname).
  */
@@ -737,6 +784,9 @@ async function main(argv: string[]): Promise<void> {
       break;
     case 'distill':
       await distillCommand(parseFlags(rest));
+      break;
+    case 'drain':
+      await drainCommand(parseFlags(rest));
       break;
     case 'recall':
       recallCommand(parseRecallArgs(rest));

@@ -266,6 +266,28 @@ export type DistillRunOptions = {
 };
 
 /**
+ * Per-run tally the drain summary reports (§4).
+ *
+ * `status` says whether this call actually ran a pass: `'pass'` means it held
+ * the lock and processed the backlog (counts reflect real work); `'lock-held'`
+ * means a live fresh holder owned the lock, so this call was a no-op and the
+ * counts are all zero — NOT because nothing was pending, but because someone
+ * else is draining it. A discriminated status reads clearer at the call site
+ * than a `lockHeld: false` that has to be read as "a pass happened".
+ *
+ * `quarantined` counts distinct sessions that had a quarantine this run, not
+ * quarantine records — one session with several corrupt lines is one
+ * quarantined session, so the drain summary's "sessions quarantined" noun is
+ * honest.
+ */
+export type DistillRunResult = {
+  distilled: number;
+  skipped: number;
+  quarantined: number;
+  status: 'pass' | 'lock-held';
+};
+
+/**
  * Run one foreground distill pass over every per-session event log under
  * `<dataDir>/events/*.ndjson`.
  *
@@ -300,25 +322,31 @@ export type DistillRunOptions = {
  * timeout). This guards concurrent invocations only — it does not create a
  * resident worker or watch loop (§4, "Do not relitigate").
  */
-export async function runDistill(options: DistillRunOptions): Promise<void> {
+export async function runDistill(options: DistillRunOptions): Promise<DistillRunResult> {
   const lock = acquireLock(lockPathFor(options.dataDir), { staleMs: LOCK_STALE_MS });
   if (lock === null) {
     // Someone live and fresh is already draining this backlog — not an error.
     process.stderr.write('librarian: distill already running (lock held); nothing to do\n');
-    return;
+    return { distilled: 0, skipped: 0, quarantined: 0, status: 'lock-held' };
   }
   try {
-    await runDistillPass(options);
+    return await runDistillPass(options);
   } finally {
     lock.release();
   }
 }
 
-async function runDistillPass(options: DistillRunOptions): Promise<void> {
+async function runDistillPass(options: DistillRunOptions): Promise<DistillRunResult> {
+  const result: DistillRunResult = { distilled: 0, skipped: 0, quarantined: 0, status: 'pass' };
+  // Distinct sessions that had ANY quarantine this run (a corrupt line and/or a
+  // budget-exhausted delta). Set, not a counter: several corrupt lines in one
+  // session is still one quarantined session, so the drain summary's "sessions
+  // quarantined" noun stays honest.
+  const quarantinedSessions = new Set<string>();
   const { dataDir, diagnosticsDir, provider } = options;
   const eventsDir = path.join(dataDir, 'events');
   if (!fs.existsSync(eventsDir)) {
-    return;
+    return result;
   }
 
   const logNames = fs
@@ -354,6 +382,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
     const writeCorruptVerdicts = (): void => {
       if (corruptVerdictsWritten) return;
       corruptVerdictsWritten = true;
+      if (corrupt.length > 0) {
+        quarantinedSessions.add(sessionId);
+      }
       for (const bad of corrupt) {
         writeDistillVerdict(diagnosticsDir, {
           record_class: 'diagnostic',
@@ -411,6 +442,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
       };
       writeDistillVerdict(diagnosticsDir, verdict);
       advancePast(newOffset, lastRecordId);
+      result.skipped += 1;
       continue;
     }
 
@@ -432,6 +464,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
       };
       writeDistillVerdict(diagnosticsDir, verdict);
       advancePast(newOffset, lastRecordId);
+      result.skipped += 1;
       continue;
     }
 
@@ -464,6 +497,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
       // Advance only after the note is durably appended (§5 advance-after-success),
       // clearing failed_attempts — a fresh range starts its count at zero.
       advancePast(newOffset, lastRecordId);
+      result.distilled += 1;
     } catch (err) {
       const lastError = err instanceof Error ? err.message : String(err);
       const priorCount =
@@ -506,6 +540,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<void> {
         },
       });
       advancePast(newOffset, lastRecordId);
+      quarantinedSessions.add(sessionId);
     }
   }
+  result.quarantined = quarantinedSessions.size;
+  return result;
 }
