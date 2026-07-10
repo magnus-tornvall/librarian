@@ -7,6 +7,14 @@ export type Cursor = {
   file_path: string;
   byte_offset: number;
   last_record_id?: string;
+  /**
+   * Bounded-retry bookkeeping (§5, issue #60): when a consumer fails on the
+   * delta AT `byte_offset`, it records the attempt here instead of a second
+   * bookkeeping file. Survives a failed run so the next run knows how many times
+   * this exact range has already been tried. Reset (omitted) whenever the offset
+   * advances — a fresh range starts its count at zero.
+   */
+  failed_attempts?: { byte_offset: number; count: number; last_error: string };
   updated_at: string;
 };
 

@@ -313,12 +313,17 @@ test('distill: a provider whose output is not JSON fails loud — non-zero exit,
   assert.notEqual(result.status, 0, 'a JSON parse failure must cause a non-zero exit');
   assert.match(result.stderr, /librarian:/, 'the CLI must name the failure on stderr');
 
-  // Fail loud (§9): nothing durable happened — no note, cursor never advanced.
+  // Fail loud, bounded (§5/#60): the first failure mints no note and the cursor
+  // OFFSET does not advance — the next run retries the same range — but the
+  // attempt is now recorded on the cursor so retries are bounded, not infinite.
   assert.equal(noteRevisions(dataDir).length, 0, 'a failed distill must mint no note');
+  const cursor = readCursorOrNull(dataDir, sessionId);
+  assert.ok(cursor, 'a cursor recording the failed attempt should exist');
+  assert.equal(cursor!.byte_offset, 0, 'the cursor offset must not advance when distillation throws');
   assert.equal(
-    readCursorOrNull(dataDir, sessionId),
-    null,
-    'the cursor must not advance when distillation throws (next run retries)',
+    (cursor!.failed_attempts as Record<string, unknown>).count,
+    1,
+    'the first failure must record failed_attempts.count = 1',
   );
 });
 
@@ -345,10 +350,15 @@ test('distill: an eligible delta missing resource.agent fails loud — non-zero 
   assert.match(result.stderr, /resource\.agent/, 'the error must name the missing resource.agent');
 
   assert.equal(noteRevisions(dataDir).length, 0, 'no origin-less note may be minted (§4 fail-closed)');
+  // Bounded (§5/#60): the origin guard is a failure that participates in the
+  // retry budget — offset unmoved, attempt recorded.
+  const cursor = readCursorOrNull(dataDir, sessionId);
+  assert.ok(cursor, 'a cursor recording the failed attempt should exist');
+  assert.equal(cursor!.byte_offset, 0, 'the cursor offset must not advance when the origin guard throws');
   assert.equal(
-    readCursorOrNull(dataDir, sessionId),
-    null,
-    'the cursor must not advance when the origin guard throws',
+    (cursor!.failed_attempts as Record<string, unknown>).count,
+    1,
+    'the first failure must record failed_attempts.count = 1',
   );
 });
 
@@ -655,4 +665,193 @@ test('distill: the guard blocks only covered ranges — NEW events after a guard
     freshIds,
     'the new note must be provenanced to the new events only',
   );
+});
+
+// ---------------------------------------------------------------------------
+// Bounded retries + poison-record quarantine (issue #60, spec §5).
+// ---------------------------------------------------------------------------
+
+/** All `quarantined` distill verdicts under the diagnostics dir. */
+function quarantineVerdicts(diagnosticsDir: string): Array<Record<string, unknown>> {
+  const verdictDir = path.join(diagnosticsDir, 'distill');
+  if (!fs.existsSync(verdictDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(verdictDir)
+    .filter((n) => n.endsWith('.ndjson'))
+    .flatMap((n) => readAll(path.join(verdictDir, n)) as Array<Record<string, unknown>>)
+    .filter((v) => v.decision === 'quarantined');
+}
+
+test('distill: a failing delta is retried to MAX_ATTEMPTS then quarantined — cursor advances, exit 0, then unstuck', () => {
+  const root = tempDir('cli-distill-quarantine-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-wedge';
+
+  // A provider fixture that is NOT JSON → distill() throws on every attempt (the
+  // always-throwing provider the DoD names, via the offline fixture seam).
+  const badFixture = writeFixtureContent(root, 'not json — a model that always ignores the instruction');
+
+  const events = eligibleEvents(sessionId);
+  ingest(dataDir, events);
+  const logPath = eventLogPath(dataDir, sessionId);
+  const wedgedBytes = fs.statSync(logPath).size;
+  const logBefore = fs.readFileSync(logPath); // sacred-log snapshot
+
+  // Runs 1 and 2: under budget → non-zero exit, no note, OFFSET unmoved,
+  // failed_attempts.count climbing.
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const r = distill(dataDir, diagnosticsDir, badFixture);
+    assert.notEqual(r.status, 0, `attempt ${attempt} (< MAX) must exit non-zero`);
+    assert.equal(noteRevisions(dataDir).length, 0, `attempt ${attempt} must mint no note`);
+    const cursor = readCursorOrNull(dataDir, sessionId);
+    assert.ok(cursor, `attempt ${attempt} must record a cursor`);
+    assert.equal(cursor!.byte_offset, 0, `attempt ${attempt} must leave the offset unmoved`);
+    assert.equal(
+      (cursor!.failed_attempts as Record<string, unknown>).count,
+      attempt,
+      `attempt ${attempt} must record failed_attempts.count = ${attempt}`,
+    );
+    // No quarantine yet — still under budget.
+    assert.equal(quarantineVerdicts(diagnosticsDir).length, 0, 'no quarantine before MAX_ATTEMPTS');
+  }
+
+  // Run 3 reaches MAX_ATTEMPTS (=3): quarantine. Verdict in the DIAGNOSTICS dir
+  // naming the byte range, cursor advanced past the delta, exit 0 (unstuck).
+  const r3 = distill(dataDir, diagnosticsDir, badFixture);
+  assert.equal(r3.status, 0, `the run reaching MAX_ATTEMPTS must exit 0; stderr: ${r3.stderr}`);
+  assert.equal(noteRevisions(dataDir).length, 0, 'a quarantined delta mints no note');
+
+  const quarantines = quarantineVerdicts(diagnosticsDir);
+  assert.equal(quarantines.length, 1, 'exactly one quarantine verdict should be written');
+  const q = quarantines[0];
+  assert.equal(q.record_class, 'diagnostic', 'the quarantine verdict must be a diagnostic record');
+  assert.equal(q.session_id, sessionId, 'the quarantine verdict must name the session');
+  const qb = q.quarantine as Record<string, unknown>;
+  assert.equal(qb.byte_start, 0, 'the quarantine verdict must name the byte-range start');
+  assert.equal(qb.byte_end, wedgedBytes, 'the quarantine verdict must name the byte-range end (delta end)');
+  assert.equal(qb.attempts, 3, 'the quarantine verdict must record the attempt count that gave up');
+  assert.equal(qb.file_path, logPath, 'the quarantine verdict must name the event log file');
+  assert.match(q.reason as string, /gave up after 3 attempts/, 'the reason must name the exhausted budget');
+
+  // The quarantine verdict must NOT be under the data dir (memory is sacred).
+  assert.equal(fs.existsSync(path.join(dataDir, 'distill')), false, 'no verdict may live under the data dir');
+
+  // Cursor advanced past the poison delta; failed_attempts cleared (fresh range).
+  const cursorAfter = readCursorOrNull(dataDir, sessionId);
+  assert.equal(cursorAfter!.byte_offset, wedgedBytes, 'the cursor must advance past the quarantined delta');
+  assert.equal(cursorAfter!.failed_attempts, undefined, 'failed_attempts must reset once the offset advances');
+
+  // Sacred log: the event log is byte-identical after the whole wedge→quarantine.
+  assert.deepEqual(fs.readFileSync(logPath), logBefore, 'the event log must be byte-identical after quarantine');
+
+  // UNSTUCK: append new GOOD events to the same session and distill with a good
+  // fixture — the consumer really is unstuck and processes the fresh delta.
+  const goodFixture = writeFixture(root);
+  const more = eligibleEvents('sess-wedge-2').map((e, i) => ({
+    ...e,
+    // re-home onto the same session, keep event_ids unique from the first batch.
+    context: { ...(e.context as Record<string, unknown>), session_id: sessionId },
+    event_id: `01J8X7QKB${String(i).padStart(1, '0')}Z9R4M2N6P0S5T7WY`,
+  }));
+  ingest(dataDir, more);
+
+  const r4 = distill(dataDir, diagnosticsDir, goodFixture);
+  assert.equal(r4.status, 0, `the unstuck run must exit 0; stderr: ${r4.stderr}`);
+  assert.equal(noteRevisions(dataDir).length, 1, 'the appended good events must distill after quarantine');
+  const eof = fs.statSync(logPath).size;
+  assert.equal(readCursorOrNull(dataDir, sessionId)!.byte_offset, eof, 'the cursor must reach EOF after the unstuck run');
+});
+
+test('distill: a corrupt mid-file JSON line is quarantined; the surrounding lines distill normally', () => {
+  const root = tempDir('cli-distill-corrupt-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixture(root);
+  const sessionId = 'sess-corrupt';
+
+  // Ingest an eligible batch through the real collect path, then splice a corrupt
+  // COMPLETE line into the MIDDLE of the log (bytes stay put — event log is sacred;
+  // we only need a poison line on disk to exercise the reader, and it is written
+  // directly because collect would reject it up front).
+  const events = eligibleEvents(sessionId);
+  ingest(dataDir, events);
+  const logPath = eventLogPath(dataDir, sessionId);
+  const original = fs.readFileSync(logPath, 'utf8');
+  const lines = original.split('\n').filter((l) => l.length > 0);
+  const corruptLine = '{"schema_version":1,"type":"prompt","event_id":"BROKEN' + ',,,'; // invalid JSON, complete line
+  const spliced = [
+    ...lines.slice(0, 5),
+    corruptLine,
+    ...lines.slice(5),
+  ].join('\n') + '\n';
+  fs.writeFileSync(logPath, spliced);
+  const eof = fs.statSync(logPath).size;
+  const logAfterSplice = fs.readFileSync(logPath); // snapshot AFTER splice (this is now the sacred log)
+
+  const result = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.equal(result.status, 0, `distill should exit 0 despite a corrupt line; stderr: ${result.stderr}`);
+
+  // The surrounding complete lines distilled into one note (the corrupt line is
+  // simply absent from provenance, not a run-aborting error).
+  const notes = noteRevisions(dataDir);
+  assert.equal(notes.length, 1, 'the surrounding complete events must distill into one note');
+  const provIds = (notes[0].provenance as Record<string, unknown>).event_ids as string[];
+  assert.equal(provIds.length, events.length, 'provenance must cover every VALID event, and no corrupt one');
+
+  // A quarantine verdict was written naming the corrupt line's byte offset, with
+  // attempts:null (unparseable bytes get no retry loop).
+  const quarantines = quarantineVerdicts(diagnosticsDir);
+  assert.equal(quarantines.length, 1, 'exactly one quarantine verdict for the corrupt line');
+  const q = quarantines[0];
+  const qb = q.quarantine as Record<string, unknown>;
+  assert.equal(q.session_id, sessionId, 'the verdict must name the session');
+  assert.equal(qb.attempts, null, 'a corrupt line is quarantined with no retry (attempts: null)');
+  assert.ok((qb.byte_start as number) >= 0, 'the verdict must name the corrupt byte offset');
+  assert.match(q.reason as string, /unparseable event line/, 'the reason must name the parse failure');
+
+  // Cursor reaches EOF — the corrupt line is covered by the advance, never pending.
+  assert.equal(readCursorOrNull(dataDir, sessionId)!.byte_offset, eof, 'the cursor must reach EOF past the corrupt line');
+
+  // Sacred log: the corrupt bytes were never rewritten or removed by the reader.
+  assert.deepEqual(fs.readFileSync(logPath), logAfterSplice, 'the event log must be byte-identical after the run');
+});
+
+test('distill: a corrupt line whose valid remainder keeps failing is quarantined once, not once per retry', () => {
+  const root = tempDir('cli-distill-corrupt-retry-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-corrupt-retry';
+
+  // A non-JSON provider fixture → the valid surrounding delta throws every run.
+  const badFixture = writeFixtureContent(root, 'not json — a model that always ignores the instruction');
+
+  // Ingest an eligible batch, then splice a corrupt COMPLETE line mid-file.
+  const events = eligibleEvents(sessionId);
+  ingest(dataDir, events);
+  const logPath = eventLogPath(dataDir, sessionId);
+  const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter((l) => l.length > 0);
+  const corruptLine = '{"schema_version":1,"type":"prompt","event_id":"BROKEN' + ',,,';
+  fs.writeFileSync(logPath, [...lines.slice(0, 5), corruptLine, ...lines.slice(5)].join('\n') + '\n');
+
+  const corruptVerdicts = () =>
+    quarantineVerdicts(diagnosticsDir).filter((v) => (v.quarantine as Record<string, unknown>).attempts === null);
+
+  // Runs 1..2 are under the retry budget: the valid remainder fails the provider,
+  // the cursor OFFSET stays put, and the corrupt line is NOT re-quarantined —
+  // writing it eagerly would loop a verdict over bytes that never parse.
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const r = distill(dataDir, diagnosticsDir, badFixture);
+    assert.notEqual(r.status, 0, `attempt ${attempt} (< MAX) must exit non-zero`);
+    assert.equal(readCursorOrNull(dataDir, sessionId)!.byte_offset, 0, `attempt ${attempt} leaves the offset unmoved`);
+    assert.equal(corruptVerdicts().length, 0, `no corrupt-line verdict while retrying (attempt ${attempt})`);
+  }
+
+  // Run 3 reaches MAX_ATTEMPTS: the whole delta is quarantined and the cursor
+  // advances past it — the corrupt line is now emitted, exactly once.
+  const r3 = distill(dataDir, diagnosticsDir, badFixture);
+  assert.equal(r3.status, 0, `the run reaching MAX_ATTEMPTS must exit 0; stderr: ${r3.stderr}`);
+  assert.equal(corruptVerdicts().length, 1, 'the corrupt-line verdict is emitted exactly once, on the advancing run');
 });
