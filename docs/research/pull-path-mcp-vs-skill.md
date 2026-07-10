@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-06. **Status:** analysis, not a settled decision. Companion to `docs/specs/librarian-design-consolidated.md` (the spec, §6 recall contract, §7 storage/rendering, roadmap §12 item 7). If this document disagrees with the spec, the spec wins. Nothing here changes §5's "deleted/deferred" register or the push/pull split — it examines an implementation choice *inside* the pull path that the spec's roadmap item 7 leaves implicit.
 
-**Do not relitigate:** the push/pull split (§1, §6) and "no unified push/pull interface" (`composability-seams-handoff.md` §2.3, spec §6) are settled and correct. This document does not reopen them. It records that "pull path" ≠ "MCP" — MCP is one of three model-initiated pull mechanisms — and captures the tradeoff so roadmap item 7 is a deliberate choice rather than an unexamined default.
+**Do not relitigate:** the push/pull split (§1, §6) and "no unified push/pull interface" (spec §6, §15) are settled and correct. This document does not reopen them. It records that "pull path" ≠ "MCP" — MCP is one of three model-initiated pull mechanisms — and captures the tradeoff so roadmap item 7 is a deliberate choice rather than an unexamined default.
 
 **Question that prompted this:** *Roadmap #7 names MCP as the pull path. For Claude Code, why MCP over a plugin/hook abstraction to do what the MCP would do? MCP looks like the more token-hungry option with no real benefit.*
 
@@ -23,7 +23,7 @@ The user's proposed alternative — "a plugin abstraction to do what the MCP wou
 
 - Anthropic's hooks reference (`https://docs.anthropic.com/en/docs/claude-code/hooks`) describes hooks as *"user-defined shell commands, HTTP endpoints, or LLM prompts that execute automatically at specific points in Claude Code's lifecycle."* The trigger is always a lifecycle event (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, …). A matcher/`if` filter narrows *when*; nothing lets the model elect to fire a hook.
 - Hooks can *push* text via `hookSpecificOutput.additionalContext` (wrapped in a system reminder, read on the next model request) on `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolBatch`, `Stop`, `SubagentStart`, etc. That is injection (push), not model-initiated retrieval (pull).
-- This matches Librarian's own grounding docs: `superbrain-opencode-grounding.md:23` records SuperBrain's Claude-Code recall as *"SessionStart 4-slot digest … per-prompt `sb-recall` on UserPromptSubmit … **on-demand `sb-mcp` MCP search server**"* — i.e. SessionStart + UserPromptSubmit are the deterministic **push** points; the **MCP server** is the **on-demand** (model-initiated) pull. SuperBrain already drew this exact line.
+- This matches the SuperBrain precedent (spec §3): SessionStart digest and per-prompt `sb-recall` on UserPromptSubmit were the deterministic **push** points; the `sb-mcp` MCP search server was the **on-demand** (model-initiated) pull. SuperBrain already drew this exact line.
 
 **Conclusion:** the push/pull split is sound, and pull genuinely cannot be a hook. The user is not missing anything on that point. What the roadmap leaves implicit is the *next* fork.
 
@@ -35,7 +35,7 @@ A model-initiated pull in Claude Code is **anything the model can call as a tool
 2. **The Skill tool** — a model-invocable skill (custom slash commands were merged into skills). *"Both you and Claude can invoke any skill … Claude can load it automatically when relevant"* (`https://docs.anthropic.com/en/docs/claude-code/skills`). A skill whose body shells out to `librarian recall <query>` and returns the result is a model-initiated pull. `disable-model-invocation: true` makes it user-only; `user-invocable: false` makes it model-only — so the invocation surface is configurable.
 3. **The Agent tool** — subagent delegation. *"When Claude encounters a task that matches a subagent's description, it delegates to that subagent, which works independently and returns results"* (`https://docs.anthropic.com/en/docs/claude-code/sub-agents`). A subagent that retrieves and returns a summary is a model-initiated pull.
 
-All three bottom out on the **same CLI** the spec already commits to: `librarian recall` (BM25 + weights + floor, §6) and `librarian note show <id> --with-provenance` (drill-down to verbatim event excerpts, §6/§8). The pull *transport* is a thin skin over that CLI, whichever family is chosen. This is the crux: the choice is skin-deep, and the spec's own "no generic abstraction" discipline (§5, `composability-seams-handoff.md` §2.3) argues for the thinnest skin that reaches the required surfaces.
+All three bottom out on the **same CLI** the spec already commits to: `librarian recall` (BM25 + weights + floor, §6) and `librarian note show <id> --with-provenance` (drill-down to verbatim event excerpts, §6/§8). The pull *transport* is a thin skin over that CLI, whichever family is chosen. This is the crux: the choice is skin-deep, and the spec's own "no generic abstraction" discipline (§5, §15) argues for the thinnest skin that reaches the required surfaces.
 
 > Note: MCP's *tool* facet is the model-initiated one. MCP **prompts** surface as user-typed `/mcp__server__prompt` commands and MCP **resources** as user `@`-mentions — both user-initiated, not the pull path. Only the tool facet is relevant here.
 
@@ -86,6 +86,4 @@ None of the above is settled; it is input to the item-7 explosion. The spec's §
 - Anthropic Claude Code — MCP: `https://docs.anthropic.com/en/docs/claude-code/mcp` (model-callable tools; prompts/resources are user-initiated).
 - Anthropic Claude Code — Skills: `https://docs.anthropic.com/en/docs/claude-code/skills` (model-invocable skills; `disable-model-invocation` / `user-invocable`).
 - Anthropic Claude Code — Sub-agents: `https://docs.anthropic.com/en/docs/claude-code/sub-agents` (model-initiated delegation).
-- Local: `docs/research/superbrain-opencode-grounding.md:23` (SuperBrain's push points vs. `sb-mcp` on-demand pull).
-- Local: `docs/research/composability-seams-handoff.md` §2.3 (do not unify push/pull behind one interface).
-- Local: `docs/specs/librarian-design-consolidated.md` §1 (push/pull split, cross-vendor promise), §6 (recall & injection contract, pull-path physics), §12 item 7, §15 (deferral-with-trigger practice).
+- Local: `docs/specs/librarian-design-consolidated.md` §1 (push/pull split, cross-vendor promise), §3 (SuperBrain precedent: push points vs. `sb-mcp` on-demand pull), §6 (recall & injection contract, pull-path physics), §12 item 7, §15 (deferral-with-trigger practice; do not unify push/pull behind one interface).
