@@ -330,7 +330,7 @@ Golden examples: (1) episodic decision, `distiller: llm`, `origin: opencode`; (2
 
 ## 12. Roadmap
 
-**Status (2026-07-09):** items 1–5 complete (issues #2–#9, #16–#21). Item 6 is complete (issues #28–#32). Item 7 is complete (issues #41–#44). Item 8 is complete (issues #49–#53), pending this capstone PR merge.
+**Status (2026-07-10):** items 1–5 complete (issues #2–#9, #16–#21). Item 6 is complete (issues #28–#32). Item 7 is complete (issues #41–#44). Item 8 is complete (issues #49–#53). Item 9 is complete (issues #59–#63).
 
 1. ✅ `schema/event.md` — prose + types + golden examples (§10.1).
 2. ✅ `schema/note.md` — same (§10.2).
@@ -340,7 +340,7 @@ Golden examples: (1) episodic decision, `distiller: llm`, `origin: opencode`; (2
 6. ✅ Real instrumentation (OpenCode first — existing plugin remapped to canonical schema; Claude Code second). Complete via issues #28–#32.
 7. ✅ **MCP server (pull path):** search tool (scored results, origin/scope filters) + **provenance drill-down tool** (note → verbatim event excerpts). Complete via issues #41–#44. Transport analysis remains in `docs/research/pull-path-mcp-vs-skill.md`.
 8. ✅ Recall injection adapters (push path: OpenCode two-phase hook design; Claude Code parity). Injected-block contract per §6; `librarian why` / `why-not` land here. Complete via issues #49–#53.
-9. Hardening: cursors, locks, retries, quarantine, `librarian drain`.
+9. ✅ Hardening: cursors, locks, retries, quarantine, `librarian drain`. Complete via issues #59–#63. Recovery playbook in `docs/hardening.md`.
 10. Second inference provider (OpenAI-compatible ⇒ local) and second exporter (SQLite mirror) — after the first path works end-to-end.
 11. First non-agent integration (when concretely wanted): `ContentEvent` + per-origin profile + origin fixtures.
 12. **Memory correctness & maintenance** (added 2026-07-09 from an agent-memory literature round: LongMemEval knowledge-update lineage, Zep/Graphiti bi-temporal invalidation, SSGM "Memory Worth", SAGE/MemGuard write-time gating; sub-items 6–8 added 2026-07-10 from a Semantic Scholar verification round — TRUSTMEM, Supersede, ConvMemory v3, RoMem — plus the workspace-interpretability round in §6). Sub-items 1–5 ordered by leverage with 1 as the tripwire; **sub-item 6 guards the narrow waist every note passes through and arguably precedes everything else; 7 is the cheapest fix on the list**:
