@@ -15,7 +15,7 @@ import { ulid } from 'ulid';
  * site today (issue #59 "Do not relitigate").
  *
  * KNOWN LIMITATION — stale recovery is not race-free under simultaneous
- * contention (deferred to #63, the hardening capstone). The mutual-exclusion
+ * contention (deferred to #69, CAS-safe stale-lock recovery). The mutual-exclusion
  * this guarantees is exact for the common case: a live, FRESH holder is always
  * seen (`EEXIST` → not stale → caller yields), so two normally-triggered distill
  * runs never both drain — which is the issue's DoD. The gap is narrow and
@@ -29,7 +29,7 @@ import { ulid } from 'ulid';
  * for free (four hand-rolled POSIX-only designs each still breached ~7% in a
  * multi-process peak-concurrency stress test). Closing it wants a real
  * single-writer primitive (a lockfile library / `flock`), which is out of scope
- * for this v1 and belongs to the #63 hardening pass. Under no contention, and
+ * for this v1 and belongs to #69. Under no contention, and
  * under contention with a live holder, behaviour is correct.
  */
 
@@ -134,7 +134,7 @@ export function acquireLock(lockPath: string, options: AcquireOptions): Lock | n
     // ponytail: this unlink-by-path is the stale-recovery race documented in the
     // file header — under simultaneous stale-recovery it can delete a co-racer's
     // fresh lock. Correct for the DoD's live-holder case; a CAS-safe primitive
-    // (lockfile lib / flock) is the #63 hardening fix.
+    // (lockfile lib / flock) is the #69 fix.
     try {
       fs.unlinkSync(lockPath);
     } catch (err) {

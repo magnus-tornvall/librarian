@@ -246,7 +246,7 @@ test('capstone contention: two concurrent drains over one backlog → both exit 
   assertIdentical(vaultBefore, snapshot(vaultDir), 'vault after contention');
 });
 
-test('capstone poison: corrupt event line + an always-failing session → drain exits 0, verdicts name byte ranges, healthy sessions survive', () => {
+test('capstone poison: corrupt event line + an always-failing session → drain eventually exits 0, verdicts name byte ranges, healthy sessions survive', () => {
   const root = tempDir('capstone-poison-');
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
@@ -309,6 +309,74 @@ test('capstone poison: corrupt event line + an always-failing session → drain 
 
   // The healthy notes are untouched by all the poison handling.
   assert.equal(noteRevisions(dataDir).length, 2, 'the poison handling never mints or drops a healthy note');
+});
+
+test('capstone poison in a shared backlog: an always-failing session quarantines while a co-pending healthy session distills in the SAME run, exit 0', () => {
+  const root = tempDir('capstone-poison-shared-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const vaultDir = path.join(root, 'vault');
+  const goodFixture = writeFixture(root);
+
+  // A healthy session ingested through the real collect path. Its id sorts
+  // AFTER the poison session's so the distiller (which walks the events dir
+  // sorted) reaches it ONLY after the poison delta is handled — on runs 1 & 2
+  // the poison throws before the healthy session is ever touched, so the healthy
+  // note cannot exist until quarantine-and-continue actually continues past it.
+  ingest(dataDir, eligibleEvents('sess-zzz-healthy'));
+
+  // An always-failing session whose first delta event is missing resource.agent
+  // → the distiller's origin guard throws deterministically for it EVERY attempt,
+  // independent of the (good) fixture. collect would reject a missing
+  // resource.agent, so — like the corrupt-line poison — write its event log
+  // directly. This keeps the good fixture usable, so the co-pending healthy
+  // session distills normally in the same run.
+  const poisonEvents = eligibleEvents('sess-aaa-poison').map((e) => {
+    const { resource, ...rest } = e as Record<string, unknown> & { resource: Record<string, unknown> };
+    const { agent, ...resourceRest } = resource;
+    return { ...rest, resource: resourceRest };
+  });
+  const poisonLog = path.join(dataDir, 'events', 'sess-aaa-poison.ndjson');
+  fs.mkdirSync(path.dirname(poisonLog), { recursive: true });
+  fs.writeFileSync(poisonLog, poisonEvents.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+  // Runs 1 & 2: the poison session (walked first) throws under budget BEFORE the
+  // healthy session is reached → drain exits non-zero AND no healthy note yet.
+  // This is the settled bounded-retry contract (#60): a retryable failure records
+  // the attempt and rethrows, so the run exits loud until the budget is spent.
+  const a1 = drain(dataDir, diagnosticsDir, goodFixture, vaultDir);
+  const a2 = drain(dataDir, diagnosticsDir, goodFixture, vaultDir);
+  assert.notEqual(a1.status, 0, 'the shared backlog errors while the poison session is under budget (attempt 1)');
+  assert.notEqual(a2.status, 0, 'the shared backlog errors while the poison session is under budget (attempt 2)');
+  assert.equal(
+    noteRevisions(dataDir).length,
+    0,
+    'the poison throws before the later-sorting healthy session is reached — no note until quarantine-and-continue',
+  );
+
+  // Run 3: the budget is exhausted → the poison session is quarantined, the
+  // cursor advances past it, and the run continues to the healthy session → exit 0.
+  const a3 = drain(dataDir, diagnosticsDir, goodFixture, vaultDir);
+  assert.equal(a3.status, 0, `attempt 3 quarantines the poison and exits 0; stderr: ${a3.stderr}`);
+
+  // The healthy session distilled and exported in that SAME quarantine run — it
+  // was only ever reachable AFTER quarantine-and-continue continued past the poison.
+  const healthyNote = noteRevisions(dataDir).find(
+    (n) => (n.provenance as Record<string, unknown> | undefined)?.session_id === 'sess-zzz-healthy',
+  );
+  assert.ok(healthyNote, 'the co-pending healthy session must distill in the quarantine run, not be blocked');
+  assert.equal(noteRevisions(dataDir).length, 1, 'exactly the healthy note is minted; the poison mints nothing');
+  assert.equal(generatedFiles(vaultDir).length, 1, 'the healthy note exports despite the poison in the same backlog');
+
+  // The poison session was quarantined (not merely skipped), with its byte range named.
+  const poisonVerdict = readVerdicts(diagnosticsDir).find(
+    (v) => v.session_id === 'sess-aaa-poison' && v.decision === 'quarantined',
+  );
+  assert.ok(poisonVerdict, 'the always-failing session must be quarantined after the retry budget');
+  const range = poisonVerdict!.quarantine as Record<string, unknown>;
+  assert.equal(range.attempts, 3, 'the quarantine records the exhausted attempt count');
+  assert.equal(typeof range.byte_start, 'number', 'the verdict names byte_start');
+  assert.ok((range.byte_end as number) > (range.byte_start as number), 'the named byte range is non-empty');
 });
 
 test('capstone sacred-log: across crash-recovery and contention re-runs the event log is byte-identical; only legitimate note appends occur', async () => {
