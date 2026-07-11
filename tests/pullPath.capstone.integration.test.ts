@@ -176,7 +176,7 @@ test('pull path capstone: real collect/distill note is searchable by MCP and dri
   const { client, transport } = await connectClient(t.dataDir, t.diagnosticsDir);
   try {
     const searchPayload = parseToolJson(
-      await client.callTool({ name: 'search', arguments: { query: 'periwinkle', global: true, limit: 10 } }),
+      await client.callTool({ name: 'search', arguments: { query: 'periwinkle', project_slug: 'librarian', limit: 10 } }),
     );
     const results = searchPayload.results as Array<Record<string, unknown>>;
     const hit = results.find((result) => result.note_id === note.note_id);
@@ -185,7 +185,8 @@ test('pull path capstone: real collect/distill note is searchable by MCP and dri
     assert.equal(hit.summary, (note.body as Record<string, unknown>).summary, 'search result must include the note summary');
     assert.equal(hit.note_type, note.note_type, 'search result must include note_type metadata');
     assert.equal(hit.origin, 'opencode', 'search result must include origin metadata');
-    assert.equal(hit.is_global, true, 'search result must include scope metadata');
+    assert.equal(hit.project_slug, 'librarian', 'search result must include project scope metadata');
+    assert.equal(hit.is_global, false, 'project-scoped notes must not leak into global recall');
     assert.equal(typeof hit.created_at, 'string', 'search result must include created_at metadata');
     assert.equal(typeof hit.score, 'number', 'search result must include a score');
     assert.ok((hit.score as number) > 0, 'the scored hit must clear the relevance floor');
@@ -201,7 +202,7 @@ test('pull path capstone: real collect/distill note is searchable by MCP and dri
     );
 
     const eventOnlyPayload = parseToolJson(
-      await client.callTool({ name: 'search', arguments: { query: 'platypus', global: true, limit: 10 } }),
+      await client.callTool({ name: 'search', arguments: { query: 'platypus', project_slug: 'librarian', limit: 10 } }),
     );
     assert.deepEqual(
       eventOnlyPayload.results,

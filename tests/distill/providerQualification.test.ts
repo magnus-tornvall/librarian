@@ -102,6 +102,7 @@ for (const fixtureDir of fixtureDirs) {
       assert.equal(note.identity.mode, expected.identity_mode, 'identity.mode routes as expected');
       if (expected.note_id) assert.equal(note.note_id, expected.note_id, 'deterministic note_id');
       assert.equal(note.scope.project_slug, expected.project_slug, 'scope.project_slug');
+      assert.equal(note.scope.global, undefined, 'project-scoped notes are not global');
       assert.equal(note.provenance.session_id, expected.session_id, 'provenance.session_id');
       assert.deepEqual(note.provenance.event_range, {
         from_event_id: expected.from_event_id,

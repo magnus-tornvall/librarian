@@ -1,7 +1,8 @@
 import { ulid } from 'ulid';
 import type { InferenceProvider } from './provider.ts';
 import { renderEventsForDistill } from '../render/distillPrompt.ts';
-import type { NoteRevision } from '../note.ts';
+import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from '../note.ts';
+import { projectSlugFromGitRoot } from '../projectSlug.ts';
 
 export type { NoteRevision };
 
@@ -68,6 +69,7 @@ export async function distill(
   sessionId: string,
   provider: InferenceProvider,
   origin: string,
+  existingRecords: NoteRecord[] = [],
 ): Promise<NoteRevision> {
   const prompt = `${INSTRUCTION}\n${renderEventsForDistill(events)}`;
   const raw = await provider.complete(prompt);
@@ -86,7 +88,7 @@ export async function distill(
   const resource = (events[0]?.resource ?? {}) as Record<string, unknown>;
   const gitRoot = typeof resource.git_root === 'string' ? resource.git_root : undefined;
   const gitRemote = typeof resource.git_remote === 'string' ? resource.git_remote : undefined;
-  const projectSlug = gitRoot?.split(/[\\/]/).filter(Boolean).at(-1);
+  const projectSlug = projectSlugFromGitRoot(gitRoot);
   const deterministic = noteType === 'project_summary' && projectSlug !== undefined;
   const links = Array.isArray(judgment.links)
     ? judgment.links.filter((link): link is NoteRevision['links'][number] => {
@@ -100,12 +102,19 @@ export async function distill(
     : [];
   const firstEventId = events[0]?.event_id as string;
   const lastEventId = events.at(-1)?.event_id as string;
+  const noteId = deterministic ? `project:${projectSlug}:summary` : `${noteType}:${ulid()}`;
+  const previousRevision = deterministic
+    ? latestRecordPerNoteId(existingRecords).find(
+        (record): record is NoteRevision => record.kind === 'note_revision' && record.note_id === noteId,
+      )
+    : undefined;
 
   return {
     kind: 'note_revision',
     schema_version: 1,
-    note_id: deterministic ? `project:${projectSlug}:summary` : `${noteType}:${ulid()}`,
+    note_id: noteId,
     revision_id: ulid(),
+    ...(previousRevision ? { previous_revision_id: previousRevision.revision_id } : {}),
     created_at: new Date().toISOString(),
     identity: deterministic
       ? { mode: 'deterministic', key: `project:${projectSlug}:summary` }
@@ -118,7 +127,6 @@ export async function distill(
           project_slug: projectSlug,
           ...(gitRoot ? { git_root: gitRoot } : {}),
           ...(gitRemote ? { git_remote: gitRemote } : {}),
-          global: true,
         }
       : { global: true },
     provenance: {

@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { InferenceProvider } from './provider.ts';
 import { distill } from './llmDistiller.ts';
 import { appendNote, readAllNotes } from '../log/noteLog.ts';
-import type { NoteRevision } from '../note.ts';
+import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
 import { acquireLock } from '../log/lock.ts';
 import {
@@ -479,7 +479,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         throw new Error(`session ${sessionId}: missing resource.agent on first delta event`);
       }
 
-      const note = await distill(events, sessionId, provider, origin);
+      const note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[]);
       appendNote(dataDir, note);
 
       const verdict: DistillVerdict = {

@@ -126,7 +126,7 @@ test('walking skeleton: fixture events → distill → note log → export → i
   );
 
   // 8. Query via recall() (024): exactly one result, whose note_id is the distilled note.
-  const results = recall(db, QUERY_TERM, { global: true });
+  const results = recall(db, QUERY_TERM, { projectSlug: 'librarian' });
   assert.equal(results.length, 1, 'stage 8 (recall): expected exactly one result for the query term');
   assert.equal(
     results[0].note_id,
