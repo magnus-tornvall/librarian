@@ -25,7 +25,7 @@ test('OpenCode provider sends prompt on stdin with model and hardcoded tool deni
     assert.deepEqual(recorded.argv, ['run', '--pure', '-m', 'test/model']);
     assert.equal(recorded.stdin, 'prompt\nintact');
     const config = JSON.parse(recorded.env);
-    assert.deepEqual(config.tools, { write: false, edit: false, bash: false });
+    assert.deepEqual(config.tools, { '*': false });
     assert.equal(config.permission['*'], 'deny');
   } finally {
     process.env.PATH = oldPath;

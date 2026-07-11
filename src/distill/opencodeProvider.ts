@@ -1,8 +1,17 @@
 import { spawnSync } from 'node:child_process';
 import type { InferenceProvider } from './provider.ts';
 
+// Wildcards, not an enumerated allow-list: `tools: { '*': false }` strips every
+// tool schema from what the model sees (no read/grep/webfetch/task either), and
+// `permission: { '*': 'deny' }` is the execution backstop for anything that
+// slips through. The read-side tools are the dangerous ones for a distiller —
+// read/grep bypass the redact-before-append boundary (nothing re-redacts at note
+// append), webfetch/websearch are exfiltration channels, and any extra context
+// breaks the note-log provenance contract (a note must be derivable from its
+// cited event range only). Wildcards also survive OpenCode adding new
+// default-enabled tools, which an enumerated list would silently let drift open.
 const OPENCODE_CONFIG_CONTENT = JSON.stringify({
-  tools: { write: false, edit: false, bash: false },
+  tools: { '*': false },
   permission: { '*': 'deny' },
 });
 
