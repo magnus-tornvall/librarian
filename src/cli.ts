@@ -8,14 +8,15 @@ import { makeInjectionId, readInjectionTraces, writeInjectionTrace, type Injecti
 import { makeFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
+import { importCuratedNote } from './distill/humanDistiller.ts';
 import { loadConfig } from './config.ts';
 import { indexNotes } from './index/indexer.ts';
 import { migrate } from './index/schema.ts';
 import { runDistill } from './distill/distillRun.ts';
 import { runExport } from './export/exportRun.ts';
 import { readAll } from './log/ndjson.ts';
-import { readAllNotes } from './log/noteLog.ts';
-import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from './note.ts';
+import { appendNote, readAllNotes } from './log/noteLog.ts';
+import { latestRecordPerNoteId, type NoteRecord, type NoteRevision, type NoteTombstone } from './note.ts';
 import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
 import { DEFAULT_SCORING_CONFIG } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
@@ -42,7 +43,11 @@ const USAGE = `usage:
   librarian inject --project <slug> [--global] [--session-start]
                                            read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
-                                             print a note, optionally with source provenance
+                                              print a note, optionally with source provenance
+  librarian note import-curated <file> --vault <dir> [--data-dir <dir>]
+                                              import a curated Markdown note
+  librarian note tombstone <note_id> [--data-dir <dir>] [--reason <text>]
+                                              tombstone the latest note revision
   librarian mcp [--data-dir <dir>] [--diagnostics-dir <dir>]
                                            start the MCP stdio server
   librarian machine-id [--path <file>]     print the persisted machine id
@@ -112,6 +117,36 @@ function parseInjectArgs(argv: string[]): InjectionOptions {
 }
 
 type NoteShowOptions = { noteId: string; dataDir: string; withProvenance: boolean; json: boolean };
+
+function noteImportCurated(argv: string[]): void {
+  const [file, ...rest] = argv;
+  if (!file || file.startsWith('--')) throw new Error('note import-curated requires <file>');
+  const flags = parseFlags(rest);
+  const vault = flags.get('vault');
+  if (!vault) throw new Error('note import-curated requires --vault <dir>');
+  const note = importCuratedNote(vault, file, flags.get('data-dir') ?? DATA_DIR);
+  process.stdout.write(JSON.stringify(note) + '\n');
+}
+
+function noteTombstone(argv: string[]): void {
+  const [noteId, ...rest] = argv;
+  if (!noteId || noteId.startsWith('--')) throw new Error('note tombstone requires <note_id>');
+  const flags = parseFlags(rest);
+  const dataDir = flags.get('data-dir') ?? DATA_DIR;
+  const latest = findLatestNote(dataDir, noteId);
+  if (!latest) throw new Error(`unknown note_id: ${noteId}`);
+  if (latest.kind === 'note_tombstone') {
+    process.stdout.write(JSON.stringify(latest) + '\n');
+    return;
+  }
+  const tombstone: NoteTombstone = {
+    kind: 'note_tombstone', schema_version: 1, note_id: noteId, revision_id: ulid(),
+    previous_revision_id: latest.revision_id, reason: flags.get('reason') ?? 'tombstoned by CLI',
+    created_at: new Date().toISOString(), source: { kind: 'cli' },
+  };
+  appendNote(dataDir, tombstone);
+  process.stdout.write(JSON.stringify(tombstone) + '\n');
+}
 
 export type RecallOptions = {
   query: string;
@@ -815,10 +850,15 @@ async function main(argv: string[]): Promise<void> {
       break;
     case 'note': {
       const [subcommand, ...subRest] = rest;
-      if (subcommand !== 'show') {
-        throw new Error('expected note subcommand: show');
+      if (subcommand === 'show') {
+        noteShow(parseNoteShowArgs(subRest));
+      } else if (subcommand === 'import-curated') {
+        noteImportCurated(subRest);
+      } else if (subcommand === 'tombstone') {
+        noteTombstone(subRest);
+      } else {
+        throw new Error('expected note subcommand: show, import-curated, or tombstone');
       }
-      noteShow(parseNoteShowArgs(subRest));
       break;
     }
     case 'mcp': {

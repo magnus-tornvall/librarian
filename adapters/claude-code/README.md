@@ -27,7 +27,7 @@ forces it (see below).
   For `UserPromptSubmit` and `SessionStart`, after collect handoff it spawns `librarian
   inject` and returns the block as `hookSpecificOutput.additionalContext` only when stdout
   is non-empty.
-- **`settings-snippet.json`** — the `hooks` block to merge into `~/.claude/settings.json`.
+- **`settings-snippet.json`** — reference shape for the four generated hooks.
 
 ## Deviations from the OpenCode adapter
 
@@ -47,46 +47,38 @@ Claude Code's hook model differs from OpenCode's plugin model, so:
   ignored events emit no stdout. Loud collect failure is re-logged to stderr; inject
   failure is contained so instrumentation remains unaffected.
 
-## Install
+## Project-local setup
 
-1. **`librarian` must be on `PATH`.** The hook shells out to `librarian collect`
-   (delivery), `librarian inject` (recall injection), and `librarian machine-id` (machine
-   id). Build the CLI (`npm run build` at the repo root produces `dist/cli.js`, exposed as
-   the `librarian` bin) and make it resolvable — e.g. `npm link` in this repo, or symlink
-   `dist/cli.js` onto your `PATH`.
+Run from this checkout:
 
-2. **Node ≥ 22.18 must be on `PATH`.** The hook is a TypeScript file run directly by
-   `node adapters/claude-code/hook.ts` (Node runs `.ts` natively at this version — the same
-   version the repo's `engines` pins). No build step for the hook itself.
+```sh
+./scripts/claude-code-setup.sh
+```
 
-3. **Merge the hooks block into your settings.** Copy the four hook events from
-   [`settings-snippet.json`](./settings-snippet.json) into `~/.claude/settings.json`
-   (global, all projects) or `.claude/settings.json` (a single project). **Replace the
-   placeholder path** `/ABSOLUTE/PATH/TO/librarian/adapters/claude-code/hook.ts` with the
-   real absolute path to `hook.ts` in your clone. The snippet wires all four events:
+Setup builds the CLI, validates Node, and creates `.claude/settings.local.json` with
+absolute Node and hook paths for `UserPromptSubmit`, `PostToolUse`, `SessionStart`, and
+`Stop`. It refuses to overwrite a differing file; merge the reference
+[`settings-snippet.json`](./settings-snippet.json) manually in that case. Fully restart a
+running Claude Code session after setup.
 
-   - `UserPromptSubmit` → `PromptEvent`
-   - `PostToolUse` (matcher `"*"`, every tool) → `ToolEvent`
-   - `SessionStart` → `SessionEvent(action: "start")`
-   - `Stop` → `SessionEvent(action: "stop")`
+The hook uses this checkout's `dist/cli.js` with its current Node runtime, falling back to
+`librarian` on PATH only when the build is absent. No npm link, global Claude settings, or
+Librarian config lookup is needed.
 
-   If you already have hooks configured, merge these entries into the existing arrays for
-   each event rather than replacing the whole `hooks` object.
+Run the authenticated, token-consuming end-to-end check explicitly (it is developer-machine
+tooling and is not part of `npm test` or CI):
 
-   > **Future packaging (avoids the manual absolute path).** Claude Code substitutes
-   > [`${CLAUDE_PLUGIN_ROOT}`](https://docs.claude.com/en/docs/claude-code/plugins-reference#environment-variables)
-   > — the absolute path to a plugin's install directory — into hook `command`/`args`. When
-   > this adapter is shipped as a proper Claude Code plugin, the snippet becomes
-   > `"args": ["${CLAUDE_PLUGIN_ROOT}/hook.ts"]` (exec form, no quoting), so the hook path
-   > resolves with no PATH assumption and no user-edited placeholder. This is the Claude
-   > Code analogue of the OpenCode adapter's `~/.librarian/config.json` `bin` resolution;
-   > it is deferred packaging work, not part of the current manual install.
+```sh
+./scripts/dogfood-verify.sh
+```
 
-4. That's it. New Claude Code sessions on that machine (or in that project) will emit
-   canonical events to `~/.librarian/data/events/<session_id>.ndjson` via the collector and
-   can receive recall context through Claude Code's hook `additionalContext`. This is the
-   **dogfooding moment** (§14): once installed, build sessions on this repo get recorded.
-   That is configuration, not code — there is deliberately no auto-install magic.
+Remove only the generated project settings with:
+
+```sh
+./scripts/claude-code-teardown.sh
+```
+
+Teardown leaves all collected data under `~/.librarian` untouched.
 
 ## What gets emitted (mapping rules, §10.1)
 
