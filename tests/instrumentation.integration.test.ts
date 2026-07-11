@@ -314,7 +314,7 @@ for (const adapter of [OPENCODE, CLAUDE_CODE]) {
     migrate(db);
     indexNotes(db, t.dataDir, t.cursorPath);
 
-    const results = recall(db, term, { global: true });
+    const results = recall(db, term, { projectSlug: 'librarian' });
     const hit = results.find((r) => r.note_id === note.note_id);
     assert.ok(hit, `recall("${term}") must return the distilled ${adapter.origin} note`);
     assert.equal(hit!.origin, adapter.origin, `the recalled note's origin must survive as ${adapter.origin}`);
@@ -327,7 +327,7 @@ for (const adapter of [OPENCODE, CLAUDE_CODE]) {
 // Section 2 — both origins appear in ONE recall result set (DoD).
 //
 // Distill an eligible session from EACH adapter into the SAME data dir, index
-// once, and run a single global recall on the shared fixture term. Both origins
+// once, and run a single project recall on the shared fixture term. Both origins
 // (`opencode`, `claude-code`) must appear among the results — origin carried
 // end-to-end from two different native surfaces into one recall (§6: origin is
 // carried and weighable/filterable, not retuned here).
@@ -359,7 +359,7 @@ test('instrumentation §2 both origins: opencode AND claude-code both appear in 
   migrate(db);
   indexNotes(db, t.dataDir, t.cursorPath);
 
-  const results = recall(db, term, { global: true });
+  const results = recall(db, term, { projectSlug: 'librarian' });
   const origins = new Set(results.map((r) => r.origin));
   assert.ok(origins.has('opencode'), 'the opencode origin must appear in the recall results');
   assert.ok(origins.has('claude-code'), 'the claude-code origin must appear in the recall results');

@@ -16,8 +16,9 @@ export type InferenceProvider = {
  * and resolves to the canned `response`. This is how the distiller (018) and its
  * tests exercise the pipeline without a live `claude -p` call.
  */
-export function makeFixtureProvider(response: string): InferenceProvider {
+export function makeFixtureProvider(response: string, model?: string): InferenceProvider {
   return {
+    ...(model ? { model } : {}),
     complete(_prompt: string): Promise<string> {
       return Promise.resolve(response);
     },

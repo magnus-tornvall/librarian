@@ -499,7 +499,7 @@ function collect(flags: Map<string, string>): void {
 export function resolveProvider(flags: Map<string, string>, configPath = CONFIG_PATH): InferenceProvider {
   const fixture = flags.get('provider-fixture');
   if (fixture !== undefined) {
-    return makeFixtureProvider(fs.readFileSync(fixture, 'utf8'));
+    return makeFixtureProvider(fs.readFileSync(fixture, 'utf8'), flags.get('model'));
   }
   const config = loadConfig(configPath);
   const provider = flags.get('provider') ?? config.inference.provider;

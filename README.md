@@ -2,6 +2,21 @@
 
 A personal context layer for AI coding agents. Design: `docs/specs/librarian-design-consolidated.md` — the spec is the source of truth; its §12 roadmap is the live plan.
 
+## Qualifying a provider
+
+`npm run qualify` runs the provider-qualification fixtures offline with canned
+responses. Set `QUALIFY_PROVIDER` to exercise the same fixtures against a live
+provider; OpenCode also requires its exact model selector in `QUALIFY_MODEL`:
+
+```sh
+QUALIFY_PROVIDER=claude npm run qualify
+QUALIFY_PROVIDER=opencode QUALIFY_MODEL=anthropic/claude-sonnet-4 npm run qualify
+QUALIFY_PROVIDER=opencode QUALIFY_MODEL=ollama/qwen3:8b npm run qualify
+```
+
+Each fixture prints its own pass/fail result. Failures name the structural assertion
+that degraded, rather than comparing model-generated wording.
+
 ## MCP Server
 
 `librarian mcp` starts the local stdio MCP server with `search` and `get_note` tools. See [`docs/mcp.md`](docs/mcp.md) for Claude Code registration and tool behavior.

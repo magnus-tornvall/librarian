@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { distill } from '../../src/distill/llmDistiller.ts';
 import { makeFixtureProvider } from '../../src/distill/provider.ts';
+import type { NoteRevision } from '../../src/note.ts';
 
 const FIXTURE = path.join(
   import.meta.dirname,
@@ -103,4 +104,38 @@ test('malformed JSON from the provider throws (no retry in this task)', async ()
   await assert.rejects(() =>
     distill(events, SESSION_ID, makeFixtureProvider('not json at all'), ORIGIN),
   );
+});
+
+test('project summaries are project-scoped deterministic revisions chained to the latest revision', async () => {
+  const events = loadFixtureEvents();
+  const response = JSON.stringify({
+    note_type: 'project_summary',
+    title: 'Librarian status',
+    summary: 'The project summary was refreshed.',
+  });
+  const previous = {
+    kind: 'note_revision',
+    schema_version: 1,
+    note_id: 'project:librarian:summary',
+    revision_id: '01J8X7QK40M8Q3N6P0R5S7TVWY',
+    created_at: '2026-07-01T00:00:00.000Z',
+    identity: { mode: 'deterministic', key: 'project:librarian:summary' },
+    source: { origin: ORIGIN, distiller: 'llm' },
+    note_type: 'project_summary',
+    title: 'Earlier status',
+    scope: { project_slug: 'librarian' },
+    provenance: {},
+    links: [],
+    body: { summary: 'Earlier summary.' },
+  } satisfies NoteRevision;
+
+  const note = await distill(events, SESSION_ID, makeFixtureProvider(response), ORIGIN, [previous]);
+
+  assert.equal(note.note_id, 'project:librarian:summary');
+  assert.equal(note.previous_revision_id, previous.revision_id);
+  assert.deepEqual(note.scope, {
+    project_slug: 'librarian',
+    git_root: '/Users/magnus/dev/librarian',
+    git_remote: 'git@github.com:magnus-tornvall/librarian.git',
+  });
 });

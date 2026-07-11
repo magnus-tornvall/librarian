@@ -1,0 +1,5 @@
+{
+  "note_type": "episode",
+  "title": "Added provider health command",
+  "summary": "Implemented and tested a provider health command."
+}
