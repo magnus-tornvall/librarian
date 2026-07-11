@@ -1,0 +1,8 @@
+{
+  "note_type": "episode",
+  "identity_mode": "episodic",
+  "project_slug": "librarian",
+  "session_id": "qualify-coding-session",
+  "from_event_id": "01K00000000000000000000001",
+  "to_event_id": "01K00000000000000000000010"
+}

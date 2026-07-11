@@ -5,9 +5,6 @@ import type { NoteRevision } from '../note.ts';
 
 export type { NoteRevision };
 
-// This path only ever mints EPISODIC notes: `note_id = {note_type}:{ulid}` per spec §5/§10.2,
-// one immutable revision.
-
 const NOTE_TYPES: ReadonlyArray<NoteRevision['note_type']> = [
   'fact',
   'decision',
@@ -23,7 +20,16 @@ type LlmNoteJudgment = {
   title?: string;
   summary?: string;
   bullets?: string[];
+  links?: unknown;
 };
+
+const LINK_TARGET_TYPES = new Set<NoteRevision['links'][number]['target_type']>([
+  'note',
+  'entity',
+  'project',
+  'file',
+  'url',
+]);
 
 function coerceNoteType(value: unknown): NoteRevision['note_type'] {
   return NOTE_TYPES.includes(value as NoteRevision['note_type'])
@@ -39,6 +45,7 @@ const INSTRUCTION = [
   '  "title": a short title',
   '  "summary": a one-to-two sentence summary',
   '  "bullets": (optional) an array of short strings',
+  '  "links": (optional) an array of { "target_type": note | entity | project | file | url, "target": string, "relation": optional string }',
   '',
   'Events:',
 ].join('\n');
@@ -76,28 +83,50 @@ export async function distill(
   }
 
   const noteType = coerceNoteType(judgment.note_type);
+  const resource = (events[0]?.resource ?? {}) as Record<string, unknown>;
+  const gitRoot = typeof resource.git_root === 'string' ? resource.git_root : undefined;
+  const gitRemote = typeof resource.git_remote === 'string' ? resource.git_remote : undefined;
+  const projectSlug = gitRoot?.split(/[\\/]/).filter(Boolean).at(-1);
+  const deterministic = noteType === 'project_summary' && projectSlug !== undefined;
+  const links = Array.isArray(judgment.links)
+    ? judgment.links.filter((link): link is NoteRevision['links'][number] => {
+        if (typeof link !== 'object' || link === null) return false;
+        const candidate = link as Record<string, unknown>;
+        return LINK_TARGET_TYPES.has(candidate.target_type as NoteRevision['links'][number]['target_type'])
+          && typeof candidate.target === 'string'
+          && candidate.target.length > 0
+          && (candidate.relation === undefined || typeof candidate.relation === 'string');
+      })
+    : [];
+  const firstEventId = events[0]?.event_id as string;
+  const lastEventId = events.at(-1)?.event_id as string;
 
   return {
     kind: 'note_revision',
     schema_version: 1,
-    note_id: `${noteType}:${ulid()}`,
+    note_id: deterministic ? `project:${projectSlug}:summary` : `${noteType}:${ulid()}`,
     revision_id: ulid(),
     created_at: new Date().toISOString(),
-    identity: { mode: 'episodic' },
+    identity: deterministic
+      ? { mode: 'deterministic', key: `project:${projectSlug}:summary` }
+      : { mode: 'episodic' },
     source: { origin, distiller: 'llm', ...(provider.model ? { model: provider.model } : {}) },
     note_type: noteType,
     title: judgment.title ?? '',
-    // An episodic note the distiller can't tie to a project defaults to global scope.
-    // Recall enforces "project match or explicit global scope" (§6), so a scopeless
-    // note would be permanently unrecallable — global is the honest v1 default here,
-    // mirroring the human distiller's curated-note default. Project attribution from
-    // event `git_root`/`git_remote` is a later concern (§5).
-    scope: { global: true },
+    scope: projectSlug
+      ? {
+          project_slug: projectSlug,
+          ...(gitRoot ? { git_root: gitRoot } : {}),
+          ...(gitRemote ? { git_remote: gitRemote } : {}),
+          global: true,
+        }
+      : { global: true },
     provenance: {
       session_id: sessionId,
       event_ids: events.map((event) => event.event_id as string),
+      event_range: { from_event_id: firstEventId, to_event_id: lastEventId },
     },
-    links: [],
+    links,
     body,
   };
 }

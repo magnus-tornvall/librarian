@@ -1,0 +1,9 @@
+{
+  "note_type": "decision",
+  "title": "Keep tool-free OpenCode inference",
+  "summary": "OpenCode inference runs with tools disabled so distillation cannot mutate the workspace.",
+  "links": [
+    { "target_type": "file", "target": "src/distill/opencodeProvider.ts", "relation": "implemented_by" },
+    { "target_type": "entity", "target": "OpenCode", "relation": "provider" }
+  ]
+}
