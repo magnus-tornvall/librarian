@@ -189,6 +189,32 @@ test('distill: an eligible session lands one note with correct origin and proven
   assert.equal(cursor.consumer, 'distiller');
 });
 
+test('distill: OpenCode provider stamps its explicit model on the note', () => {
+  const root = tempDir('cli-distill-opencode-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const binDir = path.join(root, 'bin');
+  fs.mkdirSync(binDir);
+  const opencode = path.join(binDir, 'opencode');
+  fs.writeFileSync(opencode, `#!/bin/sh\nprintf '%s' '${LLM_RESPONSE}'\n`);
+  fs.chmodSync(opencode, 0o755);
+  ingest(dataDir, eligibleEvents('sess-opencode'));
+
+  const result = spawnSync('node', [
+    CLI, 'distill', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir,
+    '--provider', 'opencode', '--model', 'test/test',
+  ], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH}` },
+  });
+
+  assert.equal(result.status, 0, `distill should exit 0; stderr: ${result.stderr}`);
+  const notes = noteRevisions(dataDir);
+  assert.equal(notes.length, 1);
+  assert.equal((notes[0].source as Record<string, unknown>).distiller, 'llm');
+  assert.equal((notes[0].source as Record<string, unknown>).model, 'test/test');
+});
+
 test('distill: re-running over an unchanged log mints no second note (idempotency by provenance)', () => {
   const root = tempDir('cli-distill-rerun-');
   const dataDir = path.join(root, 'data');

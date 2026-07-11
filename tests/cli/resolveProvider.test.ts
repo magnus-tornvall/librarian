@@ -42,3 +42,23 @@ test('resolveProvider: no fixture flag selects a different (real claude) provide
   const fixtureProvider = resolveProvider(new Map([['provider-fixture', fixturePath]]));
   assert.notEqual(real.complete, fixtureProvider.complete, 'the two branches must resolve distinct providers');
 });
+
+test('resolveProvider precedence is fixture, flag, config, then claude default', async () => {
+  const dir = tempDir('resolve-provider-precedence-');
+  const configPath = path.join(dir, 'config.json');
+  const fixturePath = path.join(dir, 'fixture.txt');
+  fs.writeFileSync(fixturePath, 'fixture');
+  fs.writeFileSync(configPath, JSON.stringify({ inference: { provider: 'opencode', model: 'config/model' } }));
+
+  assert.equal(await resolveProvider(new Map([['provider-fixture', fixturePath], ['provider', 'opencode']]), configPath).complete('x'), 'fixture');
+  assert.equal(resolveProvider(new Map([['provider', 'claude']]), configPath).model, undefined);
+  assert.equal(resolveProvider(new Map(), configPath).model, 'config/model');
+  assert.equal(resolveProvider(new Map(), path.join(dir, 'missing.json')).model, undefined);
+  assert.equal(resolveProvider(new Map([['provider', 'opencode'], ['model', 'flag/model']]), configPath).model, 'flag/model');
+});
+
+test('resolveProvider rejects OpenCode without a model and unknown flag providers', () => {
+  const missing = path.join(tempDir('resolve-provider-model-'), 'config.json');
+  assert.throws(() => resolveProvider(new Map([['provider', 'opencode']]), missing), /--model.*provider\/model/);
+  assert.throws(() => resolveProvider(new Map([['provider', 'wat']]), missing), /unknown provider: wat/);
+});
