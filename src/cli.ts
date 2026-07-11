@@ -7,6 +7,8 @@ import { appendEvent } from './collector/append.ts';
 import { makeInjectionId, readInjectionTraces, writeInjectionTrace, type InjectionTrace } from './diagnostics/injectionTrace.ts';
 import { makeFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
+import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
+import { loadConfig } from './config.ts';
 import { indexNotes } from './index/indexer.ts';
 import { migrate } from './index/schema.ts';
 import { runDistill } from './distill/distillRun.ts';
@@ -14,7 +16,7 @@ import { runExport } from './export/exportRun.ts';
 import { readAll } from './log/ndjson.ts';
 import { readAllNotes } from './log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from './note.ts';
-import { DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
+import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
 import { DEFAULT_SCORING_CONFIG } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
@@ -28,9 +30,9 @@ import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult }
 
 const USAGE = `usage:
   librarian collect [--data-dir <dir>]     read canonical-event NDJSON on stdin
-  librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider-fixture <file>]
+  librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider <claude|opencode>] [--model <provider/model>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
-  librarian drain [--data-dir <dir>] [--diagnostics-dir <dir>] [--vault <dir>] [--provider-fixture <file>]
+  librarian drain [--data-dir <dir>] [--diagnostics-dir <dir>] [--vault <dir>] [--provider <claude|opencode>] [--model <provider/model>] [--provider-fixture <file>]
                                            process everything pending: distill, then export to a vault
   librarian recall <query> --project <slug> [--global] [--origin <origin>] [--limit N] [--json]
                                            search the recall index for pull-path results
@@ -491,16 +493,27 @@ function collect(flags: Map<string, string>): void {
  * test-only hook — the fixture-backed provider is also how tests avoid a live
  * call. Absent the flag, the real `claude -p` provider is used.
  *
- * The `--provider <name>` selector for the second inference provider
- * (OpenAI-compatible / local) is roadmap item 10 — a later branch here, not a
- * registry to build now.
+ * `--provider` overrides config selection directly; this remains a branch, not
+ * a provider registry.
  */
-export function resolveProvider(flags: Map<string, string>): InferenceProvider {
+export function resolveProvider(flags: Map<string, string>, configPath = CONFIG_PATH): InferenceProvider {
   const fixture = flags.get('provider-fixture');
   if (fixture !== undefined) {
     return makeFixtureProvider(fs.readFileSync(fixture, 'utf8'));
   }
-  return makeClaudeProvider();
+  const config = loadConfig(configPath);
+  const provider = flags.get('provider') ?? config.inference.provider;
+  if (provider === 'claude') {
+    return makeClaudeProvider();
+  }
+  if (provider !== 'opencode') {
+    throw new Error(`unknown provider: ${provider}`);
+  }
+  const model = flags.get('model') ?? config.inference.model;
+  if (!model) {
+    throw new Error(`OpenCode provider requires inference.model in ${configPath} or --model <provider/model>`);
+  }
+  return makeOpencodeProvider({ model });
 }
 
 /**

@@ -6,6 +6,8 @@
  * retry-once wrapper is deliberately not built here.
  */
 export type InferenceProvider = {
+  /** Exact model selector, when provenance requires one. */
+  readonly model?: string;
   complete(prompt: string): Promise<string>;
 };
 

@@ -84,7 +84,7 @@ export async function distill(
     revision_id: ulid(),
     created_at: new Date().toISOString(),
     identity: { mode: 'episodic' },
-    source: { origin, distiller: 'llm' },
+    source: { origin, distiller: 'llm', ...(provider.model ? { model: provider.model } : {}) },
     note_type: noteType,
     title: judgment.title ?? '',
     // An episodic note the distiller can't tie to a project defaults to global scope.
