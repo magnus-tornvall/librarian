@@ -129,16 +129,19 @@ test('inject CLI enforces push cap and budget, records budget cuts, and fail-clo
 // #82 graduates this by removing `todo` once it excludes contradicted facts within a push block.
 test('inject excludes a stale fact contradicted by a newer fact', { todo: true }, () => {
   const t = tempRoot();
+  const newerCreatedAt = new Date();
+  const olderCreatedAt = new Date(newerCreatedAt);
+  olderCreatedAt.setUTCDate(olderCreatedAt.getUTCDate() - 30);
   appendNote(t.dataDir, note(1, {
     note_id: 'fact:staging-api-url-old',
-    created_at: '2026-06-01T10:00:00.000Z',
+    created_at: olderCreatedAt.toISOString(),
     note_type: 'fact',
     title: 'Staging API base URL',
     body: { summary: 'The staging API base URL is https://staging-old.example.test.' },
   }));
   appendNote(t.dataDir, note(2, {
     note_id: 'fact:staging-api-url-new',
-    created_at: '2026-07-01T10:00:00.000Z',
+    created_at: newerCreatedAt.toISOString(),
     note_type: 'fact',
     title: 'Staging API base URL updated',
     body: { summary: 'The staging API base URL is https://staging-new.example.test, replacing the previous URL.' },
