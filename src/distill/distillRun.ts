@@ -375,6 +375,11 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
 
     const delta = fileBytes.subarray(startOffset).toString('utf8');
     const { events, consumedBytes, corrupt } = parseComplete(delta);
+    const eventOrigin = ((events[0]?.resource ?? {}) as Record<string, unknown>).agent;
+    const diagnosticFields = {
+      ...(typeof eventOrigin === 'string' && eventOrigin.length > 0 ? { origin: eventOrigin } : {}),
+      ...(provider.model ? { provider: provider.model } : {}),
+    };
 
     // Corrupt complete lines are quarantined once — but ONLY when the cursor
     // actually advances past their bytes (§5): a delta whose valid remainder
@@ -398,6 +403,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           session_id: sessionId,
           decision: 'quarantined',
           reason: `unparseable event line at bytes ${startOffset + bad.byteStart}..${startOffset + bad.byteEnd}: ${bad.error}`,
+          ...diagnosticFields,
           counts: { events: 0, prompts: 0, write_tools: 0, salience_hints: 0 },
           quarantine: {
             file_path: logFilePath,
@@ -443,6 +449,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         session_id: sessionId,
         decision: 'skipped',
         reason: skip,
+        ...diagnosticFields,
         counts,
       };
       writeDistillVerdict(diagnosticsDir, verdict);
@@ -465,6 +472,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         session_id: sessionId,
         decision: 'skipped',
         reason: 'already_provenanced',
+        ...diagnosticFields,
         counts,
       };
       writeDistillVerdict(diagnosticsDir, verdict);
@@ -494,6 +502,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           session_id: sessionId,
           decision: 'duplicate',
           reason: `near-duplicate of ${duplicate.note_id} (BM25 ${duplicate.score})`,
+          ...diagnosticFields,
           counts,
           note_id: duplicate.note_id,
         });
@@ -510,6 +519,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           session_id: sessionId,
           decision: 'noop',
           reason,
+          ...diagnosticFields,
           counts,
           ...(verify ? { verify: { errors: verify.errors, reason: verify.reason, attempts: 1 } } : {}),
         });
@@ -551,6 +561,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           session_id: sessionId,
           decision: 'rejected',
           reason: `rejected after ${verifyAttempts} verification attempts: ${verify.reason}`,
+          ...diagnosticFields,
           counts,
           verify: { errors: verify.errors, reason: verify.reason, attempts: verifyAttempts },
         });
@@ -567,6 +578,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         session_id: sessionId,
         decision: 'distilled',
         reason: `distilled ${metrics.events} events into ${note.note_id}`,
+        ...diagnosticFields,
         counts,
         note_id: note.note_id,
         ...(verifyAttempts === 2
@@ -611,6 +623,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         session_id: sessionId,
         decision: 'quarantined',
         reason: `gave up after ${attempt} attempts on bytes ${startOffset}..${newOffset}: ${lastError}`,
+        ...diagnosticFields,
         counts,
         quarantine: {
           file_path: logFilePath,

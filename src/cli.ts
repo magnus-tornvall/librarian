@@ -5,6 +5,8 @@ import Database from 'better-sqlite3';
 import { ulid } from 'ulid';
 import { appendEvent } from './collector/append.ts';
 import { makeInjectionId, readInjectionTraces, writeInjectionTrace, type InjectionTrace } from './diagnostics/injectionTrace.ts';
+import { readDistillVerdicts } from './diagnostics/distillVerdict.ts';
+import { computeStats, formatStats } from './diagnostics/stats.ts';
 import { makeFixtureProvider, makeScriptedFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
@@ -39,7 +41,8 @@ const USAGE = `usage:
                                            search the recall index for pull-path results
   librarian why <injection_id> [--json]    explain a diagnostics injection trace
   librarian why-not <query> <note_id> --project <slug> [--global]
-                                           explain why a note did not ship for a query
+                                            explain why a note did not ship for a query
+  librarian stats [--json]                  report admission, usage, and cut-reason diagnostics
   librarian inject --project <slug> [--global] [--session-start]
                                            read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
@@ -177,6 +180,32 @@ export type NoteShowPayload = { note: NoteRecord; provenance_events: Array<Recor
 
 type WhyOptions = { injectionId: string; json: boolean; diagnosticsDir: string };
 type WhyNotOptions = { query: string; noteId: string; projectSlug?: string; global: boolean; dataDir: string };
+
+function statsCommand(argv: string[]): void {
+  let json = false;
+  let dataDir = DATA_DIR;
+  let diagnosticsDir = DIAGNOSTICS_DIR;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--json') json = true;
+    else if (arg === '--data-dir' || arg === '--diagnostics-dir') {
+      const value = argv[++i];
+      if (value === undefined) throw new Error(`flag ${arg} requires a value`);
+      if (arg === '--data-dir') dataDir = value;
+      else diagnosticsDir = value;
+    } else throw new Error(`unexpected argument: ${arg}`);
+  }
+  const notes = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[])
+    .filter((record): record is NoteRevision => record.kind === 'note_revision')
+    .map(({ note_id, title }) => ({ note_id, title }));
+  const report = computeStats({
+    verdicts: readDistillVerdicts(diagnosticsDir),
+    traces: readInjectionTraces(diagnosticsDir),
+    notes,
+    now: new Date(),
+  });
+  process.stdout.write(json ? JSON.stringify(report) + '\n' : formatStats(report));
+}
 
 function parseNoteShowArgs(argv: string[]): NoteShowOptions {
   const [noteId, ...rest] = argv;
@@ -857,6 +886,9 @@ async function main(argv: string[]): Promise<void> {
       break;
     case 'why-not':
       whyNotCommand(parseWhyNotArgs(rest));
+      break;
+    case 'stats':
+      statsCommand(rest);
       break;
     case 'inject':
       injectCommand(parseInjectArgs(rest));
