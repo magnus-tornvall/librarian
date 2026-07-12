@@ -99,6 +99,14 @@ test('the LLM cannot dictate identity/provenance even if it tries', async () => 
   );
 });
 
+test('fenced ```json response from the provider is parsed', async () => {
+  const events = loadFixtureEvents();
+  const fenced = '```json\n' + LLM_RESPONSE + '\n```';
+  const note = await distill(events, SESSION_ID, makeFixtureProvider(fenced), ORIGIN);
+  assert.equal(note.note_type, 'decision');
+  assert.equal(note.title, 'Expire check before redirect');
+});
+
 test('malformed JSON from the provider throws (no retry in this task)', async () => {
   const events = loadFixtureEvents();
   await assert.rejects(() =>

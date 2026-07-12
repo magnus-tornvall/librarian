@@ -32,6 +32,15 @@ const LINK_TARGET_TYPES = new Set<NoteRevision['links'][number]['target_type']>(
   'url',
 ]);
 
+// Chat providers (opencode/claude) sometimes wrap the object in a
+// ```json ... ``` fence despite "ONLY JSON". Strip one fence if present;
+// otherwise parse as-is so genuinely malformed JSON still throws.
+function unfence(text: string): string {
+  const trimmed = text.trim();
+  const m = trimmed.match(/^```(?:json)?\s*\n([\s\S]*?)\n?```$/);
+  return m ? m[1].trim() : trimmed;
+}
+
 function coerceNoteType(value: unknown): NoteRevision['note_type'] {
   return NOTE_TYPES.includes(value as NoteRevision['note_type'])
     ? (value as NoteRevision['note_type'])
@@ -77,7 +86,7 @@ export async function distill(
   // Parse the LLM judgment. On malformed JSON, throw — no retry in this task
   // (§5 caps the eventual ceiling at completion + validate + one retry; the
   // retry-once wrapper is a later concern, per task 017's scope note).
-  const judgment = JSON.parse(raw) as LlmNoteJudgment;
+  const judgment = JSON.parse(unfence(raw)) as LlmNoteJudgment;
 
   const body: NoteRevision['body'] = { summary: judgment.summary ?? '' };
   if (Array.isArray(judgment.bullets)) {
