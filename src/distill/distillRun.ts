@@ -286,6 +286,7 @@ export type DistillRunResult = {
   distilled: number;
   duplicates: number;
   skipped: number;
+  noops: number;
   quarantined: number;
   rejected: number;
   status: 'pass' | 'lock-held';
@@ -331,7 +332,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
   if (lock === null) {
     // Someone live and fresh is already draining this backlog — not an error.
     process.stderr.write('librarian: distill already running (lock held); nothing to do\n');
-    return { distilled: 0, duplicates: 0, skipped: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
+    return { distilled: 0, duplicates: 0, skipped: 0, noops: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
   }
   try {
     return await runDistillPass(options);
@@ -341,7 +342,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
 }
 
 async function runDistillPass(options: DistillRunOptions): Promise<DistillRunResult> {
-  const result: DistillRunResult = { distilled: 0, duplicates: 0, skipped: 0, quarantined: 0, rejected: 0, status: 'pass' };
+  const result: DistillRunResult = { distilled: 0, duplicates: 0, skipped: 0, noops: 0, quarantined: 0, rejected: 0, status: 'pass' };
   // Distinct sessions that had ANY quarantine this run (a corrupt line and/or a
   // budget-exhausted delta). Set, not a counter: several corrupt lines in one
   // session is still one quarantined session, so the drain summary's "sessions
@@ -501,7 +502,27 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         return true;
       };
 
-      let note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[]);
+      const decline = (reason: string, verify?: VerifyVerdict): void => {
+        writeDistillVerdict(diagnosticsDir, {
+          record_class: 'diagnostic',
+          verdict_id: makeVerdictId(),
+          ts: new Date().toISOString(),
+          session_id: sessionId,
+          decision: 'noop',
+          reason,
+          counts,
+          ...(verify ? { verify: { errors: verify.errors, reason: verify.reason, attempts: 1 } } : {}),
+        });
+        advancePast(newOffset, lastRecordId);
+        result.noops += 1;
+      };
+
+      let judgment = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[]);
+      if (judgment.kind === 'declined') {
+        decline(judgment.reason);
+        continue;
+      }
+      let note = judgment;
       if (rejectDuplicate(note)) {
         continue;
       }
@@ -510,7 +531,12 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
       let feedback: VerifyVerdict | undefined;
       if (!verify.faithful) {
         feedback = verify;
-        note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[], verify.reason);
+        judgment = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[], verify.reason);
+        if (judgment.kind === 'declined') {
+          decline(judgment.reason, verify);
+          continue;
+        }
+        note = judgment;
         if (rejectDuplicate(note)) {
           continue;
         }

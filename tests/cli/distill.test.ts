@@ -233,6 +233,79 @@ test('distill: faithful first try appends one note after exactly two provider ca
   assert.equal(scripted.prompts.length, 2);
 });
 
+test('distill: explicit none declines before novelty and verification', async () => {
+  const root = tempDir('cli-distill-noop-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-noop';
+  ingest(dataDir, eligibleEvents(sessionId));
+  const reason = 'Only routine commands and file reads occurred.';
+  const scripted = scriptedProvider([JSON.stringify({ note_type: 'none', reason })]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.equal(result.noops, 1);
+  assert.equal(noteRevisions(dataDir).length, 0);
+  assert.equal(scripted.prompts.length, 1, 'a decline bypasses novelty and verification');
+  assert.equal(readVerdicts(diagnosticsDir).find((verdict) => verdict.decision === 'noop')?.reason, reason);
+  assert.equal(readCursorOrNull(dataDir, sessionId)!.byte_offset, fs.statSync(eventLogPath(dataDir, sessionId)).size);
+});
+
+test('distill: feedback re-distill may decline with verification context', async () => {
+  const root = tempDir('cli-distill-feedback-noop-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-feedback-noop';
+  ingest(dataDir, eligibleEvents(sessionId));
+  const verify = { faithful: false, errors: ['omission'], reason: 'No durable outcome is supported.' };
+  const scripted = scriptedProvider([
+    LLM_RESPONSE,
+    JSON.stringify(verify),
+    JSON.stringify({ note_type: 'none', reason: 'Nothing remains worth keeping.' }),
+  ]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.equal(result.noops, 1);
+  assert.equal(noteRevisions(dataDir).length, 0);
+  assert.equal(scripted.prompts.length, 3);
+  assert.deepEqual(readVerdicts(diagnosticsDir).find((verdict) => verdict.decision === 'noop')?.verify, {
+    errors: verify.errors,
+    reason: verify.reason,
+    attempts: 1,
+  });
+});
+
+test('distill: unknown note types still coerce to episode and proceed', async () => {
+  const root = tempDir('cli-distill-unknown-type-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  ingest(dataDir, eligibleEvents('sess-unknown-type'));
+  const scripted = scriptedProvider([
+    JSON.stringify({ note_type: 'banana', title: 'Unknown type', summary: 'A supported event summary.' }),
+    FAITHFUL_RESPONSE,
+  ]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.equal(result.distilled, 1);
+  assert.equal(noteRevisions(dataDir)[0].note_type, 'episode');
+  assert.equal(scripted.prompts.length, 2);
+});
+
+test('drain: summary includes the noop count', () => {
+  const root = tempDir('cli-drain-noop-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  ingest(dataDir, eligibleEvents('sess-drain-noop'));
+  const fixture = writeFixtureContent(root, JSON.stringify({ note_type: 'none', reason: 'Routine work only.' }));
+
+  const result = runCli(['drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--provider-fixture', fixture], '');
+
+  assert.equal(result.status, 0, `drain should exit 0; stderr: ${result.stderr}`);
+  assert.match(result.stdout, /sessions noops: 1/);
+});
+
 test('distill: a near-duplicate episodic draft is a NOOP before verification', async () => {
   const root = tempDir('cli-distill-duplicate-');
   const dataDir = path.join(root, 'data');
