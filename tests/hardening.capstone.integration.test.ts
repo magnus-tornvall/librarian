@@ -76,7 +76,12 @@ function writeFixture(dir: string, content = LLM_RESPONSE): string {
   const fixturePath = path.join(dir, 'llm-response.json');
   fs.writeFileSync(
     fixturePath,
-    content === LLM_RESPONSE ? JSON.stringify(Array.from({ length: 10 }, () => [content, FAITHFUL_RESPONSE]).flat()) : content,
+    content === LLM_RESPONSE
+      ? JSON.stringify(Array.from({ length: 10 }, (_, index) => [
+          JSON.stringify({ note_type: 'decision', title: `Expire check ${index}`, summary: `Fixed redirect case ${index}.` }),
+          FAITHFUL_RESPONSE,
+        ]).flat())
+      : content,
   );
   return fixturePath;
 }

@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { InferenceProvider } from './provider.ts';
 import { distill } from './llmDistiller.ts';
 import { verifyNote, type VerifyVerdict } from './verifyNote.ts';
+import { findNearDuplicate } from './noveltyGate.ts';
 import { appendNote, readAllNotes } from '../log/noteLog.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
@@ -283,6 +284,7 @@ export type DistillRunOptions = {
  */
 export type DistillRunResult = {
   distilled: number;
+  duplicates: number;
   skipped: number;
   quarantined: number;
   rejected: number;
@@ -329,7 +331,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
   if (lock === null) {
     // Someone live and fresh is already draining this backlog — not an error.
     process.stderr.write('librarian: distill already running (lock held); nothing to do\n');
-    return { distilled: 0, skipped: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
+    return { distilled: 0, duplicates: 0, skipped: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
   }
   try {
     return await runDistillPass(options);
@@ -339,7 +341,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
 }
 
 async function runDistillPass(options: DistillRunOptions): Promise<DistillRunResult> {
-  const result: DistillRunResult = { distilled: 0, skipped: 0, quarantined: 0, rejected: 0, status: 'pass' };
+  const result: DistillRunResult = { distilled: 0, duplicates: 0, skipped: 0, quarantined: 0, rejected: 0, status: 'pass' };
   // Distinct sessions that had ANY quarantine this run (a corrupt line and/or a
   // budget-exhausted delta). Set, not a counter: several corrupt lines in one
   // session is still one quarantined session, so the drain summary's "sessions
@@ -481,13 +483,37 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         throw new Error(`session ${sessionId}: missing resource.agent on first delta event`);
       }
 
+      const rejectDuplicate = (draft: NoteRevision): boolean => {
+        const duplicate = draft.identity.mode === 'episodic' ? findNearDuplicate(dataDir, draft) : null;
+        if (duplicate === null) return false;
+        writeDistillVerdict(diagnosticsDir, {
+          record_class: 'diagnostic',
+          verdict_id: makeVerdictId(),
+          ts: new Date().toISOString(),
+          session_id: sessionId,
+          decision: 'duplicate',
+          reason: `near-duplicate of ${duplicate.note_id} (BM25 ${duplicate.score})`,
+          counts,
+          note_id: duplicate.note_id,
+        });
+        advancePast(newOffset, lastRecordId);
+        result.duplicates += 1;
+        return true;
+      };
+
       let note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[]);
+      if (rejectDuplicate(note)) {
+        continue;
+      }
       let verify: VerifyVerdict = await verifyNote(note, events, provider);
       let verifyAttempts: 1 | 2 = 1;
       let feedback: VerifyVerdict | undefined;
       if (!verify.faithful) {
         feedback = verify;
         note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[], verify.reason);
+        if (rejectDuplicate(note)) {
+          continue;
+        }
         verify = await verifyNote(note, events, provider);
         verifyAttempts = 2;
       }

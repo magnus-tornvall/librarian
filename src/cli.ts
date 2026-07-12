@@ -605,7 +605,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const distilled = await runDistill({ dataDir, diagnosticsDir, provider });
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
 
-  const distillWork = distilled.distilled + distilled.skipped + distilled.quarantined + distilled.rejected;
+  const distillWork = distilled.distilled + distilled.duplicates + distilled.skipped + distilled.quarantined + distilled.rejected;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
   if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
     process.stdout.write('Nothing pending\n');
@@ -614,6 +614,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
 
   const lines = [
     `sessions distilled: ${distilled.distilled}`,
+    `sessions duplicates: ${distilled.duplicates}`,
     `sessions skipped: ${distilled.skipped}`,
     `sessions quarantined: ${distilled.quarantined}`,
     `sessions rejected: ${distilled.rejected}`,

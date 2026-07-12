@@ -3,7 +3,7 @@ import { readAllNotes } from '../log/noteLog.ts';
 import { advanceCursor } from '../log/cursor.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from '../note.ts';
 
-function buildSearchText(note: NoteRevision): string {
+export function buildSearchText(note: NoteRevision): string {
   return [
     note.title,
     note.body.summary,

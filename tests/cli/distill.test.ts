@@ -91,6 +91,16 @@ const LLM_RESPONSE = JSON.stringify({
   summary: 'Fixed the login redirect loop by checking token expiry before redirect.',
 });
 const FAITHFUL_RESPONSE = JSON.stringify({ faithful: true, errors: [], reason: 'Supported by the events.' });
+const DISTINCT_RESPONSE = JSON.stringify({
+  note_type: 'decision',
+  title: 'Refactor token store',
+  summary: 'Refactored the token store and added coverage for the new expiry path.',
+});
+const NEAR_DUPLICATE_RESPONSE = JSON.stringify({
+  note_type: 'decision',
+  title: 'Expire check before redirect',
+  summary: 'Fixed the login redirect loop by validating token expiry before redirect.',
+});
 
 function scriptedProvider(responses: string[]): { provider: InferenceProvider; prompts: string[] } {
   const prompts: string[] = [];
@@ -221,6 +231,99 @@ test('distill: faithful first try appends one note after exactly two provider ca
   assert.equal(result.distilled, 1);
   assert.equal(noteRevisions(dataDir).length, 1);
   assert.equal(scripted.prompts.length, 2);
+});
+
+test('distill: a near-duplicate episodic draft is a NOOP before verification', async () => {
+  const root = tempDir('cli-distill-duplicate-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  ingest(dataDir, eligibleEvents('sess-duplicate-first'));
+  ingest(dataDir, eligibleEvents('sess-duplicate-second'));
+  const scripted = scriptedProvider([LLM_RESPONSE, FAITHFUL_RESPONSE, NEAR_DUPLICATE_RESPONSE]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.deepEqual({ distilled: result.distilled, duplicates: result.duplicates }, { distilled: 1, duplicates: 1 });
+  assert.equal(noteRevisions(dataDir).length, 1);
+  assert.equal(scripted.prompts.length, 3, 'the duplicate must not call verifyNote');
+  const duplicate = readVerdicts(diagnosticsDir).find((verdict) => verdict.decision === 'duplicate')!;
+  assert.equal(duplicate.note_id, noteRevisions(dataDir)[0].note_id);
+  assert.equal(readCursorOrNull(dataDir, 'sess-duplicate-second')!.byte_offset, fs.statSync(eventLogPath(dataDir, 'sess-duplicate-second')).size);
+});
+
+test('distill: a verifier-feedback draft is novelty-gated before its second verification', async () => {
+  const root = tempDir('cli-distill-retry-duplicate-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  ingest(dataDir, eligibleEvents('sess-retry-duplicate-first'));
+  ingest(dataDir, eligibleEvents('sess-retry-duplicate-second'));
+  const unfaithful = JSON.stringify({ faithful: false, errors: ['omission'], reason: 'The outcome is incomplete.' });
+  const scripted = scriptedProvider([
+    LLM_RESPONSE, FAITHFUL_RESPONSE,
+    DISTINCT_RESPONSE, unfaithful, NEAR_DUPLICATE_RESPONSE,
+  ]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.equal(result.duplicates, 1);
+  assert.equal(noteRevisions(dataDir).length, 1);
+  assert.equal(scripted.prompts.length, 5, 'the duplicate replacement must not receive a second verification call');
+});
+
+test('drain: near-identical sessions report one distillation and one duplicate', () => {
+  const root = tempDir('cli-drain-duplicate-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  ingest(dataDir, eligibleEvents('sess-drain-duplicate-first'));
+  ingest(dataDir, eligibleEvents('sess-drain-duplicate-second'));
+  const fixture = writeFixtureContent(root, JSON.stringify([LLM_RESPONSE, FAITHFUL_RESPONSE, LLM_RESPONSE]));
+
+  const result = runCli(['drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--provider-fixture', fixture], '');
+
+  assert.equal(result.status, 0, `drain should exit 0; stderr: ${result.stderr}`);
+  assert.match(result.stdout, /sessions distilled: 1/);
+  assert.match(result.stdout, /sessions duplicates: 1/);
+});
+
+test('distill: distinct and cross-project drafts pass the novelty gate', async () => {
+  const root = tempDir('cli-distill-novelty-scope-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const otherProject = eligibleEvents('sess-other-project');
+  for (const event of otherProject) {
+    (event.resource as Record<string, unknown>).git_root = '/Users/magnus/dev/other-project';
+  }
+  ingest(dataDir, eligibleEvents('sess-distinct'));
+  ingest(dataDir, otherProject);
+  ingest(dataDir, eligibleEvents('sess-distinct-content'));
+  const scripted = scriptedProvider([
+    DISTINCT_RESPONSE, FAITHFUL_RESPONSE,
+    LLM_RESPONSE, FAITHFUL_RESPONSE,
+    LLM_RESPONSE, FAITHFUL_RESPONSE,
+  ]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.equal(result.distilled, 3);
+  assert.equal(result.duplicates, 0);
+  assert.equal(noteRevisions(dataDir).length, 3);
+});
+
+test('distill: deterministic project-summary revisions bypass the novelty gate', async () => {
+  const root = tempDir('cli-distill-novelty-deterministic-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const summary = JSON.stringify({ note_type: 'project_summary', title: 'Librarian status', summary: 'The project is healthy.' });
+  ingest(dataDir, eligibleEvents('sess-summary-first'));
+  ingest(dataDir, eligibleEvents('sess-summary-second'));
+  const scripted = scriptedProvider([summary, FAITHFUL_RESPONSE, summary, FAITHFUL_RESPONSE]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  const summaries = noteRevisions(dataDir);
+  assert.equal(result.duplicates, 0);
+  assert.equal(summaries.length, 2);
+  assert.equal(summaries[1].previous_revision_id, summaries[0].revision_id);
 });
 
 test('distill: an unfaithful draft is re-distilled once with verifier feedback', async () => {
@@ -435,7 +538,7 @@ test('distill: events appended after a successful distill are distilled as the d
   }
   ingest(dataDir, second);
 
-  const r2 = distill(dataDir, diagnosticsDir, fixturePath);
+  const r2 = distill(dataDir, diagnosticsDir, writeFixtureContent(root, JSON.stringify([DISTINCT_RESPONSE, FAITHFUL_RESPONSE])));
   assert.equal(r2.status, 0, `second distill should exit 0; stderr: ${r2.stderr}`);
 
   const notes = noteRevisions(dataDir);
@@ -803,7 +906,7 @@ test('distill: the guard blocks only covered ranges — NEW events after a guard
   ingest(dataDir, fresh);
 
   // The guard fires only on already-covered ranges: this NEW range distills.
-  const third = distill(dataDir, diagnosticsDir, fixturePath);
+  const third = distill(dataDir, diagnosticsDir, writeFixtureContent(root, JSON.stringify([DISTINCT_RESPONSE, FAITHFUL_RESPONSE])));
   assert.equal(third.status, 0, `distill of the new delta should exit 0; stderr: ${third.stderr}`);
   const notes = noteRevisions(dataDir);
   assert.equal(notes.length, 2, 'a NEW event range after the guard fired must distill into a second note');
