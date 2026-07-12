@@ -44,6 +44,11 @@ function sanitizeNoteId(noteId: string): string {
   return noteId.replaceAll(':', '-');
 }
 
+function shortUlid(noteId: string): string | undefined {
+  const candidate = noteId.split(':').at(-1) ?? '';
+  return /^[0-9A-HJKMNP-TV-Z]{26}$/.test(candidate) ? candidate.slice(-8) : undefined;
+}
+
 /** Remove any generated file for `noteId`, searching every `generated/<type>/`
  * dir — a tombstone carries no note_type, so the file's type dir is unknown. */
 function removeGenerated(vaultDir: string, noteId: string): boolean {
@@ -51,12 +56,15 @@ function removeGenerated(vaultDir: string, noteId: string): boolean {
   if (!fs.existsSync(generatedDir)) {
     return false;
   }
-  const fileName = `${sanitizeNoteId(noteId)}.md`;
+  const legacyFileName = `${sanitizeNoteId(noteId)}.md`;
+  const suffix = shortUlid(noteId);
   let removed = false;
   for (const typeDir of fs.readdirSync(generatedDir)) {
-    const candidate = path.join(generatedDir, typeDir, fileName);
-    if (fs.existsSync(candidate)) {
-      fs.unlinkSync(candidate);
+    const typePath = path.join(generatedDir, typeDir);
+    if (!fs.statSync(typePath).isDirectory()) continue;
+    for (const fileName of fs.readdirSync(typePath)) {
+      if (fileName !== legacyFileName && (!suffix || !fileName.endsWith(`--${suffix}.md`))) continue;
+      fs.unlinkSync(path.join(typePath, fileName));
       removed = true;
     }
   }

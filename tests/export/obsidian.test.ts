@@ -47,7 +47,7 @@ function walkFiles(dir: string): string[] {
   });
 }
 
-test('exports a note to generated/<note_type>/<sanitized note_id>.md with librarian_generated frontmatter', () => {
+test('exports an episodic note to generated/<note_type>/<title>--<ULID tail>.md with librarian_generated frontmatter', () => {
   const vaultDir = tempVaultDir();
   const written = exportNoteToVault(vaultDir, exampleNote());
 
@@ -55,7 +55,7 @@ test('exports a note to generated/<note_type>/<sanitized note_id>.md with librar
     vaultDir,
     'generated',
     'decision',
-    'decision-01J8X9F1TZ6R3M8N0P5Q7S9VWX.md',
+    'adopt-bm25-over-sqlite-fts5-as-the-sole-recall-index--5Q7S9VWX.md',
   );
   assert.equal(written, expected);
   assert.ok(fs.existsSync(expected), 'exported file should exist at the deterministic path');
@@ -83,6 +83,35 @@ test('re-exporting the same note_id with a new title overwrites (exactly one fil
   const content = fs.readFileSync(written, 'utf8');
   assert.match(content, /# Second title/);
   assert.doesNotMatch(content, /# First title/);
+});
+
+test('re-exporting an episodic note replaces its legacy ID-only filename', () => {
+  const vaultDir = tempVaultDir();
+  const legacyPath = path.join(vaultDir, 'generated', 'decision', 'decision-01J8X9F1TZ6R3M8N0P5Q7S9VWX.md');
+  fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+  fs.writeFileSync(legacyPath, 'legacy export');
+
+  const written = exportNoteToVault(vaultDir, exampleNote());
+  assert.ok(!fs.existsSync(legacyPath), 'the obsolete ID-only path must be removed');
+  assert.ok(fs.existsSync(written));
+});
+
+test('duplicate and unsafe titles produce distinct portable filenames', () => {
+  const vaultDir = tempVaultDir();
+  const first = exportNoteToVault(vaultDir, exampleNote({ title: 'Ship / fix: now!' }));
+  const second = exportNoteToVault(vaultDir, exampleNote({
+    note_id: 'decision:01J8X9F1TZ6R3M8N0P5Q7S9AAA',
+    title: 'Ship / fix: now!',
+  }));
+
+  assert.match(path.basename(first), /^ship-fix-now--5Q7S9VWX\.md$/);
+  assert.match(path.basename(second), /^ship-fix-now--5Q7S9AAA\.md$/);
+  assert.notEqual(first, second, 'the random ULID tail prevents duplicate titles overwriting each other');
+});
+
+test('an empty title uses an untitled filename', () => {
+  const written = exportNoteToVault(tempVaultDir(), exampleNote({ title: '' }));
+  assert.match(path.basename(written), /^untitled--5Q7S9VWX\.md$/);
 });
 
 test('nothing is ever written under curated/ (structural invariant §5, task 008)', () => {

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readAllNotes, appendNote } from '../../src/log/noteLog.ts';
+import type { NoteRevision } from '../../src/note.ts';
 // Integration tests for `librarian drain`: spawn the real CLI against real temp
 // dirs, ingest events through the real `collect` path, and drive the composed
 // distill+export pipeline with the offline fixture provider — never a live model.
@@ -293,16 +294,33 @@ test('drain: a tombstoned note has its generated file removed on the next drain'
   assert.equal(first.status, 0, `first drain should exit 0; stderr: ${first.stderr}`);
   assert.equal(generatedFiles(vaultDir).length, 1, 'the note is exported');
 
-  // Tombstone the exported note (latest-record-wins → the tombstone is the
-  // winner). The next drain must remove its generated file the way the indexer
-  // drops a tombstoned note from the index.
+  // A later revision may change its title, which changes the readable filename.
+  // Export must remove the old suffix-matched name before materializing the new one.
   const note = noteRevisions(dataDir)[0];
+  const revised = {
+    ...note,
+    revision_id: `${note.revision_id}-renamed`,
+    previous_revision_id: note.revision_id,
+    created_at: '2098-01-01T00:00:00.000Z',
+    title: 'Renamed exported note',
+  } as NoteRevision;
+  appendNote(dataDir, revised);
+
+  const renamed = drain(dataDir, diagnosticsDir, goodFixture, vaultDir);
+  assert.equal(renamed.status, 0, `rename drain should exit 0; stderr: ${renamed.stderr}`);
+  const renamedFiles = generatedFiles(vaultDir);
+  assert.equal(renamedFiles.length, 1, 'a title revision must replace its prior generated filename');
+  assert.match(path.basename(renamedFiles[0]), /^renamed-exported-note--/);
+
+  // Tombstone the renamed export (latest-record-wins → the tombstone is the
+  // winner). The next drain must remove it the way the indexer drops it from
+  // the index.
   appendNote(dataDir, {
     kind: 'note_tombstone',
     schema_version: 1,
-    note_id: note.note_id,
-    revision_id: `${note.revision_id}-tomb`,
-    previous_revision_id: note.revision_id,
+    note_id: revised.note_id,
+    revision_id: `${revised.revision_id}-tomb`,
+    previous_revision_id: revised.revision_id,
     reason: 'test tombstone',
     created_at: '2099-01-01T00:00:00.000Z',
     source: { kind: 'cli' },
