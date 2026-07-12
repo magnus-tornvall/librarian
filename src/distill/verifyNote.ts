@@ -36,10 +36,16 @@ function parseVerdict(raw: string): VerifyVerdict {
   }
   const verdict = value as Record<string, unknown>;
   if (
+    Object.keys(verdict).length !== 3 ||
+    !('faithful' in verdict) ||
+    !('errors' in verdict) ||
+    !('reason' in verdict) ||
     typeof verdict.faithful !== 'boolean' ||
     !Array.isArray(verdict.errors) ||
     !verdict.errors.every((error) => typeof error === 'string' && ERROR_TYPES.has(error as VerifyVerdict['errors'][number])) ||
-    typeof verdict.reason !== 'string'
+    typeof verdict.reason !== 'string' ||
+    (verdict.faithful && verdict.errors.length > 0) ||
+    (!verdict.faithful && verdict.errors.length === 0)
   ) {
     throw new Error('verifier response has an invalid verdict shape');
   }

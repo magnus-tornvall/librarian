@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { ulid } from 'ulid';
 import { appendEvent } from './collector/append.ts';
 import { makeInjectionId, readInjectionTraces, writeInjectionTrace, type InjectionTrace } from './diagnostics/injectionTrace.ts';
-import { makeFixtureProvider, makeScriptedFixtureProvider, makeVerifyingFixtureProvider, type InferenceProvider } from './distill/provider.ts';
+import { makeFixtureProvider, makeScriptedFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { importCuratedNote } from './distill/humanDistiller.ts';
@@ -522,11 +522,12 @@ function collect(flags: Map<string, string>): void {
  * provider *selection* lives, kept apart from `distillCommand` so the command
  * reads as intent and the choice is testable without spawning a model.
  *
- * `--provider-fixture <file>` selects an offline provider that replays the
- * file's contents (§2: swapping the model is swapping a provider, nothing
- * more). It is a first-class operator switch for offline/canned runs, not a
- * test-only hook — the fixture-backed provider is also how tests avoid a live
- * call. Absent the flag, the real `claude -p` provider is used.
+ * `--provider-fixture <file>` selects an offline provider that returns the
+ * file's contents; a JSON array of strings supplies ordered responses (§2:
+ * swapping the model is swapping a provider, nothing more). It is a first-class
+ * operator switch for offline/canned runs, not a test-only hook — the fixture-
+ * backed provider is also how tests avoid a live call. Absent the flag, the real
+ * `claude -p` provider is used.
  *
  * `--provider` overrides config selection directly; this remains a branch, not
  * a provider registry.
@@ -539,9 +540,6 @@ export function resolveProvider(flags: Map<string, string>, configPath = CONFIG_
       const scripted = JSON.parse(response);
       if (Array.isArray(scripted) && scripted.every((item) => typeof item === 'string')) {
         return makeScriptedFixtureProvider(scripted, flags.get('model'));
-      }
-      if (typeof scripted === 'object' && scripted !== null && !Array.isArray(scripted)) {
-        return makeVerifyingFixtureProvider(response, flags.get('model'));
       }
     } catch {
       // A normal fixture is arbitrary provider output, not necessarily JSON.

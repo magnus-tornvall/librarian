@@ -90,10 +90,14 @@ const LLM_RESPONSE = JSON.stringify({
   title: 'Expire check before redirect',
   summary: 'Fixed the login redirect loop by checking token expiry before redirect.',
 });
+const FAITHFUL_RESPONSE = JSON.stringify({ faithful: true, errors: [], reason: 'Supported by the events.' });
 
 function writeFixture(dir: string, content = LLM_RESPONSE): string {
   const fixturePath = path.join(dir, 'llm-response.json');
-  fs.writeFileSync(fixturePath, content);
+  fs.writeFileSync(
+    fixturePath,
+    content === LLM_RESPONSE ? JSON.stringify(Array.from({ length: 10 }, () => [content, FAITHFUL_RESPONSE]).flat()) : content,
+  );
   return fixturePath;
 }
 

@@ -9,6 +9,7 @@ import { readAllNotes } from '../../src/log/noteLog.ts';
 import { validateEvent, DiagnosticRecordRejectedError } from '../../src/collector/validateEvent.ts';
 import { runDistill } from '../../src/distill/distillRun.ts';
 import type { InferenceProvider } from '../../src/distill/provider.ts';
+import { importCuratedNote } from '../../src/distill/humanDistiller.ts';
 
 // Integration tests: spawn the real CLI (`node src/cli.ts`) against real temp
 // dirs so a run never touches ~/.librarian (§14). Events are ingested through
@@ -295,6 +296,23 @@ test('drain: an always-unfaithful scripted provider rejects without appending an
   assert.match(result.stdout, /sessions rejected: 1/);
   assert.equal(noteRevisions(dataDir).length, 0);
   assert.equal(readVerdicts(diagnosticsDir).find((v) => v.decision === 'rejected')?.session_id, sessionId);
+});
+
+test('distill: curated human imports do not invoke an LLM provider', () => {
+  const root = tempDir('cli-distill-human-no-verify-');
+  const vaultDir = path.join(root, 'vault');
+  const dataDir = path.join(root, 'data');
+  const curatedDir = path.join(vaultDir, 'curated');
+  fs.mkdirSync(curatedDir, { recursive: true });
+  const filePath = path.join(curatedDir, 'runbook.md');
+  fs.writeFileSync(filePath, '# Runbook\n\nHuman-authored source content.\n');
+  let calls = 0;
+  const provider: InferenceProvider = { complete: async () => { calls += 1; return ''; } };
+  void provider;
+
+  importCuratedNote(vaultDir, filePath, dataDir);
+
+  assert.equal(calls, 0, 'the human distiller must structurally bypass the provider');
 });
 
 test('distill: OpenCode provider stamps its explicit model on the note', () => {
