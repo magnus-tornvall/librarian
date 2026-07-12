@@ -8,8 +8,11 @@ import type { NoteRevision } from '../note.ts';
 const NEAR_DUPLICATE_SCORE = 0.00001;
 
 function ftsQuery(text: string): string | undefined {
-  const terms = text.match(/[\p{L}\p{N}_]+/gu) ?? [];
-  return terms.length === 0 ? undefined : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(' AND ');
+  const terms = [...new Set(text.match(/[\p{L}\p{N}_]+/gu) ?? [])]
+    .map((term) => `"${term.replaceAll('"', '""')}"`);
+  if (terms.length === 0) return undefined;
+  if (terms.length === 1) return terms[0];
+  return terms.map((_, omitted) => `(${terms.filter((__, index) => index !== omitted).join(' AND ')})`).join(' OR ');
 }
 
 export function findNearDuplicate(dataDir: string, draft: NoteRevision): { note_id: string; score: number } | null {

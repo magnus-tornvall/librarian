@@ -96,6 +96,11 @@ const DISTINCT_RESPONSE = JSON.stringify({
   title: 'Refactor token store',
   summary: 'Refactored the token store and added coverage for the new expiry path.',
 });
+const NEAR_DUPLICATE_RESPONSE = JSON.stringify({
+  note_type: 'decision',
+  title: 'Expire check before redirect',
+  summary: 'Fixed the login redirect loop by validating token expiry before redirect.',
+});
 
 function scriptedProvider(responses: string[]): { provider: InferenceProvider; prompts: string[] } {
   const prompts: string[] = [];
@@ -234,7 +239,7 @@ test('distill: a near-duplicate episodic draft is a NOOP before verification', a
   const diagnosticsDir = path.join(root, 'diagnostics');
   ingest(dataDir, eligibleEvents('sess-duplicate-first'));
   ingest(dataDir, eligibleEvents('sess-duplicate-second'));
-  const scripted = scriptedProvider([LLM_RESPONSE, FAITHFUL_RESPONSE, LLM_RESPONSE]);
+  const scripted = scriptedProvider([LLM_RESPONSE, FAITHFUL_RESPONSE, NEAR_DUPLICATE_RESPONSE]);
 
   const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
 
@@ -244,6 +249,25 @@ test('distill: a near-duplicate episodic draft is a NOOP before verification', a
   const duplicate = readVerdicts(diagnosticsDir).find((verdict) => verdict.decision === 'duplicate')!;
   assert.equal(duplicate.note_id, noteRevisions(dataDir)[0].note_id);
   assert.equal(readCursorOrNull(dataDir, 'sess-duplicate-second')!.byte_offset, fs.statSync(eventLogPath(dataDir, 'sess-duplicate-second')).size);
+});
+
+test('distill: a verifier-feedback draft is novelty-gated before its second verification', async () => {
+  const root = tempDir('cli-distill-retry-duplicate-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  ingest(dataDir, eligibleEvents('sess-retry-duplicate-first'));
+  ingest(dataDir, eligibleEvents('sess-retry-duplicate-second'));
+  const unfaithful = JSON.stringify({ faithful: false, errors: ['omission'], reason: 'The outcome is incomplete.' });
+  const scripted = scriptedProvider([
+    LLM_RESPONSE, FAITHFUL_RESPONSE,
+    DISTINCT_RESPONSE, unfaithful, NEAR_DUPLICATE_RESPONSE,
+  ]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.equal(result.duplicates, 1);
+  assert.equal(noteRevisions(dataDir).length, 1);
+  assert.equal(scripted.prompts.length, 5, 'the duplicate replacement must not receive a second verification call');
 });
 
 test('drain: near-identical sessions report one distillation and one duplicate', () => {

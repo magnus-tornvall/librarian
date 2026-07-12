@@ -483,9 +483,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         throw new Error(`session ${sessionId}: missing resource.agent on first delta event`);
       }
 
-      let note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[]);
-      const duplicate = note.identity.mode === 'episodic' ? findNearDuplicate(dataDir, note) : null;
-      if (duplicate !== null) {
+      const rejectDuplicate = (draft: NoteRevision): boolean => {
+        const duplicate = draft.identity.mode === 'episodic' ? findNearDuplicate(dataDir, draft) : null;
+        if (duplicate === null) return false;
         writeDistillVerdict(diagnosticsDir, {
           record_class: 'diagnostic',
           verdict_id: makeVerdictId(),
@@ -498,6 +498,11 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         });
         advancePast(newOffset, lastRecordId);
         result.duplicates += 1;
+        return true;
+      };
+
+      let note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[]);
+      if (rejectDuplicate(note)) {
         continue;
       }
       let verify: VerifyVerdict = await verifyNote(note, events, provider);
@@ -506,6 +511,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
       if (!verify.faithful) {
         feedback = verify;
         note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[], verify.reason);
+        if (rejectDuplicate(note)) {
+          continue;
+        }
         verify = await verifyNote(note, events, provider);
         verifyAttempts = 2;
       }

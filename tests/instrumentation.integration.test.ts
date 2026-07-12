@@ -170,8 +170,12 @@ function makeTempDirs(prefix: string) {
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
   const fixturePath = path.join(root, 'llm-response.json');
+  const topics = [
+    ['Guard token expiry before redirect', 'Fixed the login redirect loop by checking OAuth token expiry.'],
+    ['Document redirect migration', 'Recorded the browser redirect migration and deployment rollback procedure.'],
+  ];
   fs.writeFileSync(fixturePath, JSON.stringify(Array.from({ length: 10 }, (_, index) => [
-    JSON.stringify({ note_type: 'decision', title: `Guard token expiry before redirect ${index}`, summary: `Fixed the login redirect loop ${index}.` }),
+    JSON.stringify({ note_type: 'decision', title: topics[index % topics.length][0], summary: topics[index % topics.length][1] }),
     FAITHFUL_RESPONSE,
   ]).flat()));
   return { root, dataDir, diagnosticsDir, fixturePath, cursorPath: path.join(dataDir, 'index-cursor.json') };

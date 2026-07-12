@@ -245,14 +245,21 @@ function snapshotDir(dir: string): Record<string, string> {
  */
 function seedDecoysViaSession(t: { dataDir: string; diagnosticsDir: string; fixturePath: string }): void {
   // Five extra eligible sessions with unrelated content → five extra distilled notes as decoys.
+  const topics = [
+    ['Release checklist', 'tagging the changelog'],
+    ['Editor settings', 'formatting TypeScript files'],
+    ['Database backup', 'restoring archived snapshots'],
+    ['Accessibility audit', 'testing keyboard navigation'],
+    ['Dependency update', 'reviewing package licenses'],
+  ];
   for (let d = 0; d < 5; d += 1) {
     const sessionId = `push-capstone-decoy-${d}`;
     const decoyFixture = path.join(path.dirname(t.fixturePath), `decoy-${d}.json`);
     const decoy = JSON.stringify({
       note_type: 'fact',
-      title: `Unrelated release checklist ${d}`,
-      summary: `Assorted release checklist ${d} covering editor settings and changelog hygiene.`,
-      bullets: [`Release checklist ${d} step about tagging the changelog.`],
+      title: topics[d][0],
+      summary: `Unrelated guidance about ${topics[d][1]}.`,
+      bullets: [`Remember the procedure for ${topics[d][1]}.`],
     });
     fs.writeFileSync(decoyFixture, JSON.stringify([decoy, FAITHFUL_RESPONSE]));
     const events: Array<Record<string, unknown>> = [
