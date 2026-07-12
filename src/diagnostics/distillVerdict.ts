@@ -4,8 +4,8 @@ import { appendRecord } from '../log/ndjson.ts';
 
 /**
  * Distill verdict (§8 "Distill verdicts"): one record per session delta the
- * `distill` command considered, naming what it decided — distilled, skipped, or
- * quarantined (retries exhausted / unparseable line), and why. The counts that
+ * `distill` command considered, naming what it decided — distilled, duplicate,
+ * skipped, or quarantined (retries exhausted / unparseable line), and why. The counts that
  * drove the skip heuristic (§3) are kept so a verdict is self-explaining without
  * re-reading the event log; a quarantine verdict additionally carries the byte
  * range a human needs to re-attempt.
@@ -25,7 +25,7 @@ export type DistillVerdict = {
   verdict_id: string;
   ts: string;
   session_id: string;
-  decision: 'distilled' | 'skipped' | 'quarantined' | 'rejected';
+  decision: 'distilled' | 'duplicate' | 'skipped' | 'quarantined' | 'rejected';
   reason: string;
   counts: {
     events: number;
