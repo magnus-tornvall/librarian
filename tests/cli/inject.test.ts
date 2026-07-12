@@ -126,6 +126,36 @@ test('inject CLI enforces push cap and budget, records budget cuts, and fail-clo
   assert.ok(readTraces(floorRoot.diagnosticsDir).some((trace) => trace.candidates.some((candidate) => candidate.cut_reason === 'below_floor')));
 });
 
+// #82 graduates this by removing `todo` once it excludes contradicted facts within a push block.
+test('inject excludes a stale fact contradicted by a newer fact', { todo: true }, () => {
+  const t = tempRoot();
+  const newerCreatedAt = new Date();
+  const olderCreatedAt = new Date(newerCreatedAt);
+  olderCreatedAt.setUTCDate(olderCreatedAt.getUTCDate() - 30);
+  appendNote(t.dataDir, note(1, {
+    note_id: 'fact:staging-api-url-old',
+    created_at: olderCreatedAt.toISOString(),
+    note_type: 'fact',
+    title: 'Staging API base URL',
+    body: { summary: 'The staging API base URL is https://staging-old.example.test.' },
+  }));
+  appendNote(t.dataDir, note(2, {
+    note_id: 'fact:staging-api-url-new',
+    created_at: newerCreatedAt.toISOString(),
+    note_type: 'fact',
+    title: 'Staging API base URL updated',
+    body: { summary: 'The staging API base URL is https://staging-new.example.test, replacing the previous URL.' },
+  }));
+  for (let i = 0; i < 5; i += 1) {
+    appendNote(t.dataDir, note(20 + i, { body: { summary: `Unrelated filler ${i}.` } }));
+  }
+
+  const result = runCli(['inject', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], 'staging API base URL');
+  assert.equal(result.status, 0, `inject should exit 0; stderr: ${result.stderr}`);
+  assert.match(result.stdout, /https:\/\/staging-new\.example\.test/);
+  assert.doesNotMatch(result.stdout, /https:\/\/staging-old\.example\.test/);
+});
+
 test('inject --session-start returns project brief and curated notes, or empty when absent', () => {
   const t = tempRoot();
   appendNote(
