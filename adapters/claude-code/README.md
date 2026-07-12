@@ -69,8 +69,12 @@ Run the authenticated, token-consuming end-to-end check explicitly (it is develo
 tooling and is not part of `npm test` or CI):
 
 ```sh
+./scripts/opencode-setup.sh
 ./scripts/dogfood-verify.sh
 ```
+
+The verifier checks both agents by default, so the existing project-local OpenCode plugin
+must also be set up. Pass `claude-code` or `opencode` to verify only one adapter.
 
 Remove only the generated project settings with:
 

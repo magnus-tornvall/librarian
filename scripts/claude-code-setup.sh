@@ -20,7 +20,12 @@ if [[ -z "${NODE_BIN}" ]]; then
 fi
 
 expected="$(mktemp)"
-trap 'rm -f "${expected}"' EXIT
+event_file=""
+cleanup() {
+  rm -f "${expected}"
+  [[ -z "${event_file}" ]] || rm -f "${event_file}"
+}
+trap cleanup EXIT
 NODE_BIN="${NODE_BIN}" HOOK_PATH="${HOOK_PATH}" "${NODE_BIN}" >"${expected}" <<'NODE'
 const hook = { type: 'command', command: process.env.NODE_BIN, args: [process.env.HOOK_PATH], timeout: 10 };
 const settings = { hooks: {

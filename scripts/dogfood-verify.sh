@@ -16,6 +16,10 @@ selected_agent="${1:-all}"
   echo "usage: $0 [claude-code|opencode]" >&2
   exit 2
 }
+if [[ "${selected_agent}" != claude-code && ! -e "${REPO_ROOT}/.opencode/plugins/librarian.ts" ]]; then
+  echo "ERROR: OpenCode dogfooding is not set up; run ./scripts/opencode-setup.sh first." >&2
+  exit 1
+fi
 
 nonce="$(date +%s)-$$"
 note_id="curated:dogfood-${nonce}"
