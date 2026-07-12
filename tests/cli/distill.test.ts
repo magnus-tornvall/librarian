@@ -7,6 +7,8 @@ import path from 'node:path';
 import { readAll } from '../../src/log/ndjson.ts';
 import { readAllNotes } from '../../src/log/noteLog.ts';
 import { validateEvent, DiagnosticRecordRejectedError } from '../../src/collector/validateEvent.ts';
+import { runDistill } from '../../src/distill/distillRun.ts';
+import type { InferenceProvider } from '../../src/distill/provider.ts';
 
 // Integration tests: spawn the real CLI (`node src/cli.ts`) against real temp
 // dirs so a run never touches ~/.librarian (§14). Events are ingested through
@@ -87,10 +89,26 @@ const LLM_RESPONSE = JSON.stringify({
   title: 'Expire check before redirect',
   summary: 'Fixed the login redirect loop by checking token expiry before redirect.',
 });
+const FAITHFUL_RESPONSE = JSON.stringify({ faithful: true, errors: [], reason: 'Supported by the events.' });
+
+function scriptedProvider(responses: string[]): { provider: InferenceProvider; prompts: string[] } {
+  const prompts: string[] = [];
+  return {
+    prompts,
+    provider: {
+      async complete(prompt: string): Promise<string> {
+        prompts.push(prompt);
+        const response = responses.shift();
+        if (response === undefined) throw new Error('scripted provider ran out of responses');
+        return response;
+      },
+    },
+  };
+}
 
 function writeFixture(dir: string): string {
   const fixturePath = path.join(dir, 'llm-response.json');
-  fs.writeFileSync(fixturePath, LLM_RESPONSE);
+  fs.writeFileSync(fixturePath, JSON.stringify([LLM_RESPONSE, FAITHFUL_RESPONSE]));
   return fixturePath;
 }
 
@@ -189,6 +207,96 @@ test('distill: an eligible session lands one note with correct origin and proven
   assert.equal(cursor.consumer, 'distiller');
 });
 
+test('distill: faithful first try appends one note after exactly two provider calls', async () => {
+  const root = tempDir('cli-distill-verify-faithful-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-verify-faithful';
+  ingest(dataDir, eligibleEvents(sessionId));
+  const scripted = scriptedProvider([LLM_RESPONSE, FAITHFUL_RESPONSE]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.equal(result.distilled, 1);
+  assert.equal(noteRevisions(dataDir).length, 1);
+  assert.equal(scripted.prompts.length, 2);
+});
+
+test('distill: an unfaithful draft is re-distilled once with verifier feedback', async () => {
+  const root = tempDir('cli-distill-verify-feedback-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-verify-feedback';
+  ingest(dataDir, eligibleEvents(sessionId));
+  const reason = 'The summary invents a database migration.';
+  const unfaithful = JSON.stringify({ faithful: false, errors: ['hallucination'], reason });
+  const scripted = scriptedProvider([LLM_RESPONSE, unfaithful, LLM_RESPONSE, FAITHFUL_RESPONSE]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.equal(result.distilled, 1);
+  assert.equal(noteRevisions(dataDir).length, 1);
+  assert.equal(scripted.prompts.length, 4);
+  assert.match(scripted.prompts[2], new RegExp(reason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
+
+test('distill: two unfaithful verdicts reject without appending and advance the cursor', async () => {
+  const root = tempDir('cli-distill-verify-rejected-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-verify-rejected';
+  const events = eligibleEvents(sessionId);
+  ingest(dataDir, events);
+  const unfaithful = JSON.stringify({ faithful: false, errors: ['corruption'], reason: 'The title reverses the event outcome.' });
+  const scripted = scriptedProvider([LLM_RESPONSE, unfaithful, LLM_RESPONSE, unfaithful]);
+
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+
+  assert.equal(result.rejected, 1);
+  assert.equal(noteRevisions(dataDir).length, 0);
+  assert.equal(readCursorOrNull(dataDir, sessionId)!.byte_offset, fs.statSync(eventLogPath(dataDir, sessionId)).size);
+  const verdict = readVerdicts(diagnosticsDir).find((v) => v.decision === 'rejected');
+  assert.deepEqual(verdict!.verify, { errors: ['corruption'], reason: 'The title reverses the event outcome.', attempts: 2 });
+  const rerun = scriptedProvider([]);
+  assert.equal((await runDistill({ dataDir, diagnosticsDir, provider: rerun.provider })).rejected, 0);
+  assert.equal(rerun.prompts.length, 0);
+});
+
+test('distill: malformed verifier JSON follows the normal retry path', async () => {
+  const root = tempDir('cli-distill-verify-malformed-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-verify-malformed';
+  ingest(dataDir, eligibleEvents(sessionId));
+  const scripted = scriptedProvider([LLM_RESPONSE, 'not verifier json']);
+
+  await assert.rejects(runDistill({ dataDir, diagnosticsDir, provider: scripted.provider }), /JSON|verifier/);
+  const cursor = readCursorOrNull(dataDir, sessionId)!;
+  assert.equal(cursor.byte_offset, 0);
+  assert.equal((cursor.failed_attempts as Record<string, unknown>).count, 1);
+  assert.equal(noteRevisions(dataDir).length, 0);
+});
+
+test('drain: an always-unfaithful scripted provider rejects without appending and exits zero', () => {
+  const root = tempDir('cli-drain-verify-rejected-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-drain-rejected';
+  ingest(dataDir, eligibleEvents(sessionId));
+  const unfaithful = JSON.stringify({ faithful: false, errors: ['omission'], reason: 'The note omits the outcome.' });
+  const fixturePath = path.join(root, 'scripted-responses.json');
+  fs.writeFileSync(fixturePath, JSON.stringify([LLM_RESPONSE, unfaithful, LLM_RESPONSE, unfaithful]));
+
+  const result = runCli([
+    'drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--provider-fixture', fixturePath,
+  ], '');
+
+  assert.equal(result.status, 0, `drain should exit 0; stderr: ${result.stderr}`);
+  assert.match(result.stdout, /sessions rejected: 1/);
+  assert.equal(noteRevisions(dataDir).length, 0);
+  assert.equal(readVerdicts(diagnosticsDir).find((v) => v.decision === 'rejected')?.session_id, sessionId);
+});
+
 test('distill: OpenCode provider stamps its explicit model on the note', () => {
   const root = tempDir('cli-distill-opencode-');
   const dataDir = path.join(root, 'data');
@@ -196,7 +304,10 @@ test('distill: OpenCode provider stamps its explicit model on the note', () => {
   const binDir = path.join(root, 'bin');
   fs.mkdirSync(binDir);
   const opencode = path.join(binDir, 'opencode');
-  fs.writeFileSync(opencode, `#!/bin/sh\nprintf '%s' '${LLM_RESPONSE}'\n`);
+  fs.writeFileSync(
+    opencode,
+    `#!/bin/sh\ncase "$(cat)" in *'Check whether the note is faithful'*) printf '%s' '${FAITHFUL_RESPONSE}' ;; *) printf '%s' '${LLM_RESPONSE}' ;; esac\n`,
+  );
   fs.chmodSync(opencode, 0o755);
   ingest(dataDir, eligibleEvents('sess-opencode'));
 

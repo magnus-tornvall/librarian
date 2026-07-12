@@ -24,3 +24,28 @@ export function makeFixtureProvider(response: string, model?: string): Inference
     },
   };
 }
+
+/** Backward-compatible fixture adapter for legacy one-note response files. */
+export function makeVerifyingFixtureProvider(response: string, model?: string): InferenceProvider {
+  const faithful = JSON.stringify({ faithful: true, errors: [], reason: 'Fixture note is faithful.' });
+  return {
+    ...(model ? { model } : {}),
+    complete(prompt: string): Promise<string> {
+      return Promise.resolve(prompt.startsWith('Check whether the note is faithful') ? faithful : response);
+    },
+  };
+}
+
+/** Ordered canned responses for integration tests that make several model calls. */
+export function makeScriptedFixtureProvider(responses: string[], model?: string): InferenceProvider {
+  let next = 0;
+  return {
+    ...(model ? { model } : {}),
+    complete(_prompt: string): Promise<string> {
+      if (next === responses.length) {
+        return Promise.reject(new Error('fixture provider ran out of scripted responses'));
+      }
+      return Promise.resolve(responses[next++]);
+    },
+  };
+}

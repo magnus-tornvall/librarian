@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { InferenceProvider } from './provider.ts';
 import { distill } from './llmDistiller.ts';
+import { verifyNote, type VerifyVerdict } from './verifyNote.ts';
 import { appendNote, readAllNotes } from '../log/noteLog.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
@@ -284,6 +285,7 @@ export type DistillRunResult = {
   distilled: number;
   skipped: number;
   quarantined: number;
+  rejected: number;
   status: 'pass' | 'lock-held';
 };
 
@@ -327,7 +329,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
   if (lock === null) {
     // Someone live and fresh is already draining this backlog — not an error.
     process.stderr.write('librarian: distill already running (lock held); nothing to do\n');
-    return { distilled: 0, skipped: 0, quarantined: 0, status: 'lock-held' };
+    return { distilled: 0, skipped: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
   }
   try {
     return await runDistillPass(options);
@@ -337,7 +339,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
 }
 
 async function runDistillPass(options: DistillRunOptions): Promise<DistillRunResult> {
-  const result: DistillRunResult = { distilled: 0, skipped: 0, quarantined: 0, status: 'pass' };
+  const result: DistillRunResult = { distilled: 0, skipped: 0, quarantined: 0, rejected: 0, status: 'pass' };
   // Distinct sessions that had ANY quarantine this run (a corrupt line and/or a
   // budget-exhausted delta). Set, not a counter: several corrupt lines in one
   // session is still one quarantined session, so the drain summary's "sessions
@@ -479,7 +481,31 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         throw new Error(`session ${sessionId}: missing resource.agent on first delta event`);
       }
 
-      const note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[]);
+      let note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[]);
+      let verify: VerifyVerdict = await verifyNote(note, events, provider);
+      let verifyAttempts: 1 | 2 = 1;
+      let feedback: VerifyVerdict | undefined;
+      if (!verify.faithful) {
+        feedback = verify;
+        note = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[], verify.reason);
+        verify = await verifyNote(note, events, provider);
+        verifyAttempts = 2;
+      }
+      if (!verify.faithful) {
+        writeDistillVerdict(diagnosticsDir, {
+          record_class: 'diagnostic',
+          verdict_id: makeVerdictId(),
+          ts: new Date().toISOString(),
+          session_id: sessionId,
+          decision: 'rejected',
+          reason: `rejected after ${verifyAttempts} verification attempts: ${verify.reason}`,
+          counts,
+          verify: { errors: verify.errors, reason: verify.reason, attempts: verifyAttempts },
+        });
+        advancePast(newOffset, lastRecordId);
+        result.rejected += 1;
+        continue;
+      }
       appendNote(dataDir, note);
 
       const verdict: DistillVerdict = {
@@ -491,6 +517,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         reason: `distilled ${metrics.events} events into ${note.note_id}`,
         counts,
         note_id: note.note_id,
+        ...(verifyAttempts === 2
+          ? { verify: { errors: feedback!.errors, reason: feedback!.reason, attempts: verifyAttempts } }
+          : {}),
       };
       writeDistillVerdict(diagnosticsDir, verdict);
 

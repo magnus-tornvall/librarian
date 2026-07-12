@@ -79,8 +79,9 @@ export async function distill(
   provider: InferenceProvider,
   origin: string,
   existingRecords: NoteRecord[] = [],
+  feedback?: string,
 ): Promise<NoteRevision> {
-  const prompt = `${INSTRUCTION}\n${renderEventsForDistill(events)}`;
+  const prompt = `${INSTRUCTION}${feedback ? `\nVerifier feedback: ${feedback}` : ''}\n${renderEventsForDistill(events)}`;
   const raw = await provider.complete(prompt);
 
   // Parse the LLM judgment. On malformed JSON, throw — no retry in this task

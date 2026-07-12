@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { ulid } from 'ulid';
 import { appendEvent } from './collector/append.ts';
 import { makeInjectionId, readInjectionTraces, writeInjectionTrace, type InjectionTrace } from './diagnostics/injectionTrace.ts';
-import { makeFixtureProvider, type InferenceProvider } from './distill/provider.ts';
+import { makeFixtureProvider, makeScriptedFixtureProvider, makeVerifyingFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { importCuratedNote } from './distill/humanDistiller.ts';
@@ -534,7 +534,19 @@ function collect(flags: Map<string, string>): void {
 export function resolveProvider(flags: Map<string, string>, configPath = CONFIG_PATH): InferenceProvider {
   const fixture = flags.get('provider-fixture');
   if (fixture !== undefined) {
-    return makeFixtureProvider(fs.readFileSync(fixture, 'utf8'), flags.get('model'));
+    const response = fs.readFileSync(fixture, 'utf8');
+    try {
+      const scripted = JSON.parse(response);
+      if (Array.isArray(scripted) && scripted.every((item) => typeof item === 'string')) {
+        return makeScriptedFixtureProvider(scripted, flags.get('model'));
+      }
+      if (typeof scripted === 'object' && scripted !== null && !Array.isArray(scripted)) {
+        return makeVerifyingFixtureProvider(response, flags.get('model'));
+      }
+    } catch {
+      // A normal fixture is arbitrary provider output, not necessarily JSON.
+    }
+    return makeFixtureProvider(response, flags.get('model'));
   }
   const config = loadConfig(configPath);
   const provider = flags.get('provider') ?? config.inference.provider;
@@ -595,7 +607,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const distilled = await runDistill({ dataDir, diagnosticsDir, provider });
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
 
-  const distillWork = distilled.distilled + distilled.skipped + distilled.quarantined;
+  const distillWork = distilled.distilled + distilled.skipped + distilled.quarantined + distilled.rejected;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
   if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
     process.stdout.write('Nothing pending\n');
@@ -606,6 +618,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
     `sessions distilled: ${distilled.distilled}`,
     `sessions skipped: ${distilled.skipped}`,
     `sessions quarantined: ${distilled.quarantined}`,
+    `sessions rejected: ${distilled.rejected}`,
   ];
   if (vaultDir !== undefined) {
     lines.push(`notes exported: ${exported!.exported}`);

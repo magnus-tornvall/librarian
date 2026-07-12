@@ -25,7 +25,7 @@ export type DistillVerdict = {
   verdict_id: string;
   ts: string;
   session_id: string;
-  decision: 'distilled' | 'skipped' | 'quarantined';
+  decision: 'distilled' | 'skipped' | 'quarantined' | 'rejected';
   reason: string;
   counts: {
     events: number;
@@ -34,6 +34,11 @@ export type DistillVerdict = {
     salience_hints: number;
   };
   note_id?: string;
+  verify?: {
+    errors: string[];
+    reason: string;
+    attempts: 1 | 2;
+  };
   /**
    * Quarantine breadcrumb (§5, issue #60): present only on a `quarantined`
    * verdict. Names the exact byte range in the (sacred, untouched) event log a
