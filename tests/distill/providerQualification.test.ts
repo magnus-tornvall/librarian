@@ -87,8 +87,9 @@ for (const fixtureDir of fixtureDirs) {
       const providerArgs = provider
         ? ['--provider', provider, ...(model ? ['--model', model] : [])]
         : ['--provider-fixture', path.join(fixtureDir, 'response.json'), '--model', 'fixture/qualification'];
+      const command = expected.outcome === 'noop' ? 'drain' : 'distill';
       const distilled = runCli([
-        'distill',
+        command,
         '--data-dir', dataDir,
         '--diagnostics-dir', diagnosticsDir,
         ...providerArgs,
@@ -97,6 +98,7 @@ for (const fixtureDir of fixtureDirs) {
 
       const notes = readAllNotes(dataDir);
       if (expected.outcome === 'noop') {
+        assert.match(distilled.stdout, /sessions noops: 1/, 'drain reports one noop');
         assert.equal(notes.length, 0, `NOOP lands no note, found ${notes.length}`);
         const verdictDir = path.join(diagnosticsDir, 'distill');
         const verdicts = fs.readdirSync(verdictDir)
@@ -105,8 +107,9 @@ for (const fixtureDir of fixtureDirs) {
         assert.equal(verdicts.filter((verdict) => verdict.decision === 'noop').length, 1, 'one noop verdict');
         const cursor = JSON.parse(fs.readFileSync(path.join(dataDir, 'cursors', 'distiller', `${expected.session_id}.json`), 'utf8')) as { byte_offset: number };
         assert.equal(cursor.byte_offset, fs.statSync(path.join(dataDir, 'events', `${expected.session_id}.ndjson`)).size, 'cursor advances');
-        const rerun = runCli(['distill', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, ...providerArgs]);
+        const rerun = runCli(['drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, ...providerArgs]);
         assert.equal(rerun.status, 0, `re-run exited ${rerun.status}: ${rerun.stderr}`);
+        assert.equal(rerun.stdout, 'Nothing pending\n', 're-run reports no pending work');
         assert.equal(readAllNotes(dataDir).length, 0, 're-run distills nothing');
         return;
       }

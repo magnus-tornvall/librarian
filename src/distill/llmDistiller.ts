@@ -101,7 +101,7 @@ export async function distill(
   const judgment = JSON.parse(unfence(raw)) as LlmNoteJudgment;
 
   if (judgment.note_type === 'none') {
-    return { kind: 'declined', reason: judgment.reason ?? '' };
+    return { kind: 'declined', reason: typeof judgment.reason === 'string' ? judgment.reason : '' };
   }
 
   const body: NoteRevision['body'] = { summary: judgment.summary ?? '' };

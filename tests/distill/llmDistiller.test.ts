@@ -114,10 +114,14 @@ test('malformed JSON from the provider throws (no retry in this task)', async ()
   );
 });
 
-test('explicit none returns a decline and defaults a missing reason', async () => {
+test('explicit none returns a decline and defaults a missing or invalid reason', async () => {
   const events = loadFixtureEvents();
   assert.deepEqual(
     await distill(events, SESSION_ID, makeFixtureProvider('{"note_type":"none"}'), ORIGIN),
+    { kind: 'declined', reason: '' },
+  );
+  assert.deepEqual(
+    await distill(events, SESSION_ID, makeFixtureProvider('{"note_type":"none","reason":42}'), ORIGIN),
     { kind: 'declined', reason: '' },
   );
 });
