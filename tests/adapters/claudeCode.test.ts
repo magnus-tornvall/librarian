@@ -302,7 +302,7 @@ function runHookEntry(payload: unknown, repo: string, bin: string): ReturnType<t
     input: JSON.stringify(payload),
     cwd: repo,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+    env: { ...process.env, LIBRARIAN_BIN: path.join(bin, 'librarian') },
   });
 }
 

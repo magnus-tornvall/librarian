@@ -31,12 +31,40 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ulid } from 'ulid';
 import { map, type CanonicalEvent, type Context, type NativePayload, type Resource } from './map.ts';
 
 // A namespaced tag so operators can grep the host session's hook logs for our lines.
 const LOG_TAG = 'librarian-claude-code';
 const INJECT_TIMEOUT_MS = 8_000;
+
+export type LibrarianCommand = { command: string; args: string[] };
+
+/** Prefer this checkout's built CLI, but preserve the PATH fallback on any resolution failure. */
+export function resolveLibrarianCommand(
+  exists: (file: string) => boolean = fs.existsSync,
+  cliUrl: URL = new URL('../../dist/cli.js', import.meta.url),
+  override: string | undefined = process.env.LIBRARIAN_BIN,
+): LibrarianCommand {
+  try {
+    if (override) {
+      return { command: override, args: [] };
+    }
+    const cliPath = fileURLToPath(cliUrl);
+    return exists(cliPath)
+      ? { command: process.execPath, args: [cliPath] }
+      : { command: 'librarian', args: [] };
+  } catch {
+    return { command: 'librarian', args: [] };
+  }
+}
+
+const librarian = resolveLibrarianCommand();
+
+function runLibrarian(args: string[], options: Parameters<typeof spawnSync>[2] = {}) {
+  return spawnSync(librarian.command, [...librarian.args, ...args], options);
+}
 
 function logError(message: string): void {
   // stderr only — never stdout (Claude Code may treat hook stdout as decision/context).
@@ -82,13 +110,13 @@ function resolveMachineId(): string {
     }
   }
 
-  const fromCli = tryRun('librarian', ['machine-id'], process.cwd());
+  const fromCli = tryRun(librarian.command, [...librarian.args, 'machine-id'], process.cwd());
   if (fromCli) {
     return fromCli;
   }
 
   logError(
-    'could not resolve machine id (is `librarian` on PATH?); ' +
+    'could not resolve machine id with the built CLI or `librarian` on PATH; ' +
       'falling back to an ephemeral id for this run',
   );
   return randomUUID();
@@ -133,15 +161,15 @@ function buildResource(cwd: string): Resource {
  *
  * ponytail (v1 ceiling): each Claude Code hook is already its own short-lived process,
  * and this spawns `librarian collect` once per event within it. That is fine for v1 —
- * correctness over throughput, and it keeps the hook stateless. `librarian` must be on
- * PATH (see README). A collector rejection (fail-loud, §9) is surfaced to THIS process's
+ * correctness over throughput, and it keeps the hook stateless. A collector rejection
+ * (fail-loud, §9) is surfaced to THIS process's
  * stderr but never rethrown — instrumentation must not break the session (hook-safety).
  */
 function handOff(event: CanonicalEvent): void {
   const line = JSON.stringify(event) + '\n';
-  const result = spawnSync('librarian', ['collect'], { input: line, encoding: 'utf8' });
+  const result = runLibrarian(['collect'], { input: line, encoding: 'utf8' });
   if (result.error) {
-    logError(`librarian collect failed to spawn: ${result.error.message} (is librarian on PATH?)`);
+    logError(`librarian collect failed to spawn: ${result.error.message}`);
     return;
   }
   if (result.status !== 0) {
@@ -169,7 +197,7 @@ function injectForPayload(payload: NativePayload, cwd: string, gitRoot?: string)
   }
 
   try {
-    const result = spawnSync('librarian', args, {
+    const result = runLibrarian(args, {
       cwd,
       input: payload.hook_event_name === 'UserPromptSubmit' ? payload.prompt : '',
       encoding: 'utf8',
