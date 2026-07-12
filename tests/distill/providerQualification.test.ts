@@ -13,8 +13,9 @@ const LINK_TYPES = new Set(['note', 'entity', 'project', 'file', 'url']);
 const NOTE_TYPES = new Set(['fact', 'decision', 'project_summary', 'person', 'daily', 'episode', 'curated']);
 
 type Expected = {
-  note_type: NoteRevision['note_type'];
-  identity_mode: NoteRevision['identity']['mode'];
+  outcome?: 'note' | 'noop';
+  note_type?: NoteRevision['note_type'];
+  identity_mode?: NoteRevision['identity']['mode'];
   note_id?: string;
   project_slug: string;
   session_id: string;
@@ -86,8 +87,9 @@ for (const fixtureDir of fixtureDirs) {
       const providerArgs = provider
         ? ['--provider', provider, ...(model ? ['--model', model] : [])]
         : ['--provider-fixture', path.join(fixtureDir, 'response.json'), '--model', 'fixture/qualification'];
+      const command = expected.outcome === 'noop' ? 'drain' : 'distill';
       const distilled = runCli([
-        'distill',
+        command,
         '--data-dir', dataDir,
         '--diagnostics-dir', diagnosticsDir,
         ...providerArgs,
@@ -95,6 +97,22 @@ for (const fixtureDir of fixtureDirs) {
       assert.equal(distilled.status, 0, `distill exited ${distilled.status}: ${distilled.stderr}`);
 
       const notes = readAllNotes(dataDir);
+      if (expected.outcome === 'noop') {
+        assert.match(distilled.stdout, /sessions noops: 1/, 'drain reports one noop');
+        assert.equal(notes.length, 0, `NOOP lands no note, found ${notes.length}`);
+        const verdictDir = path.join(diagnosticsDir, 'distill');
+        const verdicts = fs.readdirSync(verdictDir)
+          .flatMap((file) => fs.readFileSync(path.join(verdictDir, file), 'utf8').trim().split('\n'))
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        assert.equal(verdicts.filter((verdict) => verdict.decision === 'noop').length, 1, 'one noop verdict');
+        const cursor = JSON.parse(fs.readFileSync(path.join(dataDir, 'cursors', 'distiller', `${expected.session_id}.json`), 'utf8')) as { byte_offset: number };
+        assert.equal(cursor.byte_offset, fs.statSync(path.join(dataDir, 'events', `${expected.session_id}.ndjson`)).size, 'cursor advances');
+        const rerun = runCli(['drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, ...providerArgs]);
+        assert.equal(rerun.status, 0, `re-run exited ${rerun.status}: ${rerun.stderr}`);
+        assert.equal(rerun.stdout, 'Nothing pending\n', 're-run reports no pending work');
+        assert.equal(readAllNotes(dataDir).length, 0, 're-run distills nothing');
+        return;
+      }
       assert.equal(notes.length, 1, `note lands: expected 1 note, found ${notes.length}`);
       validateNote(notes[0]);
       const note = notes[0];

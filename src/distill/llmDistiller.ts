@@ -18,6 +18,7 @@ const NOTE_TYPES: ReadonlyArray<NoteRevision['note_type']> = [
 
 type LlmNoteJudgment = {
   note_type?: string;
+  reason?: string;
   title?: string;
   summary?: string;
   bullets?: string[];
@@ -49,9 +50,19 @@ function coerceNoteType(value: unknown): NoteRevision['note_type'] {
 
 const INSTRUCTION = [
   'You are distilling an agent session into one memory note.',
-  'Read the indexed event lines below and decide what is worth remembering.',
+  'The verbatim event log is kept forever. Capture only what a future session could NOT cheaply re-derive from the repository or event log.',
+  'Worth remembering:',
+  '  decision: what was decided, why, and rejected alternatives',
+  '  fact: hard-won facts not evident from reading the code',
+  '  fact: user corrections or stated working preferences',
+  '  project_summary: meaningful project-state changes',
+  '  person: useful information about people',
+  'NOT worth remembering: tools or commands run; files read or edited; routine narration such as "fixed the bug" or "ran the tests"; anything re-derivable by reading the repository; generic practices true of any project.',
+  'Use absolute dates, never relative dates such as "today" or "recently".',
+  'If nothing is worth remembering, respond exactly as {"note_type":"none","reason":"why nothing merits a note"}.',
   'Respond with ONLY a JSON object with these keys:',
-  '  "note_type": one of fact | decision | project_summary | person | daily | episode | curated',
+  '  "note_type": one of fact | decision | project_summary | person | daily | episode | curated | none',
+  '  "reason": required when note_type is none',
   '  "title": a short title',
   '  "summary": a one-to-two sentence summary',
   '  "bullets": (optional) an array of short strings',
@@ -71,6 +82,8 @@ const INSTRUCTION = [
  * `note_id`/`revision_id` use the `ulid` package (monotonic within a
  * millisecond, so the two ids minted back-to-back here sort in creation order).
  */
+export type DistillJudgment = NoteRevision | { kind: 'declined'; reason: string };
+
 export async function distill(
   events: Array<Record<string, unknown>>,
   sessionId: string,
@@ -78,7 +91,7 @@ export async function distill(
   origin: string,
   existingRecords: NoteRecord[] = [],
   feedback?: string,
-): Promise<NoteRevision> {
+): Promise<DistillJudgment> {
   const prompt = `${INSTRUCTION}${feedback ? `\nVerifier feedback: ${feedback}` : ''}\n\nEvents:\n${renderEventsForDistill(events)}`;
   const raw = await provider.complete(prompt);
 
@@ -86,6 +99,10 @@ export async function distill(
   // (§5 caps the eventual ceiling at completion + validate + one retry; the
   // retry-once wrapper is a later concern, per task 017's scope note).
   const judgment = JSON.parse(unfence(raw)) as LlmNoteJudgment;
+
+  if (judgment.note_type === 'none') {
+    return { kind: 'declined', reason: typeof judgment.reason === 'string' ? judgment.reason : '' };
+  }
 
   const body: NoteRevision['body'] = { summary: judgment.summary ?? '' };
   if (Array.isArray(judgment.bullets)) {

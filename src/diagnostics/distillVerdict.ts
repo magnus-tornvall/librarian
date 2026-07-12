@@ -25,7 +25,7 @@ export type DistillVerdict = {
   verdict_id: string;
   ts: string;
   session_id: string;
-  decision: 'distilled' | 'duplicate' | 'skipped' | 'quarantined' | 'rejected';
+  decision: 'distilled' | 'duplicate' | 'skipped' | 'noop' | 'quarantined' | 'rejected';
   reason: string;
   counts: {
     events: number;
