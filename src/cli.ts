@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { ulid } from 'ulid';
 import { appendEvent } from './collector/append.ts';
 import { makeInjectionId, readInjectionTraces, writeInjectionTrace, type InjectionTrace } from './diagnostics/injectionTrace.ts';
-import { makeFixtureProvider, type InferenceProvider } from './distill/provider.ts';
+import { makeFixtureProvider, makeScriptedFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { importCuratedNote } from './distill/humanDistiller.ts';
@@ -522,11 +522,12 @@ function collect(flags: Map<string, string>): void {
  * provider *selection* lives, kept apart from `distillCommand` so the command
  * reads as intent and the choice is testable without spawning a model.
  *
- * `--provider-fixture <file>` selects an offline provider that replays the
- * file's contents (§2: swapping the model is swapping a provider, nothing
- * more). It is a first-class operator switch for offline/canned runs, not a
- * test-only hook — the fixture-backed provider is also how tests avoid a live
- * call. Absent the flag, the real `claude -p` provider is used.
+ * `--provider-fixture <file>` selects an offline provider that returns the
+ * file's contents; a JSON array of strings supplies ordered responses (§2:
+ * swapping the model is swapping a provider, nothing more). It is a first-class
+ * operator switch for offline/canned runs, not a test-only hook — the fixture-
+ * backed provider is also how tests avoid a live call. Absent the flag, the real
+ * `claude -p` provider is used.
  *
  * `--provider` overrides config selection directly; this remains a branch, not
  * a provider registry.
@@ -534,7 +535,16 @@ function collect(flags: Map<string, string>): void {
 export function resolveProvider(flags: Map<string, string>, configPath = CONFIG_PATH): InferenceProvider {
   const fixture = flags.get('provider-fixture');
   if (fixture !== undefined) {
-    return makeFixtureProvider(fs.readFileSync(fixture, 'utf8'), flags.get('model'));
+    const response = fs.readFileSync(fixture, 'utf8');
+    try {
+      const scripted = JSON.parse(response);
+      if (Array.isArray(scripted) && scripted.every((item) => typeof item === 'string')) {
+        return makeScriptedFixtureProvider(scripted, flags.get('model'));
+      }
+    } catch {
+      // A normal fixture is arbitrary provider output, not necessarily JSON.
+    }
+    return makeFixtureProvider(response, flags.get('model'));
   }
   const config = loadConfig(configPath);
   const provider = flags.get('provider') ?? config.inference.provider;
@@ -595,7 +605,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const distilled = await runDistill({ dataDir, diagnosticsDir, provider });
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
 
-  const distillWork = distilled.distilled + distilled.skipped + distilled.quarantined;
+  const distillWork = distilled.distilled + distilled.skipped + distilled.quarantined + distilled.rejected;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
   if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
     process.stdout.write('Nothing pending\n');
@@ -606,6 +616,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
     `sessions distilled: ${distilled.distilled}`,
     `sessions skipped: ${distilled.skipped}`,
     `sessions quarantined: ${distilled.quarantined}`,
+    `sessions rejected: ${distilled.rejected}`,
   ];
   if (vaultDir !== undefined) {
     lines.push(`notes exported: ${exported!.exported}`);

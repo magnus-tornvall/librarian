@@ -56,8 +56,6 @@ const INSTRUCTION = [
   '  "summary": a one-to-two sentence summary',
   '  "bullets": (optional) an array of short strings',
   '  "links": (optional) an array of { "target_type": note | entity | project | file | url, "target": string, "relation": optional string }',
-  '',
-  'Events:',
 ].join('\n');
 
 /**
@@ -79,8 +77,9 @@ export async function distill(
   provider: InferenceProvider,
   origin: string,
   existingRecords: NoteRecord[] = [],
+  feedback?: string,
 ): Promise<NoteRevision> {
-  const prompt = `${INSTRUCTION}\n${renderEventsForDistill(events)}`;
+  const prompt = `${INSTRUCTION}${feedback ? `\nVerifier feedback: ${feedback}` : ''}\n\nEvents:\n${renderEventsForDistill(events)}`;
   const raw = await provider.complete(prompt);
 
   // Parse the LLM judgment. On malformed JSON, throw — no retry in this task

@@ -18,13 +18,14 @@ const LLM_RESPONSE = JSON.stringify({
   summary: 'Use the periwinkle standby cache during coordinator failover and keep the rollout global.',
   bullets: ['Coordinator failover should prefer the standby cache before retrying writes.'],
 });
+const FAITHFUL_RESPONSE = JSON.stringify({ faithful: true, errors: [], reason: 'Supported by the events.' });
 
 function makeTempDirs() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pull-path-capstone-'));
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
   const fixturePath = path.join(root, 'llm-response.json');
-  fs.writeFileSync(fixturePath, LLM_RESPONSE);
+  fs.writeFileSync(fixturePath, JSON.stringify([LLM_RESPONSE, FAITHFUL_RESPONSE]));
   return { root, dataDir, diagnosticsDir, fixturePath };
 }
 

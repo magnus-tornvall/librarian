@@ -37,13 +37,14 @@ const LLM_RESPONSE = JSON.stringify({
   summary: 'Rebuild the quokka search index nightly and keep the rollout global for every project.',
   bullets: ['The quokka index must be rebuilt nightly to stay consistent with the note log.'],
 });
+const FAITHFUL_RESPONSE = JSON.stringify({ faithful: true, errors: [], reason: 'Supported by the events.' });
 
 function makeTempDirs(): { root: string; dataDir: string; diagnosticsDir: string; fixturePath: string; repo: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'push-path-capstone-'));
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
   const fixturePath = path.join(root, 'llm-response.json');
-  fs.writeFileSync(fixturePath, LLM_RESPONSE);
+  fs.writeFileSync(fixturePath, JSON.stringify(Array.from({ length: 10 }, () => [LLM_RESPONSE, FAITHFUL_RESPONSE]).flat()));
   // A real git repo named after the project so both adapters attribute --project <slug>.
   const repo = path.join(root, PROJECT_SLUG);
   fs.mkdirSync(repo);
@@ -247,15 +248,13 @@ function seedDecoysViaSession(t: { dataDir: string; diagnosticsDir: string; fixt
   for (let d = 0; d < 5; d += 1) {
     const sessionId = `push-capstone-decoy-${d}`;
     const decoyFixture = path.join(path.dirname(t.fixturePath), `decoy-${d}.json`);
-    fs.writeFileSync(
-      decoyFixture,
-      JSON.stringify({
-        note_type: 'fact',
-        title: `Unrelated release checklist ${d}`,
-        summary: `Assorted release checklist ${d} covering editor settings and changelog hygiene.`,
-        bullets: [`Release checklist ${d} step about tagging the changelog.`],
-      }),
-    );
+    const decoy = JSON.stringify({
+      note_type: 'fact',
+      title: `Unrelated release checklist ${d}`,
+      summary: `Assorted release checklist ${d} covering editor settings and changelog hygiene.`,
+      bullets: [`Release checklist ${d} step about tagging the changelog.`],
+    });
+    fs.writeFileSync(decoyFixture, JSON.stringify([decoy, FAITHFUL_RESPONSE]));
     const events: Array<Record<string, unknown>> = [
       event(sessionId, 1, { type: 'prompt', prompt: `Draft the release checklist number ${d} for the changelog.` }),
       event(sessionId, 2, {
@@ -415,15 +414,13 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
   for (let d = 0; d < 6; d += 1) {
     const sessionId = `push-capstone-floor-${d}`;
     const floorFixture = path.join(path.dirname(t.fixturePath), `floor-${d}.json`);
-    fs.writeFileSync(
-      floorFixture,
-      JSON.stringify({
-        note_type: 'decision',
-        title: `Commonfloor decision ${d}`,
-        summary: `Commonfloor commonfloor commonfloor note ${d} about commonfloor routine housekeeping.`,
-        bullets: [`Commonfloor step ${d} in the commonfloor housekeeping routine.`],
-      }),
-    );
+    const floorNote = JSON.stringify({
+      note_type: 'decision',
+      title: `Commonfloor decision ${d}`,
+      summary: `Commonfloor commonfloor commonfloor note ${d} about commonfloor routine housekeeping.`,
+      bullets: [`Commonfloor step ${d} in the commonfloor housekeeping routine.`],
+    });
+    fs.writeFileSync(floorFixture, JSON.stringify([floorNote, FAITHFUL_RESPONSE]));
     const events: Array<Record<string, unknown>> = [
       event(sessionId, 1, { type: 'prompt', prompt: `Note the commonfloor housekeeping routine ${d}.` }),
       event(sessionId, 2, {

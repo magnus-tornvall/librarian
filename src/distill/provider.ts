@@ -24,3 +24,17 @@ export function makeFixtureProvider(response: string, model?: string): Inference
     },
   };
 }
+
+/** Ordered canned responses for integration tests that make several model calls. */
+export function makeScriptedFixtureProvider(responses: string[], model?: string): InferenceProvider {
+  let next = 0;
+  return {
+    ...(model ? { model } : {}),
+    complete(_prompt: string): Promise<string> {
+      if (next === responses.length) {
+        return Promise.reject(new Error('fixture provider ran out of scripted responses'));
+      }
+      return Promise.resolve(responses[next++]);
+    },
+  };
+}

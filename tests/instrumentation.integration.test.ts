@@ -112,6 +112,7 @@ const LLM_RESPONSE = JSON.stringify({
   summary:
     'Fixed the login redirect loop by checking token expiry before redirect; added a regression test.',
 });
+const FAITHFUL_RESPONSE = JSON.stringify({ faithful: true, errors: [], reason: 'Supported by the events.' });
 
 /**
  * A realistic ELIGIBLE session script: 11 native events with ≥2 prompts and a
@@ -169,7 +170,7 @@ function makeTempDirs(prefix: string) {
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
   const fixturePath = path.join(root, 'llm-response.json');
-  fs.writeFileSync(fixturePath, LLM_RESPONSE);
+  fs.writeFileSync(fixturePath, JSON.stringify(Array.from({ length: 10 }, () => [LLM_RESPONSE, FAITHFUL_RESPONSE]).flat()));
   return { root, dataDir, diagnosticsDir, fixturePath, cursorPath: path.join(dataDir, 'index-cursor.json') };
 }
 

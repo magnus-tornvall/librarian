@@ -1,5 +1,4 @@
-{
-  "note_type": "episode",
-  "title": "Added provider health command",
-  "summary": "Implemented and tested a provider health command."
-}
+[
+  "{\"note_type\":\"episode\",\"title\":\"Added provider health command\",\"summary\":\"Implemented and tested a provider health command.\"}",
+  "{\"faithful\":true,\"errors\":[],\"reason\":\"Supported by the events.\"}"
+]

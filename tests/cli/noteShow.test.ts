@@ -87,13 +87,14 @@ function distill(dataDir: string, diagnosticsDir: string, fixturePath: string): 
 
 function writeFixture(root: string): string {
   const fixturePath = path.join(root, 'llm-response.json');
+  const note = JSON.stringify({
+    note_type: 'decision',
+    title: 'Provenance drill down',
+    summary: 'The command must recover exact source events.',
+  });
   fs.writeFileSync(
     fixturePath,
-    JSON.stringify({
-      note_type: 'decision',
-      title: 'Provenance drill down',
-      summary: 'The command must recover exact source events.',
-    }),
+    JSON.stringify([note, JSON.stringify({ faithful: true, errors: [], reason: 'Supported by the events.' })]),
   );
   return fixturePath;
 }
