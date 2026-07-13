@@ -11,7 +11,8 @@ const CUT_REASONS = ['below_floor', 'budget', 'scope_mismatch', 'unknown'] as co
 
 type CountRate = { count: number; rate: number };
 type Breakdown = { total: number; decisions: Record<DistillVerdict['decision'], CountRate> };
-export type StatsNote = { note_id: string; title: string };
+export type StatsNote = { note_id: string; title: string; created_at: string };
+type ReportNote = Pick<StatsNote, 'note_id' | 'title'>;
 
 export type StatsReport = {
   admission: {
@@ -24,10 +25,10 @@ export type StatsReport = {
     trace_count: number;
     injections_per_note: Record<string, number>;
     dead_window_days: number;
-    dead_notes: StatsNote[];
+    dead_notes: ReportNote[];
     dead_note_ratio: number;
     perpetual_candidate_min_appearances: number;
-    perpetual_candidates: Array<StatsNote & { appearances: number }>;
+    perpetual_candidates: Array<ReportNote & { appearances: number }>;
   };
   cut_reasons: { total: number; mix: Record<(typeof CUT_REASONS)[number], CountRate> };
 };
@@ -76,9 +77,9 @@ export function computeStats({
       if (isRecent) recentShipped.add(noteId);
     }
     for (const candidate of trace.candidates) {
-      const reason = candidate.cut_reason ?? 'unknown';
-      cutCounts[reason] += 1;
       if (!trace.shipped_note_ids.includes(candidate.note_id)) {
+        const reason = candidate.cut_reason ?? 'unknown';
+        cutCounts[reason] += 1;
         const current = candidateStats.get(candidate.note_id) ?? { appearances: 0, onlyBelowFloor: true };
         current.appearances += 1;
         current.onlyBelowFloor &&= candidate.cut_reason === 'below_floor';
@@ -88,9 +89,14 @@ export function computeStats({
   }
 
   const noteById = new Map(notes.map((note) => [note.note_id, note]));
-  const deadNotes = traces.length === 0
+  const eligibleNotes = notes.filter((note) => new Date(note.created_at).getTime() <= cutoff);
+  const hasRecentTraces = traces.some((trace) => new Date(trace.ts).getTime() >= cutoff);
+  const deadNotes = !hasRecentTraces
     ? []
-    : notes.filter((note) => !recentShipped.has(note.note_id)).sort((a, b) => a.note_id.localeCompare(b.note_id));
+    : eligibleNotes
+      .filter((note) => !recentShipped.has(note.note_id))
+      .map(({ note_id, title }) => ({ note_id, title }))
+      .sort((a, b) => a.note_id.localeCompare(b.note_id));
   const perpetualCandidates = [...candidateStats]
     .filter(([noteId, stats]) => !shipped.has(noteId) && stats.onlyBelowFloor && stats.appearances >= PERPETUAL_CANDIDATE_MIN_APPEARANCES)
     .map(([noteId, stats]) => ({ note_id: noteId, title: noteById.get(noteId)?.title ?? '(unknown)', appearances: stats.appearances }))
@@ -109,7 +115,7 @@ export function computeStats({
       injections_per_note: Object.fromEntries([...shipped].sort(([a], [b]) => a.localeCompare(b))),
       dead_window_days: DEAD_NOTE_WINDOW_DAYS,
       dead_notes: deadNotes,
-      dead_note_ratio: notes.length === 0 || traces.length === 0 ? 0 : deadNotes.length / notes.length,
+      dead_note_ratio: eligibleNotes.length === 0 || !hasRecentTraces ? 0 : deadNotes.length / eligibleNotes.length,
       perpetual_candidate_min_appearances: PERPETUAL_CANDIDATE_MIN_APPEARANCES,
       perpetual_candidates: perpetualCandidates,
     },
@@ -150,7 +156,7 @@ export function formatStats(report: StatsReport): string {
     ...report.usage.perpetual_candidates.map((note) => `- ${note.note_id}: ${note.title} (${note.appearances})`),
     '',
     'Cut-reason mix',
-    `Total candidates: ${report.cut_reasons.total}`,
+    `Total cut candidates: ${report.cut_reasons.total}`,
     ...cuts.map(([reason, value]) => `${reason}: ${value.count} (${percent(value.rate)})`),
   ].join('\n') + '\n';
 }

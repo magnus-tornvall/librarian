@@ -197,7 +197,7 @@ function statsCommand(argv: string[]): void {
   }
   const notes = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[])
     .filter((record): record is NoteRevision => record.kind === 'note_revision')
-    .map(({ note_id, title }) => ({ note_id, title }));
+    .map(({ note_id, title, created_at }) => ({ note_id, title, created_at }));
   const report = computeStats({
     verdicts: readDistillVerdicts(diagnosticsDir),
     traces: readInjectionTraces(diagnosticsDir),
