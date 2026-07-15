@@ -160,6 +160,28 @@ test('inject excludes a stale fact with an explicit supersession record', () => 
   assert.doesNotMatch(result.stdout, /https:\/\/staging-old\.example\.test/);
 });
 
+test('inject --session-start excludes a superseded project summary', () => {
+  const t = tempRoot();
+  const now = new Date().toISOString();
+  appendNote(t.dataDir, note(1, {
+    note_id: 'project:alpha:summary', note_type: 'project_summary', created_at: now,
+    title: 'Stale summary', body: { summary: 'Do not inject this stale project summary.' },
+  }));
+  appendNote(t.dataDir, note(2, {
+    note_id: 'project:alpha:summary-replacement', note_type: 'project_summary', created_at: now,
+    title: 'Current summary', body: { summary: 'This replacement need not be a session-start summary.' },
+  }));
+  appendNote(t.dataDir, {
+    kind: 'note_supersession', schema_version: 1, note_id: 'project:alpha:summary',
+    superseded_by: 'project:alpha:summary-replacement', revision_id: 'summary-supersession',
+    created_at: now, source: { kind: 'cli' },
+  });
+
+  const result = runCli(['inject', '--session-start', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir]);
+  assert.equal(result.status, 0, `session-start should exit 0; stderr: ${result.stderr}`);
+  assert.doesNotMatch(result.stdout, /Do not inject this stale project summary/);
+});
+
 test('inject --session-start returns project brief and curated notes, or empty when absent', () => {
   const t = tempRoot();
   appendNote(

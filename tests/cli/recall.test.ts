@@ -198,6 +198,7 @@ test('supersede appends an annotation, excludes only the stale fact, and why-not
   const whyNot = runCli(['why-not', 'mackerel', oldNote.note_id, '--project', 'alpha', '--data-dir', dataDir]);
   assert.equal(whyNot.status, 0, `why-not should exit 0; stderr: ${whyNot.stderr}`);
   assert.match(whyNot.stdout, /Gate: superseded/);
+  assert.match(whyNot.stdout, new RegExp(`Superseded By: ${newNote.note_id}`));
 
   const shown = runCli(['note', 'show', oldNote.note_id, '--json', '--data-dir', dataDir]);
   assert.equal(shown.status, 0, `note show should retain the revision; stderr: ${shown.stderr}`);

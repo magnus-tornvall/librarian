@@ -8,7 +8,9 @@ type FtsRow = {
   origin: string;
   note_type: string;
   created_at: string;
+  valid_at: string | null;
   invalid_at: string | null;
+  superseded_by: string | null;
   project_slug: string;
   is_global: number;
   raw_score: number;
@@ -28,7 +30,8 @@ export type WhyNotResult =
       rank: number;
       raw_score: number;
       post_weight_score: number;
-      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded';
+      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'not_yet_valid';
+      superseded_by?: string;
     }
   | { matched: false; note_id: string; gate: 'not_matched_by_bm25' };
 
@@ -98,7 +101,7 @@ export function recallWithTrace(
 
   const rows = db
     .prepare(
-      `SELECT note_id, origin, note_type, created_at, invalid_at, project_slug, is_global, bm25(notes_fts) as raw_score
+      `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, bm25(notes_fts) as raw_score
        FROM notes_fts
        WHERE notes_fts MATCH ? AND ${filterClauses.join(' AND ')}`,
     )
@@ -115,20 +118,21 @@ export function recallWithTrace(
     // boost; a global-scope-only hit does not. Scope now lives in the index, so this
     // is a real signal rather than the old hard-coded false.
     is_project_match: opts.projectSlug !== undefined && row.project_slug === opts.projectSlug,
+    valid_at: row.valid_at ?? row.created_at,
     invalid_at: row.invalid_at,
   }));
 
   const limit = opts.limit ?? RESULT_CAP;
   const scored = candidates
-    .map(({ invalid_at, ...candidate }) => ({ ...candidate, invalid_at, score: weightedCandidateScore(candidate, config, nowIso) }))
+    .map(({ valid_at, invalid_at, ...candidate }) => ({ ...candidate, valid_at, invalid_at, score: weightedCandidateScore(candidate, config, nowIso) }))
     .sort((a, b) => b.score - a.score);
-  const active = scored.filter((candidate) => candidate.invalid_at === null || candidate.invalid_at > nowIso);
+  const active = scored.filter((candidate) => candidate.valid_at <= nowIso && (candidate.invalid_at === null || candidate.invalid_at > nowIso));
   const aboveFloor = active.filter((candidate) => candidate.score >= config.relevanceFloor && candidate.score > 0);
   const shipped = aboveFloor.slice(0, limit);
   const shippedIds = new Set(shipped.map((candidate) => candidate.note_id));
   const budgetCutIds = new Set(aboveFloor.slice(limit).map((candidate) => candidate.note_id));
   const traceCandidates: RecallTraceCandidate[] = scored.map((candidate) => {
-    const { invalid_at: _invalidAt, ...traceCandidate } = candidate;
+    const { valid_at: _validAt, invalid_at: _invalidAt, ...traceCandidate } = candidate;
     if (candidate.invalid_at !== null && candidate.invalid_at <= nowIso) {
       return { ...traceCandidate, cut_reason: 'superseded' };
     }
@@ -163,7 +167,7 @@ export function whyNot(
 
   const rows = db
     .prepare(
-      `SELECT note_id, origin, note_type, created_at, invalid_at, project_slug, is_global, bm25(notes_fts) as raw_score
+      `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, bm25(notes_fts) as raw_score
        FROM notes_fts
        WHERE notes_fts MATCH ?`,
     )
@@ -181,6 +185,8 @@ export function whyNot(
       origin: row.origin,
       note_type: row.note_type,
       created_at: row.created_at,
+      valid_at: row.valid_at ?? row.created_at,
+      invalid_at: row.invalid_at,
       is_project_match: opts.projectSlug !== undefined && row.project_slug === opts.projectSlug,
     }))
     .map((candidate) => ({ ...candidate, score: weightedCandidateScore(candidate, config, nowIso) }))
@@ -190,10 +196,13 @@ export function whyNot(
     throw new Error(`internal error: matched note disappeared from scoring: ${noteId}`);
   }
 
-  const rank = scored.findIndex((row) => row.note_id === noteId) + 1;
-  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded';
+  const active = scored.filter((row) => row.valid_at <= nowIso && (row.invalid_at === null || row.invalid_at > nowIso));
+  const rank = active.findIndex((row) => row.note_id === noteId) + 1;
+  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'not_yet_valid';
   if (target.invalid_at !== null && target.invalid_at <= nowIso) {
     gate = 'superseded';
+  } else if (target.valid_at !== null && target.valid_at > nowIso) {
+    gate = 'not_yet_valid';
   } else if (!inScope(target, opts)) {
     gate = 'scope_mismatch';
   } else if (scoredTarget.score < config.relevanceFloor || scoredTarget.score <= 0) {
@@ -211,5 +220,6 @@ export function whyNot(
     raw_score: scoredTarget.raw_bm25,
     post_weight_score: scoredTarget.score,
     gate,
+    ...(gate === 'superseded' && target.superseded_by !== null ? { superseded_by: target.superseded_by } : {}),
   };
 }

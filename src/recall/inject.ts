@@ -24,10 +24,22 @@ export type InjectionOptions = {
 
 type Entry = { note: NoteRevision };
 
-function latestNotes(dataDir: string): NoteRevision[] {
-  return (latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[]) as NoteRecord[]).filter(
-    (note): note is NoteRevision => note.kind === 'note_revision',
-  );
+function latestNotes(dataDir: string, now: string): NoteRevision[] {
+  const records = readAllNotes(dataDir) as NoteRecord[];
+  const supersededAt = new Map<string, string>();
+  for (const record of records) {
+    if (record.kind !== 'note_supersession') continue;
+    const existing = supersededAt.get(record.note_id);
+    if (existing === undefined || record.created_at < existing) supersededAt.set(record.note_id, record.created_at);
+  }
+  return latestRecordPerNoteId(records).filter((note): note is NoteRevision => {
+    if (note.kind !== 'note_revision') return false;
+    const supersessionAt = supersededAt.get(note.note_id);
+    const invalidAt = supersessionAt && note.invalid_at
+      ? (supersessionAt <= note.invalid_at ? supersessionAt : note.invalid_at)
+      : supersessionAt ?? note.invalid_at;
+    return (note.valid_at ?? note.created_at) <= now && (invalidAt === undefined || invalidAt > now);
+  });
 }
 
 function indexedThrough(notes: NoteRevision[], fallback: string): string {
@@ -113,7 +125,7 @@ function sessionStartEntries(notes: NoteRevision[], projectSlug: string | undefi
 export function buildInjection(options: InjectionOptions): string | undefined {
   const ts = new Date().toISOString();
   const injectionId = makeInjectionId();
-  const notes = latestNotes(options.dataDir);
+  const notes = latestNotes(options.dataDir, ts);
   const indexed = indexedThrough(notes, ts);
 
   if (options.sessionStart) {

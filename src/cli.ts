@@ -858,6 +858,7 @@ function formatWhyNot(result: WhyNotResult): string {
     `Raw Score: ${result.raw_score.toFixed(4)}`,
     `Post-weight Score: ${result.post_weight_score.toFixed(4)}`,
     `Gate: ${result.gate}`,
+    ...(result.superseded_by ? [`Superseded By: ${result.superseded_by}`] : []),
   ].join('\n') + '\n';
 }
 
