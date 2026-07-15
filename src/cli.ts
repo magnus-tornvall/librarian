@@ -20,7 +20,7 @@ import { readAll } from './log/ndjson.ts';
 import { appendNote, readAllNotes } from './log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision, type NoteTombstone } from './note.ts';
 import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
-import { DEFAULT_SCORING_CONFIG } from './recall/scoring.ts';
+import { DEFAULT_SCORING_CONFIG, scoringConfigSnapshot } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
 
@@ -741,7 +741,7 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
     })),
     shipped_note_ids: rows.map((row) => row.note_id),
     indexed_through: ts,
-    config_snapshot: DEFAULT_SCORING_CONFIG,
+    config_snapshot: scoringConfigSnapshot(DEFAULT_SCORING_CONFIG),
   };
   writeInjectionTrace(options.diagnosticsDir, trace);
 }

@@ -130,6 +130,27 @@ test('why-not explains floor, scope, and BM25 misses without writing diagnostics
   assert.deepEqual(snapshotDir(t.diagnosticsDir), beforeDiagnostics, 'why-not must not write diagnostics');
 });
 
+test('why-not reports the undamped score for a year-old decision', () => {
+  const t = tempRoot();
+  appendNote(t.dataDir, note(1, {
+    note_id: 'decision:old-permanent',
+    note_type: 'decision',
+    created_at: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString(),
+    body: { summary: 'Permanent credential rotation decision.' },
+  }));
+  for (let i = 0; i < 5; i += 1) {
+    appendNote(t.dataDir, note(10 + i, { body: { summary: `Unrelated filler ${i}.` } }));
+  }
+
+  const result = runCli(['why-not', 'permanent credential', 'decision:old-permanent', '--project', 'alpha', '--data-dir', t.dataDir]);
+  assert.equal(result.status, 0, `why-not should exit 0; stderr: ${result.stderr}`);
+  const raw = Number(result.stdout.match(/Raw Score: ([\d.]+)/)?.[1]);
+  const weighted = Number(result.stdout.match(/Post-weight Score: ([\d.]+)/)?.[1]);
+  assert.ok(Number.isFinite(raw) && Number.isFinite(weighted));
+  assert.ok(Math.abs(weighted - raw * 1.8) < 0.0002, `expected undamped score, got ${result.stdout}`);
+  assert.match(result.stdout, /Gate: shipped/);
+});
+
 test('why-not budget gate matches the pull-path limit of 10, not the scoring cap of 5', () => {
   const t = tempRoot();
   // 8 notes all clear the floor for "narwhal"; ranks 6-8 are cut by the scoring RESULT_CAP (5)
