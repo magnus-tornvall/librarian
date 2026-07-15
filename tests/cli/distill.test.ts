@@ -518,6 +518,9 @@ test('distill: OpenCode provider stamps its explicit model on the note', () => {
   assert.equal(notes.length, 1);
   assert.equal((notes[0].source as Record<string, unknown>).distiller, 'llm');
   assert.equal((notes[0].source as Record<string, unknown>).model, 'test/test');
+  const verdict = readVerdicts(diagnosticsDir).find((row) => row.decision === 'distilled');
+  assert.equal(verdict?.origin, 'claude-code');
+  assert.equal(verdict?.provider, 'test/test');
 });
 
 test('distill: re-running over an unchanged log mints no second note (idempotency by provenance)', () => {

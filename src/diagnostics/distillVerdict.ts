@@ -1,6 +1,7 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { appendRecord } from '../log/ndjson.ts';
+import { appendRecord, readAll } from '../log/ndjson.ts';
 
 /**
  * Distill verdict (§8 "Distill verdicts"): one record per session delta the
@@ -27,6 +28,8 @@ export type DistillVerdict = {
   session_id: string;
   decision: 'distilled' | 'duplicate' | 'skipped' | 'noop' | 'quarantined' | 'rejected';
   reason: string;
+  origin?: string;
+  provider?: string;
   counts: {
     events: number;
     prompts: number;
@@ -70,6 +73,17 @@ function segmentPath(diagnosticsDir: string, verdict: DistillVerdict): string {
  */
 export function writeDistillVerdict(diagnosticsDir: string, verdict: DistillVerdict): void {
   appendRecord(segmentPath(diagnosticsDir, verdict), verdict);
+}
+
+export function readDistillVerdicts(diagnosticsDir: string): DistillVerdict[] {
+  const distillDir = path.join(diagnosticsDir, 'distill');
+  if (!fs.existsSync(distillDir)) return [];
+  // ponytail: diagnostics are deletable and personal-scale; index only if this scan gets slow.
+  return fs
+    .readdirSync(distillDir)
+    .filter((name) => name.endsWith('.ndjson'))
+    .sort()
+    .flatMap((name) => readAll(path.join(distillDir, name)) as DistillVerdict[]);
 }
 
 /** Mint a `verdict_id`. Reuses the one `ulid` helper for the whole codebase. */
