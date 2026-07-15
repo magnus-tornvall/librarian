@@ -11,7 +11,7 @@ export type ScoringConfig = {
   originWeights: Record<string, number>;
   typeWeights: Record<string, number>;
   relevanceFloor: number;
-  recencyHalfLifeDays: number;
+  recencyHalfLifeDays: Record<string, number>;
   projectBoost: number;
 };
 
@@ -27,18 +27,28 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   },
   // ponytail: placeholder v1 floor — §5 says this gets tuned against fixtures, not this task.
   relevanceFloor: 0.1,
-  recencyHalfLifeDays: 90,
+  recencyHalfLifeDays: { default: 90, decision: Infinity, curated: Infinity, daily: 90, episode: 90 },
   projectBoost: 1.5,
 };
+
+export function scoringConfigSnapshot(config: ScoringConfig): object {
+  return {
+    ...config,
+    recencyHalfLifeDays: Object.fromEntries(
+      Object.entries(config.recencyHalfLifeDays).map(([type, days]) => [type, days === Infinity ? 'Infinity' : days]),
+    ),
+  };
+}
 
 export function weightedCandidateScore(c: ScoredCandidate, config: ScoringConfig, nowIso: string): number {
   // Clamp negative age (a future-dated created_at, e.g. clock skew across machines) to 0
   // rather than letting it invert the decay term into an amplifier.
   const ageDays = Math.max(0, (Date.parse(nowIso) - Date.parse(c.created_at)) / (1000 * 60 * 60 * 24));
+  const halfLifeDays = config.recencyHalfLifeDays[c.note_type] ?? config.recencyHalfLifeDays.default;
   return (
     c.raw_bm25 *
     (c.is_project_match ? config.projectBoost : 1) *
-    Math.exp(-ageDays / config.recencyHalfLifeDays) *
+    Math.exp(-ageDays / halfLifeDays) *
     (config.originWeights[c.origin] ?? 1) *
     (config.typeWeights[c.note_type] ?? 1)
   );

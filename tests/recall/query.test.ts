@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { migrate } from '../../src/index/schema.ts';
-import { recall, recallWithTrace } from '../../src/recall/query.ts';
+import { recall, recallWithTrace, whyNot } from '../../src/recall/query.ts';
 import { DEFAULT_SCORING_CONFIG } from '../../src/recall/scoring.ts';
 
 const NOW = '2026-07-05T00:00:00.000Z';
@@ -80,6 +80,29 @@ test('recallWithTrace records below-floor candidates with their pre-floor weight
   assert.ok(candidate, 'the matching candidate should still appear in trace diagnostics');
   assert.equal(candidate.cut_reason, 'below_floor');
   assert.ok(candidate.score > 0, 'trace score should be the pre-floor weighted score, not the floored zero');
+});
+
+test('recall preserves a year-old decision while an episode keeps the 90-day decay', () => {
+  const db = new Database(':memory:');
+  migrate(db);
+  const insert = db.prepare(
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  insert.run('old-decision', 'r', 'opencode', 'decision', '2025-07-05T00:00:00.000Z', 'alpha', 0, 'permanent token strategy');
+  insert.run('old-episode', 'r', 'opencode', 'episode', '2025-07-05T00:00:00.000Z', 'alpha', 0, 'permanent token strategy');
+  for (let i = 0; i < 5; i += 1) {
+    insert.run(`decoy-${i}`, `r-${i}`, 'opencode', 'fact', NOW, 'alpha', 0, `unrelated filler ${i}`);
+  }
+
+  const results = recall(db, 'permanent token', { projectSlug: 'alpha' }, undefined, NOW);
+  assert.deepEqual(results.map((row) => row.note_id), ['old-decision']);
+
+  const decision = whyNot(db, 'permanent token', 'old-decision', { projectSlug: 'alpha' }, undefined, NOW);
+  const episode = whyNot(db, 'permanent token', 'old-episode', { projectSlug: 'alpha' }, undefined, NOW);
+  assert.ok(decision.matched && episode.matched);
+  assert.equal(decision.post_weight_score, decision.raw_score * 1.5 * 1.2);
+  assert.equal(episode.post_weight_score, episode.raw_score * 1.5 * 0.7 * Math.exp(-365 / 90));
+  assert.equal(episode.gate, 'below_floor');
 });
 
 // --- Scope enforcement (§6 "require project match or explicit global scope") ---

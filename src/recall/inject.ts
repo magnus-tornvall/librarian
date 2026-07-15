@@ -4,7 +4,7 @@ import { indexNotes } from '../index/indexer.ts';
 import { migrate } from '../index/schema.ts';
 import { readAllNotes } from '../log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from '../note.ts';
-import { DEFAULT_SCORING_CONFIG } from './scoring.ts';
+import { DEFAULT_SCORING_CONFIG, scoringConfigSnapshot } from './scoring.ts';
 import { recallWithTrace } from './query.ts';
 
 const PUSH_CAP = 5;
@@ -93,7 +93,7 @@ function writePushTrace(
     candidates,
     shipped_note_ids: shippedIds,
     indexed_through: indexed,
-    config_snapshot: DEFAULT_SCORING_CONFIG,
+    config_snapshot: scoringConfigSnapshot(DEFAULT_SCORING_CONFIG),
   };
   writeInjectionTrace(options.diagnosticsDir, trace);
 }

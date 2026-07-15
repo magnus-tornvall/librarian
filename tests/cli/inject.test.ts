@@ -89,7 +89,7 @@ test('inject CLI renders §6 block, writes matching push trace, and leaves note 
   assert.equal(trace.indexed_through, result.stdout.match(/indexed_through="([^"]+)"/)?.[1]);
   assert.deepEqual(trace.shipped_note_ids, ['fact:inject-1']);
   assert.ok(trace.candidates.every((candidate) => typeof candidate.raw_score === 'number' && typeof candidate.post_weight_score === 'number'));
-  assert.ok(trace.config_snapshot);
+  assert.equal((trace.config_snapshot as { recencyHalfLifeDays: Record<string, unknown> }).recencyHalfLifeDays.decision, 'Infinity');
   assert.deepEqual(snapshotNotes(t.dataDir), beforeNotes, 'inject must not mutate the note log');
 });
 
