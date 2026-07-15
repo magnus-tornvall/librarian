@@ -741,7 +741,7 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
     })),
     shipped_note_ids: rows.map((row) => row.note_id),
     indexed_through: ts,
-    config_snapshot: DEFAULT_SCORING_CONFIG,
+    config_snapshot: scoringConfigSnapshot(DEFAULT_SCORING_CONFIG),
   };
   writeInjectionTrace(options.diagnosticsDir, trace);
 }

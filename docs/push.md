@@ -72,7 +72,7 @@ Injection: 01KX3ASD9AGC19J1YDNJ799C9Y
 Path: push
 Query: Librarian recall diagnostics traces and the note log
 Indexed Through: 2026-07-09T11:39:11.529Z
-Config: {"originWeights":{"human":1.5,"opencode":1,"email":0.6},"typeWeights":{"curated":1.4,"decision":1.2,"project_summary":1,"fact":0.9,"daily":0.7,"episode":0.7},"relevanceFloor":0.1,"recencyHalfLifeDays":90,"projectBoost":1.5}
+Config: {"originWeights":{"human":1.5,"opencode":1,"email":0.6},"typeWeights":{"curated":1.4,"decision":1.2,"project_summary":1,"fact":0.9,"daily":0.7,"episode":0.7},"relevanceFloor":0.1,"recencyHalfLifeDays":{"default":90,"decision":"Infinity","curated":"Infinity","daily":90,"episode":90},"projectBoost":1.5}
 Candidates:
 - decision:01KX3AQ42YSJ5CDWKADNEB816C: raw=9.4633 -> post=11.3558 shipped
 ```

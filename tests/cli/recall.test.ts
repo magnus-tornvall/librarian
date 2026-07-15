@@ -106,6 +106,7 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
   const cappedTrace = readTraces(diagnosticsDir).find((trace) => trace.query === 'platypus');
   assert.ok(cappedTrace, 'capped recall should write a trace');
   assert.equal(cappedTrace.shipped_note_ids.length, 10);
+  assert.equal((cappedTrace.config_snapshot as { recencyHalfLifeDays: Record<string, unknown> }).recencyHalfLifeDays.decision, 'Infinity');
   assert.ok(
     cappedTrace.candidates.filter((candidate) => candidate.cut_reason === 'budget').length >= 2,
     'trace should include candidates cut by the pull-path result budget',
