@@ -118,7 +118,7 @@ test('why-not ranks active notes exactly as recall does when a superseded row sc
   assert.equal(result.gate, 'shipped');
 });
 
-test('recall preserves a year-old decision while an episode keeps the 90-day decay', () => {
+test('recall preserves a year-old decision while TTL excludes an old episode', () => {
   const db = new Database(':memory:');
   migrate(db);
   const insert = db.prepare(
@@ -138,7 +138,26 @@ test('recall preserves a year-old decision while an episode keeps the 90-day dec
   assert.ok(decision.matched && episode.matched);
   assert.equal(decision.post_weight_score, decision.raw_score * 1.5 * 1.2);
   assert.equal(episode.post_weight_score, episode.raw_score * 1.5 * 0.7 * Math.exp(-365 / 90));
-  assert.equal(episode.gate, 'below_floor');
+  assert.equal(episode.gate, 'ttl_expired');
+});
+
+test('recall traces and why-not identify an expired episode without removing it', () => {
+  const db = new Database(':memory:');
+  migrate(db);
+  const insert = db.prepare(
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  insert.run('expired-episode', 'r', 'opencode', 'episode', '2026-03-07T00:00:00.000Z', 'alpha', 0, 'walrus migration');
+  for (let i = 0; i < 5; i += 1) {
+    insert.run(`decoy-${i}`, `r-${i}`, 'opencode', 'fact', NOW, 'alpha', 0, `unrelated filler ${i}`);
+  }
+
+  const recalled = recallWithTrace(db, 'walrus', { projectSlug: 'alpha' }, undefined, NOW);
+  assert.deepEqual(recalled.results, []);
+  assert.equal(recalled.candidates.find((row) => row.note_id === 'expired-episode')?.cut_reason, 'ttl_expired');
+  const result = whyNot(db, 'walrus', 'expired-episode', { projectSlug: 'alpha' }, undefined, NOW);
+  assert.ok(result.matched);
+  assert.equal(result.gate, 'ttl_expired');
 });
 
 // --- Scope enforcement (§6 "require project match or explicit global scope") ---

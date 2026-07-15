@@ -7,7 +7,7 @@ export const PERPETUAL_CANDIDATE_MIN_APPEARANCES = 3;
 const DECISIONS: DistillVerdict['decision'][] = [
   'distilled', 'duplicate', 'skipped', 'noop', 'quarantined', 'rejected',
 ];
-const CUT_REASONS = ['below_floor', 'budget', 'scope_mismatch', 'superseded', 'unknown'] as const;
+const CUT_REASONS = ['below_floor', 'budget', 'scope_mismatch', 'superseded', 'ttl_expired', 'unknown'] as const;
 
 type CountRate = { count: number; rate: number };
 type Breakdown = { total: number; decisions: Record<DistillVerdict['decision'], CountRate> };

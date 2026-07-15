@@ -1,0 +1,15 @@
+{
+  "name": "TTL retains a 20-day daily and excludes a 40-day daily",
+  "query": "orchard standup",
+  "opts": { "projectSlug": "alpha" },
+  "now": "2026-07-06T12:00:00.000Z",
+  "notes": [
+    { "note_id": "daily:recent-orchard", "note_type": "daily", "origin": "opencode", "created_at": "2026-06-16T12:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Recent orchard standup", "body": { "summary": "The orchard standup tracked current work." } },
+    { "note_id": "daily:old-orchard", "note_type": "daily", "origin": "opencode", "created_at": "2026-05-27T12:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Old orchard standup", "body": { "summary": "The orchard standup tracked old work." } },
+    { "note_id": "fact:decoy-one", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Decoy one", "body": { "summary": "Unrelated filler one." } },
+    { "note_id": "fact:decoy-two", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Decoy two", "body": { "summary": "Unrelated filler two." } },
+    { "note_id": "fact:decoy-three", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Decoy three", "body": { "summary": "Unrelated filler three." } }
+  ],
+  "expect": { "include": ["daily:recent-orchard"], "exclude": ["daily:old-orchard"] },
+  "reason": "Daily notes remain eligible through 30 days, then stop surfacing without changing the log."
+}

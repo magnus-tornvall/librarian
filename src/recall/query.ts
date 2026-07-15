@@ -20,7 +20,7 @@ export type RecallOptions = { projectSlug?: string; global?: boolean; origin?: s
 
 export type RecallTraceCandidate = ScoredCandidate & {
   score: number;
-  cut_reason?: 'below_floor' | 'budget' | 'superseded';
+  cut_reason?: 'below_floor' | 'budget' | 'superseded' | 'ttl_expired';
 };
 
 export type WhyNotResult =
@@ -30,7 +30,7 @@ export type WhyNotResult =
       rank: number;
       raw_score: number;
       post_weight_score: number;
-      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'not_yet_valid';
+      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'not_yet_valid' | 'ttl_expired';
       superseded_by?: string;
     }
   | { matched: false; note_id: string; gate: 'not_matched_by_bm25' };
@@ -50,6 +50,18 @@ function plainTextFtsQuery(query: string): string | undefined {
     return undefined;
   }
   return terms.map(ftsTerm).join(' AND ');
+}
+
+export function expiryReferenceTimestamp(candidate: Pick<ScoredCandidate, 'created_at'>): string {
+  return candidate.created_at;
+}
+
+function isTtlExpired(candidate: Pick<ScoredCandidate, 'note_type' | 'created_at'>, config: ScoringConfig, nowIso: string): boolean {
+  const ttlDays = config.ttlDays[candidate.note_type] ?? Infinity;
+  // Inclusive of the expiry instant (>=): a note is expired exactly at reference + ttlDays.
+  // This is deliberately tighter than the invalid_at open-interval check (strict >), since TTL
+  // is a shelf-life cutoff, not an open validity window.
+  return Date.parse(nowIso) >= Date.parse(expiryReferenceTimestamp(candidate)) + ttlDays * 24 * 60 * 60 * 1000;
 }
 
 export function recall(
@@ -126,7 +138,11 @@ export function recallWithTrace(
   const scored = candidates
     .map(({ valid_at, invalid_at, ...candidate }) => ({ ...candidate, valid_at, invalid_at, score: weightedCandidateScore(candidate, config, nowIso) }))
     .sort((a, b) => b.score - a.score);
-  const active = scored.filter((candidate) => candidate.valid_at <= nowIso && (candidate.invalid_at === null || candidate.invalid_at > nowIso));
+  const active = scored.filter((candidate) =>
+    candidate.valid_at <= nowIso &&
+    (candidate.invalid_at === null || candidate.invalid_at > nowIso) &&
+    !isTtlExpired(candidate, config, nowIso),
+  );
   const aboveFloor = active.filter((candidate) => candidate.score >= config.relevanceFloor && candidate.score > 0);
   const shipped = aboveFloor.slice(0, limit);
   const shippedIds = new Set(shipped.map((candidate) => candidate.note_id));
@@ -135,6 +151,9 @@ export function recallWithTrace(
     const { valid_at: _validAt, invalid_at: _invalidAt, ...traceCandidate } = candidate;
     if (candidate.invalid_at !== null && candidate.invalid_at <= nowIso) {
       return { ...traceCandidate, cut_reason: 'superseded' };
+    }
+    if (isTtlExpired(candidate, config, nowIso)) {
+      return { ...traceCandidate, cut_reason: 'ttl_expired' };
     }
     if (shippedIds.has(candidate.note_id)) {
       return traceCandidate;
@@ -196,13 +215,19 @@ export function whyNot(
     throw new Error(`internal error: matched note disappeared from scoring: ${noteId}`);
   }
 
-  const active = scored.filter((row) => row.valid_at <= nowIso && (row.invalid_at === null || row.invalid_at > nowIso));
+  const active = scored.filter((row) =>
+    row.valid_at <= nowIso &&
+    (row.invalid_at === null || row.invalid_at > nowIso) &&
+    !isTtlExpired(row, config, nowIso),
+  );
   const rank = active.findIndex((row) => row.note_id === noteId) + 1;
-  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'not_yet_valid';
+  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'not_yet_valid' | 'ttl_expired';
   if (target.invalid_at !== null && target.invalid_at <= nowIso) {
     gate = 'superseded';
   } else if (target.valid_at !== null && target.valid_at > nowIso) {
     gate = 'not_yet_valid';
+  } else if (isTtlExpired(target, config, nowIso)) {
+    gate = 'ttl_expired';
   } else if (!inScope(target, opts)) {
     gate = 'scope_mismatch';
   } else if (scoredTarget.score < config.relevanceFloor || scoredTarget.score <= 0) {

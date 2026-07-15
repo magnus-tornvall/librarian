@@ -151,6 +151,39 @@ test('why-not reports the undamped score for a year-old decision', () => {
   assert.match(result.stdout, /Gate: shipped/);
 });
 
+test('expired episodes remain in the note log while recall, why-not, and trace replay name ttl_expired', () => {
+  const t = tempRoot();
+  const expiredAt = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString();
+  appendNote(t.dataDir, note(1, {
+    note_id: 'episode:expired-walrus',
+    note_type: 'episode',
+    created_at: expiredAt,
+    body: { summary: 'The walrus TTL migration episode.' },
+  }));
+  for (let i = 0; i < 6; i += 1) {
+    appendNote(t.dataDir, note(10 + i, { body: { summary: `Unrelated filler ${i}.` } }));
+  }
+
+  const recall = runCli(['recall', 'walrus ttl', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir]);
+  assert.equal(recall.status, 0, `recall should exit 0; stderr: ${recall.stderr}`);
+  assert.doesNotMatch(recall.stdout, /episode:expired-walrus/);
+  const trace = readTraces(t.diagnosticsDir).find((entry) => entry.query === 'walrus ttl');
+  assert.ok(trace);
+  assert.equal(trace.candidates.find((candidate) => candidate.note_id === 'episode:expired-walrus')?.cut_reason, 'ttl_expired');
+
+  const whyNot = runCli(['why-not', 'walrus ttl', 'episode:expired-walrus', '--project', 'alpha', '--data-dir', t.dataDir]);
+  assert.equal(whyNot.status, 0, `why-not should exit 0; stderr: ${whyNot.stderr}`);
+  assert.match(whyNot.stdout, /Gate: ttl_expired/);
+
+  const why = runCli(['why', trace.injection_id, '--diagnostics-dir', t.diagnosticsDir]);
+  assert.equal(why.status, 0, `why should exit 0; stderr: ${why.stderr}`);
+  assert.match(why.stdout, /episode:expired-walrus: raw=.*cut=ttl_expired/);
+
+  const show = runCli(['note', 'show', 'episode:expired-walrus', '--data-dir', t.dataDir]);
+  assert.equal(show.status, 0, `note show should exit 0; stderr: ${show.stderr}`);
+  assert.match(show.stdout, /episode:expired-walrus/);
+});
+
 test('why-not budget gate matches the pull-path limit of 10, not the scoring cap of 5', () => {
   const t = tempRoot();
   // 8 notes all clear the floor for "narwhal"; ranks 6-8 are cut by the scoring RESULT_CAP (5)
