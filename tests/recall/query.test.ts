@@ -82,6 +82,42 @@ test('recallWithTrace records below-floor candidates with their pre-floor weight
   assert.ok(candidate.score > 0, 'trace score should be the pre-floor weighted score, not the floored zero');
 });
 
+test('recall excludes a future-valid note and why-not names its unopened interval', () => {
+  const db = new Database(':memory:');
+  migrate(db);
+  const insert = db.prepare(
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, valid_at, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  insert.run('future-note', 'r', 'human', 'curated', '2026-07-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z', '', 1, 'narwhal launch plan');
+  for (let i = 0; i < 5; i += 1) {
+    insert.run(`decoy-${i}`, 'r', 'human', 'fact', NOW, NOW, '', 1, `unrelated filler ${i}`);
+  }
+
+  assert.deepEqual(recall(db, 'narwhal', { global: true }, undefined, NOW), []);
+  const result = whyNot(db, 'narwhal', 'future-note', { global: true }, undefined, NOW);
+  assert.ok(result.matched);
+  assert.equal(result.gate, 'not_yet_valid');
+});
+
+test('why-not ranks active notes exactly as recall does when a superseded row scores first', () => {
+  const db = new Database(':memory:');
+  migrate(db);
+  const insert = db.prepare(
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, valid_at, invalid_at, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  insert.run('superseded', 'r', 'human', 'curated', NOW, NOW, '2026-07-04T00:00:00.000Z', '', 1, 'platypus routing');
+  insert.run('active', 'r', 'opencode', 'fact', NOW, NOW, null, '', 1, 'platypus routing');
+  for (let i = 0; i < 10; i += 1) {
+    insert.run(`decoy-${i}`, 'r', 'human', 'fact', NOW, NOW, null, '', 1, `unrelated filler ${i}`);
+  }
+
+  assert.deepEqual(recall(db, 'platypus', { global: true, limit: 1 }, undefined, NOW).map((row) => row.note_id), ['active']);
+  const result = whyNot(db, 'platypus', 'active', { global: true, limit: 1 }, undefined, NOW);
+  assert.ok(result.matched);
+  assert.equal(result.rank, 1);
+  assert.equal(result.gate, 'shipped');
+});
+
 test('recall preserves a year-old decision while an episode keeps the 90-day decay', () => {
   const db = new Database(':memory:');
   migrate(db);

@@ -1,0 +1,10 @@
+{
+  "kind": "note_supersession",
+  "schema_version": 1,
+  "note_id": "fact:01J8X9F1TZ6R3M8N0P5Q7S9VWX",
+  "superseded_by": "fact:01J8X9F1TZ6R3M8N0P5Q7S9VWY",
+  "revision_id": "01J8X9F5Q3S5U7W9X1Y3Z5A7B9",
+  "created_at": "2026-07-06T09:00:00.000Z",
+  "reason": "new evidence replaces the stale fact",
+  "source": { "kind": "cli" }
+}

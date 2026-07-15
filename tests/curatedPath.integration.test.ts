@@ -17,10 +17,9 @@ import { indexNotes } from '../src/index/indexer.ts'; // tombstone-aware indexer
 import { recall } from '../src/recall/query.ts'; // recall query
 import { DEFAULT_SCORING_CONFIG } from '../src/recall/scoring.ts'; // §6 weights (human 1.5 × curated 1.4)
 
-// A fixed "now" so recency decay is deterministic across machines and runs. All
-// notes below are dated near this instant; ties on created_at cancel the decay
-// term so the §6 origin/note_type WEIGHTS — not recency luck — decide the order.
-const NOW = '2026-07-06T12:00:00.000Z';
+// Imported curated notes use the wall clock for created_at. Keep now just after it
+// so their default valid_at interval is open while relative scoring stays stable.
+const NOW = new Date(Date.now() + 60_000).toISOString();
 const VINTAGE = '2026-07-06T10:00:00.000Z';
 
 /** One fresh set of temp dirs per run so the test never touches ~/.librarian. */
@@ -120,13 +119,19 @@ test('curated path §2 human weight: curated (2.1) ranks strictly above an LLM e
   // separate them is the origin/note_type weight product.
   const sharedSummary = 'The numbat rollback numbat procedure numbat covers numbat staging.';
 
-  // LLM episodic note, seeded straight onto the note log (origin opencode, episode).
+  // Curated note with the SAME lexical payload, imported through the real human
+  // distiller so this is the genuine curated pipeline, not a hand-built row.
+  const curatedFile = writeCurated(t.vaultDir, 'numbat-runbook.md', `# Numbat rollback episode\n\n${sharedSummary}\n`);
+  const curated = importCuratedNote(t.vaultDir, curatedFile, t.dataDir);
+
+  // LLM episodic note, seeded straight onto the note log (origin opencode, episode)
+  // with the curated note's creation time so recency cannot decide the ranking.
   appendNote(t.dataDir, {
     kind: 'note_revision',
     schema_version: 1,
     note_id: 'episode:numbat-episode',
     revision_id: 'numbat-episode-rev',
-    created_at: VINTAGE,
+    created_at: curated.created_at,
     identity: { mode: 'episodic' },
     source: { origin: 'opencode', distiller: 'llm' },
     note_type: 'episode',
@@ -136,11 +141,6 @@ test('curated path §2 human weight: curated (2.1) ranks strictly above an LLM e
     links: [],
     body: { summary: sharedSummary },
   });
-
-  // Curated note with the SAME lexical payload, imported through the real human
-  // distiller so this is the genuine curated pipeline, not a hand-built row.
-  const curatedFile = writeCurated(t.vaultDir, 'numbat-runbook.md', `# Numbat rollback episode\n\n${sharedSummary}\n`);
-  const curated = importCuratedNote(t.vaultDir, curatedFile, t.dataDir);
 
   const db = freshIndex(t.dataDir, t.cursorPath);
   const results = recall(db, 'numbat', { global: true }, DEFAULT_SCORING_CONFIG, NOW);

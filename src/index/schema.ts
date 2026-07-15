@@ -11,7 +11,7 @@ export function migrate(db: Database.Database): void {
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
       note_id UNINDEXED, revision_id UNINDEXED, origin UNINDEXED,
-      note_type UNINDEXED, created_at UNINDEXED,
+      note_type UNINDEXED, created_at UNINDEXED, valid_at UNINDEXED, invalid_at UNINDEXED, superseded_by UNINDEXED,
       project_slug UNINDEXED, is_global UNINDEXED,
       search_text
     );

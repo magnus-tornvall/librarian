@@ -29,7 +29,7 @@ const FIXTURE_ROOT = path.join(import.meta.dirname, '..', '..', 'fixtures', 'rec
 const DEFAULT_NOW = '2026-07-06T12:00:00.000Z';
 
 type NoteSeed = {
-  kind?: 'note_revision' | 'note_tombstone';
+  kind?: 'note_revision' | 'note_tombstone' | 'note_supersession';
   note_id: string;
   revision_id?: string;
   previous_revision_id?: string;
@@ -39,6 +39,8 @@ type NoteSeed = {
   scope?: { project_slug?: string; global?: boolean };
   title?: string;
   body?: { summary?: string; bullets?: string[]; details?: string };
+  superseded_by?: string;
+  reason?: string;
 };
 
 type Fixture = {
@@ -91,6 +93,14 @@ function materializeNote(seed: NoteSeed): Record<string, unknown> {
       previous_revision_id: seed.previous_revision_id,
       created_at: seed.created_at,
       source: { kind: 'human' },
+    };
+  }
+  if (seed.kind === 'note_supersession') {
+    assert.ok(seed.superseded_by, `fixture note ${seed.note_id}: a note_supersession seed must set superseded_by`);
+    return {
+      kind: 'note_supersession', schema_version: 1, note_id: seed.note_id, superseded_by: seed.superseded_by,
+      revision_id: seed.revision_id ?? `${seed.note_id}::supersession`, created_at: seed.created_at,
+      reason: seed.reason, source: { kind: 'cli' },
     };
   }
 

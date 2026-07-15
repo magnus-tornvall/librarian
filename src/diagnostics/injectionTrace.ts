@@ -31,7 +31,7 @@ export type InjectionTrace = {
     note_id: string;
     raw_score: number;
     post_weight_score: number;
-    cut_reason?: 'below_floor' | 'budget' | 'scope_mismatch';
+    cut_reason?: 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded';
   }>;
   shipped_note_ids: string[];
   indexed_through: string;
