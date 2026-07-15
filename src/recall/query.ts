@@ -58,6 +58,9 @@ export function expiryReferenceTimestamp(candidate: Pick<ScoredCandidate, 'creat
 
 function isTtlExpired(candidate: Pick<ScoredCandidate, 'note_type' | 'created_at'>, config: ScoringConfig, nowIso: string): boolean {
   const ttlDays = config.ttlDays[candidate.note_type] ?? Infinity;
+  // Inclusive of the expiry instant (>=): a note is expired exactly at reference + ttlDays.
+  // This is deliberately tighter than the invalid_at open-interval check (strict >), since TTL
+  // is a shelf-life cutoff, not an open validity window.
   return Date.parse(nowIso) >= Date.parse(expiryReferenceTimestamp(candidate)) + ttlDays * 24 * 60 * 60 * 1000;
 }
 
