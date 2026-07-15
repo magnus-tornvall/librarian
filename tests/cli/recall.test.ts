@@ -163,3 +163,49 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
     'recall CLI must write a diagnostics trace marked as pull',
   );
 });
+
+test('supersede appends an annotation, excludes only the stale fact, and why-not names the gate', () => {
+  const root = tempDir('cli-supersede-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const oldNote = note(50, {
+    note_id: 'fact:stale-mackerel', revision_id: 'stale-rev', title: 'Old mackerel fact',
+    body: { summary: 'Mackerel uses the obsolete harbor protocol.' },
+  });
+  const newNote = note(51, {
+    note_id: 'fact:fresh-mackerel', revision_id: 'fresh-rev', title: 'Fresh mackerel fact',
+    body: { summary: 'Mackerel uses the current harbor protocol.' },
+  });
+  appendNote(dataDir, oldNote);
+  appendNote(dataDir, newNote);
+  for (let i = 0; i < 4; i += 1) appendNote(dataDir, note(60 + i, { body: { summary: `Unrelated decoy ${i}.` } }));
+
+  const logPath = path.join(dataDir, 'notes', `${new Date().toISOString().slice(0, 7)}.ndjson`);
+  const beforeLength = fs.statSync(logPath).size;
+  const superseded = runCli(['supersede', oldNote.note_id, newNote.note_id, '--reason', 'corrected', '--data-dir', dataDir]);
+  assert.equal(superseded.status, 0, `supersede should exit 0; stderr: ${superseded.stderr}`);
+  const annotation = JSON.parse(superseded.stdout) as Record<string, unknown>;
+  assert.equal(annotation.kind, 'note_supersession');
+  assert.equal(annotation.superseded_by, newNote.note_id);
+  assert.ok(fs.statSync(logPath).size > beforeLength, 'supersede must append without mutating the prior log bytes');
+
+  const recalled = runCli(['recall', 'mackerel', '--project', 'alpha', '--json', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir]);
+  assert.equal(recalled.status, 0, `recall should exit 0; stderr: ${recalled.stderr}`);
+  const ids = (JSON.parse(recalled.stdout) as Array<{ note_id: string }>).map((result) => result.note_id);
+  assert.ok(ids.includes(newNote.note_id));
+  assert.ok(!ids.includes(oldNote.note_id));
+
+  const whyNot = runCli(['why-not', 'mackerel', oldNote.note_id, '--project', 'alpha', '--data-dir', dataDir]);
+  assert.equal(whyNot.status, 0, `why-not should exit 0; stderr: ${whyNot.stderr}`);
+  assert.match(whyNot.stdout, /Gate: superseded/);
+
+  const shown = runCli(['note', 'show', oldNote.note_id, '--json', '--data-dir', dataDir]);
+  assert.equal(shown.status, 0, `note show should retain the revision; stderr: ${shown.stderr}`);
+  assert.equal((JSON.parse(shown.stdout) as { note: NoteRevision }).note.revision_id, oldNote.revision_id);
+
+  const beforeUnknown = fs.statSync(logPath).size;
+  const unknown = runCli(['supersede', 'fact:missing', newNote.note_id, '--data-dir', dataDir]);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /unknown note_id: fact:missing/);
+  assert.equal(fs.statSync(logPath).size, beforeUnknown, 'unknown IDs must not append a record');
+});

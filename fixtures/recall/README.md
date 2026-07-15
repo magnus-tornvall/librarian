@@ -62,7 +62,7 @@ recall are required; the runner stamps mechanical defaults (`schema_version`, `r
   "title":      "Alpha auth decision",     // required: indexed into search_text
   "body":       { "summary": "...", "bullets": ["..."], "details": "..." }, // required: summary; bullets/details optional
   "revision_id": "optional-explicit-id",   // optional; defaults to a deterministic id from note_id
-  "kind":       "note_revision"            // optional; set "note_tombstone" to seed a tombstone
+   "kind":       "note_revision"            // optional; set "note_tombstone" to seed a tombstone
                                            //   (then previous_revision_id is required)
 }
 ```
@@ -76,6 +76,16 @@ To seed a **tombstone** (e.g. to prove a retired note is gone from recall), use:
 
 Notes are seeded in array order, so a later-appended record wins a `created_at` tie exactly
 as it would in production (latest-revision-wins is order-symmetric — see the indexer).
+
+To seed a **supersession**, append it after both revisions:
+
+```jsonc
+{ "kind": "note_supersession", "note_id": "decision:old", "superseded_by": "decision:new",
+  "created_at": "2026-07-06T11:00:00.000Z" }
+```
+
+It is an annotation, not a latest-record competitor: the old revision stays indexed and is
+excluded at recall time once its interval has closed.
 
 ## Corpus / BM25 note
 

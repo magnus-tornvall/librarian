@@ -8,6 +8,7 @@ import { migrate } from '../../src/index/schema.ts';
 import { indexNotes } from '../../src/index/indexer.ts';
 import { recall } from '../../src/recall/query.ts';
 import { appendNote } from '../../src/log/noteLog.ts';
+import { runExport } from '../../src/export/exportRun.ts';
 
 function tempDataDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'indexer-test-'));
@@ -216,4 +217,41 @@ test('a revision newer than a tombstone re-indexes the note (latest-wins is symm
   const recalled = recall(db, TOMBSTONE_TERM, { projectSlug: 'librarian' }, undefined, '2026-07-05T13:00:00.000Z');
   assert.equal(recalled.length, 1);
   assert.equal(recalled[0].note_id, TOMBSTONABLE_NOTE.note_id);
+});
+
+test('a supersession retains the revision in the index with its interval closed', () => {
+  const dataDir = tempDataDir();
+  appendNote(dataDir, TOMBSTONABLE_NOTE);
+  appendNote(dataDir, {
+    kind: 'note_supersession', schema_version: 1, note_id: TOMBSTONABLE_NOTE.note_id,
+    superseded_by: 'curated:replacement', revision_id: 'supersession-rev',
+    created_at: '2026-07-05T11:00:00.000Z', source: { kind: 'cli' },
+  });
+  const db = new Database(':memory:');
+  migrate(db);
+  indexNotes(db, dataDir);
+
+  const row = db.prepare('SELECT revision_id, invalid_at FROM notes_fts WHERE note_id = ?').get(TOMBSTONABLE_NOTE.note_id) as {
+    revision_id: string; invalid_at: string;
+  };
+  assert.equal(row.revision_id, TOMBSTONABLE_NOTE.revision_id, 'annotation must not displace the revision');
+  assert.equal(row.invalid_at, '2026-07-05T11:00:00.000Z');
+  assert.deepEqual(recall(db, TOMBSTONE_TERM, { projectSlug: 'librarian' }, undefined, NOW), []);
+});
+
+test('a supersession does not create or remove a vault file', () => {
+  const dataDir = tempDataDir();
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'supersession-vault-'));
+  appendNote(dataDir, TOMBSTONABLE_NOTE);
+  assert.equal(runExport({ dataDir, vaultDir }).exported, 1);
+  const generated = path.join(vaultDir, 'generated', 'curated', 'curated-01J8X9F1TZ6R3M8N0P5Q7S9TOMB.md');
+  const before = fs.readFileSync(generated, 'utf8');
+
+  appendNote(dataDir, {
+    kind: 'note_supersession', schema_version: 1, note_id: TOMBSTONABLE_NOTE.note_id,
+    superseded_by: 'curated:replacement', revision_id: 'supersession-rev',
+    created_at: '2026-07-05T11:00:00.000Z', source: { kind: 'cli' },
+  });
+  assert.deepEqual(runExport({ dataDir, vaultDir }), { exported: 0, removed: 0 });
+  assert.equal(fs.readFileSync(generated, 'utf8'), before);
 });

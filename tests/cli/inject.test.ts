@@ -126,8 +126,7 @@ test('inject CLI enforces push cap and budget, records budget cuts, and fail-clo
   assert.ok(readTraces(floorRoot.diagnosticsDir).some((trace) => trace.candidates.some((candidate) => candidate.cut_reason === 'below_floor')));
 });
 
-// #82 graduates this by removing `todo` once it excludes contradicted facts within a push block.
-test('inject excludes a stale fact contradicted by a newer fact', { todo: true }, () => {
+test('inject excludes a stale fact with an explicit supersession record', () => {
   const t = tempRoot();
   const newerCreatedAt = new Date();
   const olderCreatedAt = new Date(newerCreatedAt);
@@ -146,6 +145,11 @@ test('inject excludes a stale fact contradicted by a newer fact', { todo: true }
     title: 'Staging API base URL updated',
     body: { summary: 'The staging API base URL is https://staging-new.example.test, replacing the previous URL.' },
   }));
+  appendNote(t.dataDir, {
+    kind: 'note_supersession', schema_version: 1, note_id: 'fact:staging-api-url-old',
+    superseded_by: 'fact:staging-api-url-new', revision_id: 'supersession-rev',
+    created_at: newerCreatedAt.toISOString(), source: { kind: 'cli' },
+  });
   for (let i = 0; i < 5; i += 1) {
     appendNote(t.dataDir, note(20 + i, { body: { summary: `Unrelated filler ${i}.` } }));
   }

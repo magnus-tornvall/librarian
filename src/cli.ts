@@ -18,7 +18,7 @@ import { runDistill } from './distill/distillRun.ts';
 import { runExport } from './export/exportRun.ts';
 import { readAll } from './log/ndjson.ts';
 import { appendNote, readAllNotes } from './log/noteLog.ts';
-import { latestRecordPerNoteId, type NoteRecord, type NoteRevision, type NoteTombstone } from './note.ts';
+import { latestRecordPerNoteId, type NoteRecord, type NoteRevision, type NoteStateRecord, type NoteSupersession, type NoteTombstone } from './note.ts';
 import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
 import { DEFAULT_SCORING_CONFIG, scoringConfigSnapshot } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
@@ -50,7 +50,9 @@ const USAGE = `usage:
   librarian note import-curated <file> --vault <dir> [--data-dir <dir>]
                                               import a curated Markdown note
   librarian note tombstone <note_id> [--data-dir <dir>] [--reason <text>]
-                                              tombstone the latest note revision
+                                               tombstone the latest note revision
+  librarian supersede <old_note_id> <new_note_id> [--data-dir <dir>] [--reason <text>]
+                                               append an annotation invalidating an old note for recall
   librarian mcp [--data-dir <dir>] [--diagnostics-dir <dir>]
                                            start the MCP stdio server
   librarian machine-id [--path <file>]     print the persisted machine id
@@ -151,6 +153,23 @@ function noteTombstone(argv: string[]): void {
   process.stdout.write(JSON.stringify(tombstone) + '\n');
 }
 
+function supersede(argv: string[]): void {
+  const [oldNoteId, newNoteId, ...rest] = argv;
+  if (!oldNoteId || oldNoteId.startsWith('--') || !newNoteId || newNoteId.startsWith('--')) {
+    throw new Error('supersede requires <old_note_id> <new_note_id>');
+  }
+  const flags = parseFlags(rest);
+  const dataDir = flags.get('data-dir') ?? DATA_DIR;
+  if (!findLatestNote(dataDir, oldNoteId)) throw new Error(`unknown note_id: ${oldNoteId}`);
+  if (!findLatestNote(dataDir, newNoteId)) throw new Error(`unknown note_id: ${newNoteId}`);
+  const record: NoteSupersession = {
+    kind: 'note_supersession', schema_version: 1, note_id: oldNoteId, superseded_by: newNoteId,
+    revision_id: ulid(), created_at: new Date().toISOString(), reason: flags.get('reason'), source: { kind: 'cli' },
+  };
+  appendNote(dataDir, record);
+  process.stdout.write(JSON.stringify(record) + '\n');
+}
+
 export type RecallOptions = {
   query: string;
   projectSlug?: string;
@@ -176,7 +195,7 @@ export type RecallResult = {
 
 export type RecallPayload = { results: RecallResult[]; message?: string };
 
-export type NoteShowPayload = { note: NoteRecord; provenance_events: Array<Record<string, unknown>> | null };
+export type NoteShowPayload = { note: NoteStateRecord; provenance_events: Array<Record<string, unknown>> | null };
 
 type WhyOptions = { injectionId: string; json: boolean; diagnosticsDir: string };
 type WhyNotOptions = { query: string; noteId: string; projectSlug?: string; global: boolean; dataDir: string };
@@ -365,7 +384,7 @@ function parseWhyNotArgs(argv: string[]): WhyNotOptions {
   return options;
 }
 
-export function findLatestNote(dataDir: string, noteId: string): NoteRecord | undefined {
+export function findLatestNote(dataDir: string, noteId: string): NoteStateRecord | undefined {
   const latest = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[]);
   return latest.find((note) => note.note_id === noteId);
 }
@@ -889,6 +908,9 @@ async function main(argv: string[]): Promise<void> {
       break;
     case 'stats':
       statsCommand(rest);
+      break;
+    case 'supersede':
+      supersede(rest);
       break;
     case 'inject':
       injectCommand(parseInjectArgs(rest));

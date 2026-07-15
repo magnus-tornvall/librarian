@@ -8,6 +8,7 @@ type FtsRow = {
   origin: string;
   note_type: string;
   created_at: string;
+  invalid_at: string | null;
   project_slug: string;
   is_global: number;
   raw_score: number;
@@ -17,7 +18,7 @@ export type RecallOptions = { projectSlug?: string; global?: boolean; origin?: s
 
 export type RecallTraceCandidate = ScoredCandidate & {
   score: number;
-  cut_reason?: 'below_floor' | 'budget';
+  cut_reason?: 'below_floor' | 'budget' | 'superseded';
 };
 
 export type WhyNotResult =
@@ -27,7 +28,7 @@ export type WhyNotResult =
       rank: number;
       raw_score: number;
       post_weight_score: number;
-      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch';
+      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded';
     }
   | { matched: false; note_id: string; gate: 'not_matched_by_bm25' };
 
@@ -97,13 +98,13 @@ export function recallWithTrace(
 
   const rows = db
     .prepare(
-      `SELECT note_id, origin, note_type, created_at, project_slug, is_global, bm25(notes_fts) as raw_score
+      `SELECT note_id, origin, note_type, created_at, invalid_at, project_slug, is_global, bm25(notes_fts) as raw_score
        FROM notes_fts
        WHERE notes_fts MATCH ? AND ${filterClauses.join(' AND ')}`,
     )
     .all(...params) as FtsRow[];
 
-  const candidates: ScoredCandidate[] = rows.map((row) => ({
+  const candidates = rows.map((row) => ({
     note_id: row.note_id,
     // FTS5's bm25() is lower-is-better; negate so scoreCandidate's higher-is-better math holds.
     raw_bm25: -row.raw_score,
@@ -114,24 +115,30 @@ export function recallWithTrace(
     // boost; a global-scope-only hit does not. Scope now lives in the index, so this
     // is a real signal rather than the old hard-coded false.
     is_project_match: opts.projectSlug !== undefined && row.project_slug === opts.projectSlug,
+    invalid_at: row.invalid_at,
   }));
 
   const limit = opts.limit ?? RESULT_CAP;
   const scored = candidates
-    .map((candidate) => ({ ...candidate, score: weightedCandidateScore(candidate, config, nowIso) }))
+    .map(({ invalid_at, ...candidate }) => ({ ...candidate, invalid_at, score: weightedCandidateScore(candidate, config, nowIso) }))
     .sort((a, b) => b.score - a.score);
-  const aboveFloor = scored.filter((candidate) => candidate.score >= config.relevanceFloor && candidate.score > 0);
+  const active = scored.filter((candidate) => candidate.invalid_at === null || candidate.invalid_at > nowIso);
+  const aboveFloor = active.filter((candidate) => candidate.score >= config.relevanceFloor && candidate.score > 0);
   const shipped = aboveFloor.slice(0, limit);
   const shippedIds = new Set(shipped.map((candidate) => candidate.note_id));
   const budgetCutIds = new Set(aboveFloor.slice(limit).map((candidate) => candidate.note_id));
   const traceCandidates: RecallTraceCandidate[] = scored.map((candidate) => {
+    const { invalid_at: _invalidAt, ...traceCandidate } = candidate;
+    if (candidate.invalid_at !== null && candidate.invalid_at <= nowIso) {
+      return { ...traceCandidate, cut_reason: 'superseded' };
+    }
     if (shippedIds.has(candidate.note_id)) {
-      return candidate;
+      return traceCandidate;
     }
     if (budgetCutIds.has(candidate.note_id)) {
-      return { ...candidate, cut_reason: 'budget' };
+      return { ...traceCandidate, cut_reason: 'budget' };
     }
-    return { ...candidate, cut_reason: 'below_floor' };
+    return { ...traceCandidate, cut_reason: 'below_floor' };
   });
 
   return { results: shipped, candidates: traceCandidates };
@@ -156,7 +163,7 @@ export function whyNot(
 
   const rows = db
     .prepare(
-      `SELECT note_id, origin, note_type, created_at, project_slug, is_global, bm25(notes_fts) as raw_score
+      `SELECT note_id, origin, note_type, created_at, invalid_at, project_slug, is_global, bm25(notes_fts) as raw_score
        FROM notes_fts
        WHERE notes_fts MATCH ?`,
     )
@@ -184,8 +191,10 @@ export function whyNot(
   }
 
   const rank = scored.findIndex((row) => row.note_id === noteId) + 1;
-  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch';
-  if (!inScope(target, opts)) {
+  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded';
+  if (target.invalid_at !== null && target.invalid_at <= nowIso) {
+    gate = 'superseded';
+  } else if (!inScope(target, opts)) {
     gate = 'scope_mismatch';
   } else if (scoredTarget.score < config.relevanceFloor || scoredTarget.score <= 0) {
     gate = 'below_floor';

@@ -11,6 +11,8 @@ export type NoteRevision = {
   revision_id: string;
   previous_revision_id?: string;
   created_at: string;
+  valid_at?: string;
+  invalid_at?: string;
   identity: { mode: 'deterministic' | 'episodic'; key?: string };
   source: {
     origin: string;
@@ -47,11 +49,24 @@ export type NoteTombstone = {
   source: { kind: 'human' | 'cli' };
 };
 
-export type NoteRecord = NoteRevision | NoteTombstone;
+export type NoteSupersession = {
+  kind: 'note_supersession';
+  schema_version: 1;
+  note_id: string;
+  superseded_by: string;
+  revision_id: string;
+  created_at: string;
+  reason?: string;
+  source: { kind: 'human' | 'cli' };
+};
 
-export function latestRecordPerNoteId(records: NoteRecord[]): NoteRecord[] {
-  const latest = new Map<string, NoteRecord>();
+export type NoteRecord = NoteRevision | NoteTombstone | NoteSupersession;
+export type NoteStateRecord = NoteRevision | NoteTombstone;
+
+export function latestRecordPerNoteId(records: NoteRecord[]): NoteStateRecord[] {
+  const latest = new Map<string, NoteStateRecord>();
   for (const record of records) {
+    if (record.kind === 'note_supersession') continue;
     const existing = latest.get(record.note_id);
     // Tombstones and revisions compete as peers on created_at; latest-wins is symmetric, so a
     // tombstone can retire a note and a newer revision can revive it. <=, not <: on a created_at

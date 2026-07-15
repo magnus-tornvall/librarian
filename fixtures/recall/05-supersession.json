@@ -1,0 +1,16 @@
+{
+  "name": "supersession excludes stale fact but retains replacement",
+  "query": "harbor",
+  "opts": { "projectSlug": "alpha" },
+  "now": "2026-07-06T12:00:00.000Z",
+  "notes": [
+    { "note_id": "fact:old-harbor", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T09:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Old harbor", "body": { "summary": "The harbor uses the old protocol." } },
+    { "note_id": "fact:new-harbor", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "New harbor", "body": { "summary": "The harbor uses the new protocol." } },
+    { "note_id": "fact:old-harbor", "kind": "note_supersession", "superseded_by": "fact:new-harbor", "created_at": "2026-07-06T11:00:00.000Z" },
+    { "note_id": "fact:decoy-one", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Decoy one", "body": { "summary": "Unrelated filler one." } },
+    { "note_id": "fact:decoy-two", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Decoy two", "body": { "summary": "Unrelated filler two." } },
+    { "note_id": "fact:decoy-three", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Decoy three", "body": { "summary": "Unrelated filler three." } }
+  ],
+  "expect": { "include": ["fact:new-harbor"], "exclude": ["fact:old-harbor"] },
+  "reason": "A supersession closes only the stale note's recall interval."
+}

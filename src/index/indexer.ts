@@ -24,8 +24,14 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath?: 
 
   const deleteStmt = db.prepare('DELETE FROM notes_fts WHERE note_id = ?');
   const insertStmt = db.prepare(
-    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, invalid_at, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
+  const supersededAt = new Map<string, string>();
+  for (const record of notes) {
+    if (record.kind !== 'note_supersession') continue;
+    const existing = supersededAt.get(record.note_id);
+    if (existing === undefined || record.created_at < existing) supersededAt.set(record.note_id, record.created_at);
+  }
 
   let indexedCount = 0;
   for (const note of latestRecordPerNoteId(notes)) {
@@ -56,12 +62,18 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath?: 
     const projectSlug = note.scope.project_slug ?? '';
     const isGlobal = note.scope.global === true ? 1 : 0;
 
+    const supersessionAt = supersededAt.get(note.note_id);
+    const invalidAt = supersessionAt && note.invalid_at
+      ? (supersessionAt <= note.invalid_at ? supersessionAt : note.invalid_at)
+      : supersessionAt ?? note.invalid_at ?? null;
+
     insertStmt.run(
       note.note_id,
       note.revision_id,
       note.source.origin,
       note.note_type,
       note.created_at,
+      invalidAt,
       projectSlug,
       isGlobal,
       searchText,
