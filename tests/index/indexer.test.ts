@@ -9,6 +9,7 @@ import { indexNotes } from '../../src/index/indexer.ts';
 import { recall } from '../../src/recall/query.ts';
 import { appendNote } from '../../src/log/noteLog.ts';
 import { runExport } from '../../src/export/exportRun.ts';
+import { validateEvent } from '../../src/collector/validateEvent.ts';
 
 function tempDataDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'indexer-test-'));
@@ -254,4 +255,38 @@ test('a supersession does not create or remove a vault file', () => {
   });
   assert.deepEqual(runExport({ dataDir, vaultDir }), { exported: 0, removed: 0 });
   assert.equal(fs.readFileSync(generated, 'utf8'), before);
+});
+
+test('a corroboration retains the revision, extends TTL from the note log, and leaves vault export untouched', () => {
+  const dataDir = tempDataDir();
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'corroboration-vault-'));
+  const note = {
+    ...TOMBSTONABLE_NOTE,
+    note_id: 'episode:corroborated', revision_id: 'episode-revision', note_type: 'episode',
+    created_at: '2026-03-01T00:00:00.000Z', title: 'Walrus migration', body: { summary: 'Walrus migration completed.' },
+  };
+  appendNote(dataDir, note);
+  assert.equal(runExport({ dataDir, vaultDir }).exported, 1);
+  appendNote(dataDir, {
+    kind: 'note_corroboration', schema_version: 1, note_id: note.note_id, revision_id: 'corroboration-revision',
+    created_at: '2026-07-10T00:00:00.000Z', corroborated_by: { session_id: 'session-123' }, source: { kind: 'novelty_gate' },
+  });
+  assert.throws(() => validateEvent({
+    kind: 'note_corroboration', schema_version: 1, note_id: note.note_id, revision_id: 'corroboration-revision',
+    created_at: '2026-07-10T00:00:00.000Z', corroborated_by: { session_id: 'session-123' }, source: { kind: 'novelty_gate' },
+  }), /type must be one of/, 'the collector must loudly reject note-log annotations');
+  assert.deepEqual(runExport({ dataDir, vaultDir }), { exported: 0, removed: 0 });
+  for (let i = 0; i < 5; i += 1) {
+    appendNote(dataDir, { ...note, note_id: `fact:decoy-${i}`, revision_id: `decoy-${i}`, note_type: 'fact', title: `Unrelated filler ${i}`, body: { summary: 'Unrelated filler.' } });
+  }
+  const db = new Database(':memory:');
+  migrate(db);
+  indexNotes(db, dataDir);
+  const row = db.prepare('SELECT revision_id, last_corroborated_at FROM notes_fts WHERE note_id = ?').get(note.note_id) as { revision_id: string; last_corroborated_at: string };
+  assert.deepEqual(row, { revision_id: 'episode-revision', last_corroborated_at: '2026-07-10T00:00:00.000Z' });
+  assert.deepEqual(recall(db, 'walrus', { projectSlug: 'librarian' }, undefined, '2026-07-15T00:00:00.000Z').map((result) => result.note_id), [note.note_id]);
+  const diagnosticsDir = path.join(dataDir, 'diagnostics');
+  fs.mkdirSync(diagnosticsDir);
+  fs.rmSync(diagnosticsDir, { recursive: true });
+  assert.deepEqual(recall(db, 'walrus', { projectSlug: 'librarian' }, undefined, '2026-07-15T00:00:00.000Z').map((result) => result.note_id), [note.note_id]);
 });

@@ -29,7 +29,7 @@ const FIXTURE_ROOT = path.join(import.meta.dirname, '..', '..', 'fixtures', 'rec
 const DEFAULT_NOW = '2026-07-06T12:00:00.000Z';
 
 type NoteSeed = {
-  kind?: 'note_revision' | 'note_tombstone' | 'note_supersession';
+  kind?: 'note_revision' | 'note_tombstone' | 'note_supersession' | 'note_corroboration';
   note_id: string;
   revision_id?: string;
   previous_revision_id?: string;
@@ -41,6 +41,7 @@ type NoteSeed = {
   body?: { summary?: string; bullets?: string[]; details?: string };
   superseded_by?: string;
   reason?: string;
+  corroborated_by?: { session_id: string; event_range?: { from_event_id: string; to_event_id: string } };
 };
 
 type Fixture = {
@@ -101,6 +102,14 @@ function materializeNote(seed: NoteSeed): Record<string, unknown> {
       kind: 'note_supersession', schema_version: 1, note_id: seed.note_id, superseded_by: seed.superseded_by,
       revision_id: seed.revision_id ?? `${seed.note_id}::supersession`, created_at: seed.created_at,
       reason: seed.reason, source: { kind: 'cli' },
+    };
+  }
+  if (seed.kind === 'note_corroboration') {
+    assert.ok(seed.corroborated_by, `fixture note ${seed.note_id}: a note_corroboration seed must set corroborated_by`);
+    return {
+      kind: 'note_corroboration', schema_version: 1, note_id: seed.note_id,
+      revision_id: seed.revision_id ?? `${seed.note_id}::corroboration`, created_at: seed.created_at,
+      corroborated_by: seed.corroborated_by, source: { kind: 'novelty_gate' },
     };
   }
 

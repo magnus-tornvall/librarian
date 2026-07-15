@@ -1,0 +1,14 @@
+{
+  "name": "a fresh corroboration keeps an otherwise expired episode recallable",
+  "query": "walrus migration",
+  "opts": { "projectSlug": "alpha" },
+  "now": "2026-07-15T00:00:00.000Z",
+  "notes": [
+    { "note_id": "episode:corroborated", "note_type": "episode", "origin": "opencode", "created_at": "2026-03-01T00:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Walrus migration", "body": { "summary": "Walrus migration completed." } },
+    { "kind": "note_corroboration", "note_id": "episode:corroborated", "created_at": "2026-07-10T00:00:00.000Z", "corroborated_by": { "session_id": "session-123" } },
+    { "note_id": "fact:decoy-1", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-14T00:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Other topic", "body": { "summary": "Unrelated filler one." } },
+    { "note_id": "fact:decoy-2", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-14T00:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Other topic", "body": { "summary": "Unrelated filler two." } }
+  ],
+  "expect": { "include": ["episode:corroborated"] },
+  "reason": "A note-log corroboration resets only the episode TTL clock."
+}

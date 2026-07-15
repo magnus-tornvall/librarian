@@ -93,6 +93,15 @@ test('inject CLI renders §6 block, writes matching push trace, and leaves note 
   assert.deepEqual(snapshotNotes(t.dataDir), beforeNotes, 'inject must not mutate the note log');
 });
 
+test('inject CLI stamps its session_id on the trace', () => {
+  const t = tempRoot();
+  appendNote(t.dataDir, note(1));
+  for (let i = 0; i < 8; i += 1) appendNote(t.dataDir, note(20 + i, { body: { summary: `Unrelated filler ${i}.` } }));
+  const result = runCli(['inject', '--project', 'alpha', '--session-id', 'session-123', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], 'wombat');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readTraces(t.diagnosticsDir)[0].session_id, 'session-123');
+});
+
 test('inject CLI enforces push cap and budget, records budget cuts, and fail-closes empty cases', () => {
   const t = tempRoot();
   const longSummary = `${'wombat '.repeat(20)}${'context '.repeat(25)}`;

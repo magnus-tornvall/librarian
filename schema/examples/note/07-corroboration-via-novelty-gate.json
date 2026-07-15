@@ -1,0 +1,15 @@
+{
+  "kind": "note_corroboration",
+  "schema_version": 1,
+  "note_id": "decision:01J8X7QK40M8Q3N6P0R5S7TVWX",
+  "revision_id": "01J9Y8RK51N9R4P7Q1S6T8VWXY",
+  "created_at": "2026-07-15T12:00:00.000Z",
+  "corroborated_by": {
+    "session_id": "01J9Y8RK51N9R4P7Q1S6T8VWXX",
+    "event_range": {
+      "from_event_id": "01J9Y8RK51N9R4P7Q1S6T8VWXA",
+      "to_event_id": "01J9Y8RK51N9R4P7Q1S6T8VWXB"
+    }
+  },
+  "source": { "kind": "novelty_gate" }
+}

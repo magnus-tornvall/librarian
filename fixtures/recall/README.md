@@ -91,6 +91,14 @@ To seed a **supersession**, append it after both revisions:
 It is an annotation, not a latest-record competitor: the old revision stays indexed and is
 excluded at recall time once its interval has closed.
 
+To seed a **corroboration**, append it after its revision. It extends the note's TTL without
+changing its revision or recall score:
+
+```jsonc
+{ "kind": "note_corroboration", "note_id": "episode:old", "created_at": "2026-07-06T11:00:00.000Z",
+  "corroborated_by": { "session_id": "session-123" } }
+```
+
 ## Corpus / BM25 note
 
 FTS5's `bm25()` IDF term collapses toward zero when a query term appears in a tiny corpus, so

@@ -32,13 +32,17 @@ for (const { file, data } of loadJsonFiles(NOTE_DIR)) {
   test(`note golden example: ${file}`, () => {
     const note = data as Record<string, unknown>;
     assert.equal(note.schema_version, 1);
-    assert.ok(['note_revision', 'note_tombstone', 'note_supersession'].includes(note.kind as string));
+    assert.ok(['note_revision', 'note_tombstone', 'note_supersession', 'note_corroboration'].includes(note.kind as string));
 
     if (note.kind === 'note_revision') {
       const source = note.source as Record<string, unknown>;
       assert.equal(typeof source.origin, 'string');
       assert.ok((source.origin as string).length > 0);
       assert.ok(['llm', 'human'].includes(source.distiller as string));
+    }
+    if (note.kind === 'note_corroboration') {
+      assert.equal((note.source as Record<string, unknown>).kind, 'novelty_gate');
+      assert.equal(typeof (note.corroborated_by as Record<string, unknown>).session_id, 'string');
     }
   });
 }

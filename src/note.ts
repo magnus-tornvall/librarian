@@ -60,13 +60,23 @@ export type NoteSupersession = {
   source: { kind: 'human' | 'cli' };
 };
 
-export type NoteRecord = NoteRevision | NoteTombstone | NoteSupersession;
+export type NoteCorroboration = {
+  kind: 'note_corroboration';
+  schema_version: 1;
+  note_id: string;
+  revision_id: string;
+  created_at: string;
+  corroborated_by: { session_id: string; event_range?: { from_event_id: string; to_event_id: string } };
+  source: { kind: 'novelty_gate' };
+};
+
+export type NoteRecord = NoteRevision | NoteTombstone | NoteSupersession | NoteCorroboration;
 export type NoteStateRecord = NoteRevision | NoteTombstone;
 
 export function latestRecordPerNoteId(records: NoteRecord[]): NoteStateRecord[] {
   const latest = new Map<string, NoteStateRecord>();
   for (const record of records) {
-    if (record.kind === 'note_supersession') continue;
+    if (record.kind === 'note_supersession' || record.kind === 'note_corroboration') continue;
     const existing = latest.get(record.note_id);
     // Tombstones and revisions compete as peers on created_at; latest-wins is symmetric, so a
     // tombstone can retire a note and a newer revision can revive it. <=, not <: on a created_at

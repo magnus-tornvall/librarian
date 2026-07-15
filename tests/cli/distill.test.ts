@@ -8,6 +8,7 @@ import { readAll } from '../../src/log/ndjson.ts';
 import { readAllNotes } from '../../src/log/noteLog.ts';
 import { validateEvent, DiagnosticRecordRejectedError } from '../../src/collector/validateEvent.ts';
 import { runDistill } from '../../src/distill/distillRun.ts';
+import { writeInjectionTrace } from '../../src/diagnostics/injectionTrace.ts';
 import type { InferenceProvider } from '../../src/distill/provider.ts';
 import { importCuratedNote } from '../../src/distill/humanDistiller.ts';
 
@@ -321,7 +322,42 @@ test('distill: a near-duplicate episodic draft is a NOOP before verification', a
   assert.equal(scripted.prompts.length, 3, 'the duplicate must not call verifyNote');
   const duplicate = readVerdicts(diagnosticsDir).find((verdict) => verdict.decision === 'duplicate')!;
   assert.equal(duplicate.note_id, noteRevisions(dataDir)[0].note_id);
+  const corroborations = (readAllNotes(dataDir) as Array<{ kind: string; note_id: string }>).filter((record) => record.kind === 'note_corroboration');
+  assert.deepEqual(corroborations.map((record) => record.note_id), [duplicate.note_id]);
   assert.equal(readCursorOrNull(dataDir, 'sess-duplicate-second')!.byte_offset, fs.statSync(eventLogPath(dataDir, 'sess-duplicate-second')).size);
+});
+
+test('distill: a duplicate of a note injected into the same session does not corroborate', async () => {
+  const root = tempDir('cli-distill-self-citation-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  ingest(dataDir, eligibleEvents('sess-original'));
+  await runDistill({ dataDir, diagnosticsDir, provider: scriptedProvider([LLM_RESPONSE, FAITHFUL_RESPONSE]).provider });
+  const noteId = noteRevisions(dataDir)[0].note_id;
+  writeInjectionTrace(diagnosticsDir, {
+    record_class: 'diagnostic', injection_id: 'self-citation-trace', path: 'push', session_id: 'sess-self-citation', ts: '2026-07-05T10:00:00.000Z',
+    query: '', candidates: [], shipped_note_ids: [noteId], indexed_through: 'x', config_snapshot: {},
+  });
+  ingest(dataDir, eligibleEvents('sess-self-citation'));
+  await runDistill({ dataDir, diagnosticsDir, provider: scriptedProvider([NEAR_DUPLICATE_RESPONSE]).provider });
+
+  assert.equal((readAllNotes(dataDir) as Array<{ kind: string }>).filter((record) => record.kind === 'note_corroboration').length, 0);
+});
+
+test('distill: a legacy injection trace without session_id conservatively blocks corroboration', async () => {
+  const root = tempDir('cli-distill-legacy-trace-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  ingest(dataDir, eligibleEvents('sess-original'));
+  await runDistill({ dataDir, diagnosticsDir, provider: scriptedProvider([LLM_RESPONSE, FAITHFUL_RESPONSE]).provider });
+  const noteId = noteRevisions(dataDir)[0].note_id;
+  writeInjectionTrace(diagnosticsDir, {
+    record_class: 'diagnostic', injection_id: 'legacy-trace', path: 'push', ts: '2026-07-05T10:00:00.000Z',
+    query: '', candidates: [], shipped_note_ids: [noteId], indexed_through: 'x', config_snapshot: {},
+  });
+  ingest(dataDir, eligibleEvents('sess-legacy-trace'));
+  await runDistill({ dataDir, diagnosticsDir, provider: scriptedProvider([NEAR_DUPLICATE_RESPONSE]).provider });
+  assert.equal((readAllNotes(dataDir) as Array<{ kind: string }>).filter((record) => record.kind === 'note_corroboration').length, 0);
 });
 
 test('distill: a verifier-feedback draft is novelty-gated before its second verification', async () => {

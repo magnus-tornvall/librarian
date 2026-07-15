@@ -8,6 +8,7 @@ type FtsRow = {
   origin: string;
   note_type: string;
   created_at: string;
+  last_corroborated_at: string | null;
   valid_at: string | null;
   invalid_at: string | null;
   superseded_by: string | null;
@@ -52,11 +53,13 @@ function plainTextFtsQuery(query: string): string | undefined {
   return terms.map(ftsTerm).join(' AND ');
 }
 
-export function expiryReferenceTimestamp(candidate: Pick<ScoredCandidate, 'created_at'>): string {
-  return candidate.created_at;
+export function expiryReferenceTimestamp(candidate: Pick<ScoredCandidate, 'created_at'> & { last_corroborated_at?: string | null }): string {
+  return candidate.last_corroborated_at && candidate.last_corroborated_at > candidate.created_at
+    ? candidate.last_corroborated_at
+    : candidate.created_at;
 }
 
-function isTtlExpired(candidate: Pick<ScoredCandidate, 'note_type' | 'created_at'>, config: ScoringConfig, nowIso: string): boolean {
+function isTtlExpired(candidate: Pick<ScoredCandidate, 'note_type' | 'created_at'> & { last_corroborated_at?: string | null }, config: ScoringConfig, nowIso: string): boolean {
   const ttlDays = config.ttlDays[candidate.note_type] ?? Infinity;
   // Inclusive of the expiry instant (>=): a note is expired exactly at reference + ttlDays.
   // This is deliberately tighter than the invalid_at open-interval check (strict >), since TTL
@@ -113,7 +116,7 @@ export function recallWithTrace(
 
   const rows = db
     .prepare(
-      `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, bm25(notes_fts) as raw_score
+      `SELECT note_id, origin, note_type, created_at, last_corroborated_at, valid_at, invalid_at, superseded_by, project_slug, is_global, bm25(notes_fts) as raw_score
        FROM notes_fts
        WHERE notes_fts MATCH ? AND ${filterClauses.join(' AND ')}`,
     )
@@ -126,6 +129,7 @@ export function recallWithTrace(
     origin: row.origin,
     note_type: row.note_type,
     created_at: row.created_at,
+    last_corroborated_at: row.last_corroborated_at,
     // A project-scoped query that matched this note's project earns the §6 project
     // boost; a global-scope-only hit does not. Scope now lives in the index, so this
     // is a real signal rather than the old hard-coded false.
@@ -186,7 +190,7 @@ export function whyNot(
 
   const rows = db
     .prepare(
-      `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, bm25(notes_fts) as raw_score
+      `SELECT note_id, origin, note_type, created_at, last_corroborated_at, valid_at, invalid_at, superseded_by, project_slug, is_global, bm25(notes_fts) as raw_score
        FROM notes_fts
        WHERE notes_fts MATCH ?`,
     )
@@ -204,6 +208,7 @@ export function whyNot(
       origin: row.origin,
       note_type: row.note_type,
       created_at: row.created_at,
+      last_corroborated_at: row.last_corroborated_at,
       valid_at: row.valid_at ?? row.created_at,
       invalid_at: row.invalid_at,
       is_project_match: opts.projectSlug !== undefined && row.project_slug === opts.projectSlug,

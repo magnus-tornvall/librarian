@@ -24,14 +24,19 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath?: 
 
   const deleteStmt = db.prepare('DELETE FROM notes_fts WHERE note_id = ?');
   const insertStmt = db.prepare(
-    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, last_corroborated_at, valid_at, invalid_at, superseded_by, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const supersessions = new Map<string, { created_at: string; superseded_by: string }>();
+  const corroborations = new Map<string, string>();
   for (const record of notes) {
-    if (record.kind !== 'note_supersession') continue;
-    const existing = supersessions.get(record.note_id);
-    if (existing === undefined || record.created_at < existing.created_at) {
-      supersessions.set(record.note_id, { created_at: record.created_at, superseded_by: record.superseded_by });
+    if (record.kind === 'note_supersession') {
+      const existing = supersessions.get(record.note_id);
+      if (existing === undefined || record.created_at < existing.created_at) {
+        supersessions.set(record.note_id, { created_at: record.created_at, superseded_by: record.superseded_by });
+      }
+    } else if (record.kind === 'note_corroboration') {
+      const existing = corroborations.get(record.note_id);
+      if (existing === undefined || existing < record.created_at) corroborations.set(record.note_id, record.created_at);
     }
   }
 
@@ -74,6 +79,7 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath?: 
       note.source.origin,
       note.note_type,
       note.created_at,
+      corroborations.get(note.note_id) ?? null,
       note.valid_at ?? note.created_at,
       invalidAt,
       supersessionWins ? supersession.superseded_by : null,

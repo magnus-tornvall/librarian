@@ -43,7 +43,7 @@ const USAGE = `usage:
   librarian why-not <query> <note_id> --project <slug> [--global]
                                             explain why a note did not ship for a query
   librarian stats [--json]                  report admission, usage, and cut-reason diagnostics
-  librarian inject --project <slug> [--global] [--session-start]
+  librarian inject --project <slug> [--global] [--session-start] [--session-id <id>]
                                            read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
                                               print a note, optionally with source provenance
@@ -99,6 +99,13 @@ function parseInjectArgs(argv: string[]): InjectionOptions {
         throw new Error('flag --project requires a value');
       }
       options.projectSlug = value;
+      i += 1;
+    } else if (arg === '--session-id') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --session-id requires a value');
+      }
+      options.sessionId = value;
       i += 1;
     } else if (arg === '--data-dir') {
       const value = argv[i + 1];

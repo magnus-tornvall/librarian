@@ -2,8 +2,9 @@
 
 A note record is a structured memory record — the note log's unit of storage, written only
 by distillers, never directly by instrumentation. There are three kinds: `NoteRevision` (a
-version of a note's content), `NoteTombstone` (removes a note_id), and `NoteSupersession`
-(an append-only recall annotation for an older fact). The
+version of a note's content), `NoteTombstone` (removes a note_id), `NoteSupersession`
+(an append-only recall annotation for an older fact), and `NoteCorroboration` (an append-only
+TTL annotation from the novelty gate). The
 one-sentence version of the distill-only rule: nothing enters the note log without a
 distiller's judgment — `llm` or `human` — there is no generic import path, not even for
 pre-condensed machine content.
@@ -11,7 +12,7 @@ pre-condensed machine content.
 ## Types
 
 ```ts
-type NoteRecord = NoteRevision | NoteTombstone | NoteSupersession;
+type NoteRecord = NoteRevision | NoteTombstone | NoteSupersession | NoteCorroboration;
 
 type NoteRevision = {
   kind: "note_revision"; schema_version: 1;
@@ -49,6 +50,14 @@ type NoteSupersession = {
   created_at: string; reason?: string;
   source: { kind: "human" | "cli" };
 };
+
+type NoteCorroboration = {
+  kind: "note_corroboration"; schema_version: 1;
+  note_id: string; revision_id: string; created_at: string;
+  corroborated_by: { session_id: string;
+                     event_range?: { from_event_id: string; to_event_id: string } };
+  source: { kind: "novelty_gate" };
+};
 ```
 
 ## Rules
@@ -60,6 +69,8 @@ Curated frontmatter may declare `note_id`; importer tombstones orphaned IDs on r
 `NoteSupersession` never competes with revisions in latest-revision-wins. The index retains
 the revision and carries its earliest supersession timestamp as `invalid_at`; recall excludes
 the closed interval at query time so `why-not` can report `superseded`.
+`NoteCorroboration` never competes with revisions either. The index carries its newest
+timestamp as `last_corroborated_at`, and TTL uses the later of that and `created_at`.
 
 Only deterministic-ID notes (`project:{slug}:summary`, `person:{normalized_name}`,
 `daily:{yyyy-mm-dd}`, `curated:{id}`) may be revised — the distiller fetches a prior
@@ -74,6 +85,7 @@ else is episodic (`{type}:{ulid}`), one revision, immutable forever.
 4. [`04-curated-note-human-explicit-id.json`](schema/examples/note/04-curated-note-human-explicit-id.json) — a curated note, `distiller: "human"`, explicit frontmatter `note_id`.
 5. [`05-tombstone-via-cli.json`](schema/examples/note/05-tombstone-via-cli.json) — a tombstone emitted via the CLI.
 6. [`06-supersession-via-cli.json`](schema/examples/note/06-supersession-via-cli.json) — an append-only supersession emitted via the CLI.
+7. [`07-corroboration-via-novelty-gate.json`](schema/examples/note/07-corroboration-via-novelty-gate.json) — an append-only duplicate citation emitted by the novelty gate.
 
 ## Post-skeleton revision (2026-07)
 

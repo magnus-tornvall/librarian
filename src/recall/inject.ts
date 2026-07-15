@@ -17,6 +17,7 @@ export type InjectionOptions = {
   dataDir: string;
   diagnosticsDir: string;
   query?: string;
+  sessionId?: string;
   projectSlug?: string;
   global: boolean;
   sessionStart: boolean;
@@ -100,6 +101,7 @@ function writePushTrace(
     record_class: 'diagnostic',
     injection_id: injectionId,
     path: 'push',
+    ...(options.sessionId ? { session_id: options.sessionId } : {}),
     ts,
     query: options.sessionStart ? '' : (options.query ?? ''),
     candidates,

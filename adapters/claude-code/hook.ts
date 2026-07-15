@@ -195,6 +195,7 @@ function injectForPayload(payload: NativePayload, cwd: string, gitRoot?: string)
   if (payload.hook_event_name === 'SessionStart') {
     args.push('--session-start');
   }
+  args.push('--session-id', payload.session_id);
 
   try {
     const result = runLibrarian(args, {

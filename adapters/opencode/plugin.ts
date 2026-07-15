@@ -354,11 +354,12 @@ function projectSlug(resource: Resource): string | undefined {
   return path.basename(resource.git_root);
 }
 
-function injectArgs(resource: Resource, sessionStart: boolean): string[] {
+function injectArgs(resource: Resource, sessionStart: boolean, sessionId: string | undefined): string[] {
   const args = ['inject', '--global'];
   const slug = projectSlug(resource);
   if (slug) args.push('--project', slug);
   if (sessionStart) args.push('--session-start');
+  if (sessionId) args.push('--session-id', sessionId);
   return args;
 }
 
@@ -366,13 +367,14 @@ async function runInject(
   resource: Resource,
   query: string,
   sessionStart: boolean,
+  sessionId: string | undefined,
   log: (level: string, message: string) => void,
 ): Promise<InjectResult> {
   const [cmd, ...prefix] = resolveLibrarianArgv();
   return await new Promise((resolve) => {
     let stdout = '';
     let settled = false;
-    const child = spawn(cmd, [...prefix, ...injectArgs(resource, sessionStart)], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(cmd, [...prefix, ...injectArgs(resource, sessionStart, sessionId)], { stdio: ['pipe', 'pipe', 'pipe'] });
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -662,8 +664,8 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
       emit(lowered.payload, sessionId);
 
       const [briefResult, recallResult] = await Promise.all([
-        briefBySession.has(sessionKey) ? Promise.resolve<InjectResult>({ ok: false }) : runInject(resource, '', true, log),
-        runInject(resource, lowered.payload.text, false, log),
+        briefBySession.has(sessionKey) ? Promise.resolve<InjectResult>({ ok: false }) : runInject(resource, '', true, sessionId, log),
+        runInject(resource, lowered.payload.text, false, sessionId, log),
       ]);
       if (briefResult.ok) {
         briefBySession.set(sessionKey, briefResult.block);

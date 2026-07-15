@@ -5,7 +5,9 @@ import { distill } from './llmDistiller.ts';
 import { verifyNote, type VerifyVerdict } from './verifyNote.ts';
 import { findNearDuplicate } from './noveltyGate.ts';
 import { appendNote, readAllNotes } from '../log/noteLog.ts';
-import type { NoteRecord, NoteRevision } from '../note.ts';
+import { type NoteCorroboration, type NoteRecord, type NoteRevision } from '../note.ts';
+import { readInjectionTraces } from '../diagnostics/injectionTrace.ts';
+import { ulid } from 'ulid';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
 import { acquireLock } from '../log/lock.ts';
 import {
@@ -506,6 +508,26 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           counts,
           note_id: duplicate.note_id,
         });
+        // A trace lacking a session id cannot be joined safely, so it blocks the citation.
+        const wasInjected = readInjectionTraces(diagnosticsDir).some(
+          (trace) => trace.shipped_note_ids.includes(duplicate.note_id) &&
+            (trace.session_id === undefined || trace.session_id === sessionId),
+        );
+        if (!wasInjected) {
+          const corroboration: NoteCorroboration = {
+            kind: 'note_corroboration',
+            schema_version: 1,
+            note_id: duplicate.note_id,
+            revision_id: ulid(),
+            created_at: new Date().toISOString(),
+            corroborated_by: {
+              session_id: sessionId,
+              event_range: { from_event_id: deltaFrom, to_event_id: deltaTo },
+            },
+            source: { kind: 'novelty_gate' },
+          };
+          appendNote(dataDir, corroboration);
+        }
         advancePast(newOffset, lastRecordId);
         result.duplicates += 1;
         return true;
