@@ -12,6 +12,7 @@ export type ScoringConfig = {
   typeWeights: Record<string, number>;
   relevanceFloor: number;
   recencyHalfLifeDays: Record<string, number>;
+  ttlDays: Record<string, number>;
   projectBoost: number;
 };
 
@@ -28,6 +29,7 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   // ponytail: placeholder v1 floor — §5 says this gets tuned against fixtures, not this task.
   relevanceFloor: 0.1,
   recencyHalfLifeDays: { default: 90, decision: Infinity, curated: Infinity, daily: 90, episode: 90 },
+  ttlDays: { episode: 90, daily: 30 },
   projectBoost: 1.5,
 };
 
@@ -36,6 +38,9 @@ export function scoringConfigSnapshot(config: ScoringConfig): object {
     ...config,
     recencyHalfLifeDays: Object.fromEntries(
       Object.entries(config.recencyHalfLifeDays).map(([type, days]) => [type, days === Infinity ? 'Infinity' : days]),
+    ),
+    ttlDays: Object.fromEntries(
+      Object.entries(config.ttlDays).map(([type, days]) => [type, days === Infinity ? 'Infinity' : days]),
     ),
   };
 }

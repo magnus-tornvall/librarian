@@ -45,6 +45,10 @@ Every key under `expect` is optional; a fixture asserts only the constraints it 
 An empty `expect` is legal but pointless — every fixture should state at least one of
 `include` / `exclude` / `empty`.
 
+TTL fixtures must set `now` explicitly: the runner passes that fixed timestamp through recall,
+so a note's `created_at` can deterministically prove its type's shelf-life boundary without
+depending on the machine clock.
+
 ### `NoteSeed` shape
 
 A `NoteSeed` is a trimmed `NoteRevision` (see `src/note.ts`). Only the fields that affect

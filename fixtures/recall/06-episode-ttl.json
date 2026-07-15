@@ -1,0 +1,15 @@
+{
+  "name": "TTL excludes a 120-day-old episode but retains an old decision",
+  "query": "harbor protocol",
+  "opts": { "projectSlug": "alpha" },
+  "now": "2026-07-06T12:00:00.000Z",
+  "notes": [
+    { "note_id": "episode:old-harbor", "note_type": "episode", "origin": "opencode", "created_at": "2026-03-08T12:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Old harbor protocol episode", "body": { "summary": "The harbor protocol was discussed." } },
+    { "note_id": "decision:old-harbor", "note_type": "decision", "origin": "opencode", "created_at": "2026-03-08T12:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Harbor protocol decision", "body": { "summary": "The harbor protocol decision remains active." } },
+    { "note_id": "fact:decoy-one", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Decoy one", "body": { "summary": "Unrelated filler one." } },
+    { "note_id": "fact:decoy-two", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Decoy two", "body": { "summary": "Unrelated filler two." } },
+    { "note_id": "fact:decoy-three", "note_type": "fact", "origin": "opencode", "created_at": "2026-07-06T10:00:00.000Z", "scope": { "project_slug": "alpha" }, "title": "Decoy three", "body": { "summary": "Unrelated filler three." } }
+  ],
+  "expect": { "include": ["decision:old-harbor"], "exclude": ["episode:old-harbor"] },
+  "reason": "TTL is a recall exclusion for ephemeral episodes, not a deletion or a decay change."
+}

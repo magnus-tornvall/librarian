@@ -1,6 +1,6 @@
 {
-  "name": "year-old decision survives decay while old episode falls below the floor",
-  "reason": "Permanent decisions do not decay, while episodic notes retain the 90-day half-life.",
+  "name": "year-old decision survives while an old episode expires",
+  "reason": "Permanent decisions have no TTL, while episodes stop surfacing after 90 days.",
   "query": "token rotation strategy",
   "opts": { "projectSlug": "alpha" },
   "now": "2026-07-06T12:00:00.000Z",
