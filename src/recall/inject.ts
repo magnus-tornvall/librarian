@@ -20,6 +20,7 @@ export type InjectionOptions = {
   projectSlug?: string;
   global: boolean;
   sessionStart: boolean;
+  sessionId?: string;
 };
 
 type Entry = { note: NoteRevision };
@@ -100,6 +101,7 @@ function writePushTrace(
     record_class: 'diagnostic',
     injection_id: injectionId,
     path: 'push',
+    ...(options.sessionId ? { session_id: options.sessionId } : {}),
     ts,
     query: options.sessionStart ? '' : (options.query ?? ''),
     candidates,

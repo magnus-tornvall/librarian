@@ -5,7 +5,7 @@ export const DEAD_NOTE_WINDOW_DAYS = 30;
 export const PERPETUAL_CANDIDATE_MIN_APPEARANCES = 3;
 
 const DECISIONS: DistillVerdict['decision'][] = [
-  'distilled', 'duplicate', 'skipped', 'noop', 'quarantined', 'rejected',
+  'distilled', 'duplicate', 'skipped', 'noop', 'quarantined', 'rejected', 'contradiction',
 ];
 const CUT_REASONS = ['below_floor', 'budget', 'scope_mismatch', 'superseded', 'ttl_expired', 'unknown'] as const;
 

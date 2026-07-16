@@ -53,11 +53,11 @@ export type NoteSupersession = {
   kind: 'note_supersession';
   schema_version: 1;
   note_id: string;
-  superseded_by: string;
+  superseded_by?: string;
   revision_id: string;
   created_at: string;
   reason?: string;
-  source: { kind: 'human' | 'cli' };
+  source: { kind: 'human' | 'cli' | 'detector'; session_id?: string };
 };
 
 export type NoteRecord = NoteRevision | NoteTombstone | NoteSupersession;

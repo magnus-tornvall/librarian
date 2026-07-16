@@ -93,6 +93,13 @@ function parseInjectArgs(argv: string[]): InjectionOptions {
       options.global = true;
     } else if (arg === '--session-start') {
       options.sessionStart = true;
+    } else if (arg === '--session-id') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --session-id requires a value');
+      }
+      options.sessionId = value;
+      i += 1;
     } else if (arg === '--project') {
       const value = argv[i + 1];
       if (value === undefined) {
@@ -195,7 +202,11 @@ export type RecallResult = {
 
 export type RecallPayload = { results: RecallResult[]; message?: string };
 
-export type NoteShowPayload = { note: NoteStateRecord; provenance_events: Array<Record<string, unknown>> | null };
+export type NoteShowPayload = {
+  note: NoteStateRecord;
+  provenance_events: Array<Record<string, unknown>> | null;
+  invalidation?: Pick<NoteSupersession, 'created_at' | 'reason' | 'source'>;
+};
 
 type WhyOptions = { injectionId: string; json: boolean; diagnosticsDir: string };
 type WhyNotOptions = { query: string; noteId: string; projectSlug?: string; global: boolean; dataDir: string };
@@ -653,7 +664,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const distilled = await runDistill({ dataDir, diagnosticsDir, provider });
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
 
-  const distillWork = distilled.distilled + distilled.duplicates + distilled.skipped + distilled.noops + distilled.quarantined + distilled.rejected;
+  const distillWork = distilled.distilled + distilled.duplicates + distilled.skipped + distilled.noops + distilled.quarantined + distilled.rejected + distilled.contradictions;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
   if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
     process.stdout.write('Nothing pending\n');
@@ -667,6 +678,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
     `sessions noops: ${distilled.noops}`,
     `sessions quarantined: ${distilled.quarantined}`,
     `sessions rejected: ${distilled.rejected}`,
+    `contradictions detected: ${distilled.contradictions}`,
   ];
   if (vaultDir !== undefined) {
     lines.push(`notes exported: ${exported!.exported}`);
@@ -703,7 +715,10 @@ export function getNoteShowPayload(dataDir: string, noteId: string, withProvenan
   }
 
   const events = withProvenance && note.source.distiller !== 'human' ? provenanceEvents(dataDir, note) : [];
-  return { note, provenance_events: events };
+  const invalidation = (readAllNotes(dataDir) as NoteRecord[])
+    .filter((record): record is NoteSupersession => record.kind === 'note_supersession' && record.note_id === noteId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+  return { note, provenance_events: events, ...(invalidation ? { invalidation } : {}) };
 }
 
 function noteShow(options: NoteShowOptions): void {
@@ -727,6 +742,9 @@ function noteShow(options: NoteShowOptions): void {
   }
 
   process.stdout.write(formatNote(note));
+  if (payload.invalidation) {
+    process.stdout.write(`Invalidated: ${payload.invalidation.reason ?? '(no reason)'}\n`);
+  }
   if (!options.withProvenance) {
     return;
   }

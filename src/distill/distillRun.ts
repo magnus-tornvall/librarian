@@ -4,6 +4,7 @@ import type { InferenceProvider } from './provider.ts';
 import { distill } from './llmDistiller.ts';
 import { verifyNote, type VerifyVerdict } from './verifyNote.ts';
 import { findNearDuplicate } from './noveltyGate.ts';
+import { detectContradictions } from './contradictionCheck.ts';
 import { appendNote, readAllNotes } from '../log/noteLog.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
@@ -289,6 +290,7 @@ export type DistillRunResult = {
   noops: number;
   quarantined: number;
   rejected: number;
+  contradictions: number;
   status: 'pass' | 'lock-held';
 };
 
@@ -332,7 +334,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
   if (lock === null) {
     // Someone live and fresh is already draining this backlog — not an error.
     process.stderr.write('librarian: distill already running (lock held); nothing to do\n');
-    return { distilled: 0, duplicates: 0, skipped: 0, noops: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
+    return { distilled: 0, duplicates: 0, skipped: 0, noops: 0, quarantined: 0, rejected: 0, contradictions: 0, status: 'lock-held' };
   }
   try {
     return await runDistillPass(options);
@@ -342,7 +344,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
 }
 
 async function runDistillPass(options: DistillRunOptions): Promise<DistillRunResult> {
-  const result: DistillRunResult = { distilled: 0, duplicates: 0, skipped: 0, noops: 0, quarantined: 0, rejected: 0, status: 'pass' };
+  const result: DistillRunResult = { distilled: 0, duplicates: 0, skipped: 0, noops: 0, quarantined: 0, rejected: 0, contradictions: 0, status: 'pass' };
   // Distinct sessions that had ANY quarantine this run (a corrupt line and/or a
   // budget-exhausted delta). Set, not a counter: several corrupt lines in one
   // session is still one quarantined session, so the drain summary's "sessions
@@ -439,6 +441,33 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
       write_tools: metrics.writeTools,
       salience_hints: metrics.salienceHints,
     };
+    const detect = async (): Promise<void> => {
+      try {
+        result.contradictions += await detectContradictions({
+          dataDir,
+          diagnosticsDir,
+          sessionId,
+          events,
+          provider,
+          report: (noteId, contradiction, error) => writeDistillVerdict(diagnosticsDir, {
+            record_class: 'diagnostic', verdict_id: makeVerdictId(), ts: new Date().toISOString(), session_id: sessionId,
+            decision: 'contradiction', reason: contradiction.reason, ...diagnosticFields, counts, note_id: noteId,
+            contradiction: { ...contradiction, ...(error ? { error } : {}) },
+          }),
+        });
+      } catch (err) {
+        // The detector is observational; its own failures must not retry or alter distillation.
+        try {
+          writeDistillVerdict(diagnosticsDir, {
+            record_class: 'diagnostic', verdict_id: makeVerdictId(), ts: new Date().toISOString(), session_id: sessionId,
+            decision: 'contradiction', reason: 'detector failed', ...diagnosticFields, counts,
+            contradiction: { contradicted: false, reason: 'detector failed', error: err instanceof Error ? err.message : String(err) },
+          });
+        } catch {
+          // Diagnostics are best-effort at this boundary too.
+        }
+      }
+    };
 
     const skip = skipReason(metrics);
     if (skip !== null) {
@@ -453,6 +482,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         counts,
       };
       writeDistillVerdict(diagnosticsDir, verdict);
+      await detect();
       advancePast(newOffset, lastRecordId);
       result.skipped += 1;
       continue;
@@ -476,6 +506,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         counts,
       };
       writeDistillVerdict(diagnosticsDir, verdict);
+      await detect();
       advancePast(newOffset, lastRecordId);
       result.skipped += 1;
       continue;
@@ -492,7 +523,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         throw new Error(`session ${sessionId}: missing resource.agent on first delta event`);
       }
 
-      const rejectDuplicate = (draft: NoteRevision): boolean => {
+      const rejectDuplicate = async (draft: NoteRevision): Promise<boolean> => {
         const duplicate = draft.identity.mode === 'episodic' ? findNearDuplicate(dataDir, draft) : null;
         if (duplicate === null) return false;
         writeDistillVerdict(diagnosticsDir, {
@@ -506,12 +537,13 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           counts,
           note_id: duplicate.note_id,
         });
+        await detect();
         advancePast(newOffset, lastRecordId);
         result.duplicates += 1;
         return true;
       };
 
-      const decline = (reason: string, verify?: VerifyVerdict): void => {
+      const decline = async (reason: string, verify?: VerifyVerdict): Promise<void> => {
         writeDistillVerdict(diagnosticsDir, {
           record_class: 'diagnostic',
           verdict_id: makeVerdictId(),
@@ -523,17 +555,18 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           counts,
           ...(verify ? { verify: { errors: verify.errors, reason: verify.reason, attempts: 1 } } : {}),
         });
+        await detect();
         advancePast(newOffset, lastRecordId);
         result.noops += 1;
       };
 
       let judgment = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[]);
       if (judgment.kind === 'declined') {
-        decline(judgment.reason);
+        await decline(judgment.reason);
         continue;
       }
       let note = judgment;
-      if (rejectDuplicate(note)) {
+      if (await rejectDuplicate(note)) {
         continue;
       }
       let verify: VerifyVerdict = await verifyNote(note, events, provider);
@@ -543,11 +576,11 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
         feedback = verify;
         judgment = await distill(events, sessionId, provider, origin, readAllNotes(dataDir) as NoteRecord[], verify.reason);
         if (judgment.kind === 'declined') {
-          decline(judgment.reason, verify);
+          await decline(judgment.reason, verify);
           continue;
         }
         note = judgment;
-        if (rejectDuplicate(note)) {
+        if (await rejectDuplicate(note)) {
           continue;
         }
         verify = await verifyNote(note, events, provider);
@@ -565,6 +598,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           counts,
           verify: { errors: verify.errors, reason: verify.reason, attempts: verifyAttempts },
         });
+        await detect();
         advancePast(newOffset, lastRecordId);
         result.rejected += 1;
         continue;
@@ -586,6 +620,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           : {}),
       };
       writeDistillVerdict(diagnosticsDir, verdict);
+      await detect();
 
       // Advance only after the note is durably appended (§5 advance-after-success),
       // clearing failed_attempts — a fresh range starts its count at zero.

@@ -73,7 +73,7 @@ test('inject CLI renders §6 block, writes matching push trace, and leaves note 
   }
   const beforeNotes = snapshotNotes(t.dataDir);
 
-  const result = runCli(['inject', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], 'wombat\nfailover');
+  const result = runCli(['inject', '--project', 'alpha', '--session-id', 'inject-session', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], 'wombat\nfailover');
   assert.equal(result.status, 0, `inject should exit 0; stderr: ${result.stderr}`);
   assert.match(result.stdout, /^<librarian-memory injection_id="[^"]+" indexed_through="[^"]+">/);
   assert.match(result.stdout, /Possibly relevant prior context\. Prefer current repository evidence and current user instructions if they conflict\./);
@@ -86,6 +86,7 @@ test('inject CLI renders §6 block, writes matching push trace, and leaves note 
   const trace = readTraces(t.diagnosticsDir).find((row) => row.injection_id === injectionId);
   assert.ok(trace, 'inject must write a trace with the emitted injection_id');
   assert.equal(trace.path, 'push');
+  assert.equal(trace.session_id, 'inject-session');
   assert.equal(trace.indexed_through, result.stdout.match(/indexed_through="([^"]+)"/)?.[1]);
   assert.deepEqual(trace.shipped_note_ids, ['fact:inject-1']);
   assert.ok(trace.candidates.every((candidate) => typeof candidate.raw_score === 'number' && typeof candidate.post_weight_score === 'number'));

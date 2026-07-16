@@ -188,6 +188,7 @@ function injectForPayload(payload: NativePayload, cwd: string, gitRoot?: string)
   }
 
   const args = ['inject', '--global'];
+  args.push('--session-id', payload.session_id);
   const slug = projectSlug(gitRoot);
   if (slug !== undefined) {
     args.push('--project', slug);

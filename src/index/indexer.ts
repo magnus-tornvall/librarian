@@ -26,7 +26,7 @@ export function indexNotes(db: Database.Database, dataDir: string, cursorPath?: 
   const insertStmt = db.prepare(
     'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
-  const supersessions = new Map<string, { created_at: string; superseded_by: string }>();
+  const supersessions = new Map<string, { created_at: string; superseded_by?: string }>();
   for (const record of notes) {
     if (record.kind !== 'note_supersession') continue;
     const existing = supersessions.get(record.note_id);
