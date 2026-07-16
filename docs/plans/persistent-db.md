@@ -22,24 +22,28 @@ O(vault) work.
 Maintain one disposable index at:
 
 ```text
-<dataDir>/index.db
+~/.librarian/index/notes.db
 ```
 
-For the default data directory this is `~/.librarian/data/index.db`.
+The index lives in its own directory — the derived-artifacts storage class
+(spec §4, amendment 2026-07-16). Deletability is a directory property, not a
+filename convention, and `data/` stays purely sacred. `rm -rf
+~/.librarian/index` is the documented safe recovery action. Tests and
+non-default layouts pass an explicit index directory.
 
 The ownership boundary is:
 
 ```text
 note writers -> append note log
-index triggers -> consume pending note-log bytes into index.db
-inject/recall -> open index.db read-only
+index triggers -> consume pending note-log bytes into notes.db
+inject/recall -> open notes.db read-only
 ```
 
 Prompt injection is read-only and eventually consistent. It neither scans the
 note log nor catches up the index. The committed index cursor supplies
 `indexed_through`, making its freshness visible.
 
-The note log remains canonical. Deleting `index.db` and running `librarian
+The note log remains canonical. Deleting `notes.db` and running `librarian
 drain` recreates it.
 
 ## Design
@@ -149,7 +153,7 @@ through their index trigger.
 4. Wire explicit write-side and drain triggers.
 5. Move injection, recall, `why-not`, and novelty to the persistent database.
 6. Move result hydration and session-start selection to `note_state`.
-7. Update recovery documentation to identify `index.db` as disposable.
+7. Update recovery documentation to identify `notes.db` as disposable.
 8. Run the full build and test suite, then measure warm injection with a large
    generated note log.
 
@@ -168,8 +172,8 @@ Keep the checks focused on the new boundary:
    correctness.
 6. Verify a read-only connection sees only committed snapshots while another
    process indexes.
-7. Verify `--data-dir` uses only `<dataDir>/index.db`.
-8. Delete `index.db`, run `librarian drain`, and verify complete recovery.
+7. Verify an explicit index directory is honored and nothing writes outside it.
+8. Delete `notes.db`, run `librarian drain`, and verify complete recovery.
 9. Verify warm injection performs no O(vault) note-log read.
 
 ## Deferred Decisions And Triggers
