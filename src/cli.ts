@@ -19,7 +19,7 @@ import { readAll } from './log/ndjson.ts';
 import { appendNote, readAllNotes } from './log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision, type NoteStateRecord, type NoteSupersession, type NoteTombstone } from './note.ts';
 import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, INDEX_DIR, MACHINE_ID_PATH } from './paths.ts';
-import { DEFAULT_SCORING_CONFIG, scoringConfigSnapshot } from './recall/scoring.ts';
+import { scoringConfigSnapshot, type ScoringConfig } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
 
@@ -762,7 +762,7 @@ function formatRecallResult(result: RecallResult): string {
   return `${prefix} scope=${scope || '(none)'} title=${result.title} summary=${result.summary}`;
 }
 
-function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string): void {
+function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string, scoring: ScoringConfig): void {
   const trace: InjectionTrace = {
     record_class: 'diagnostic',
     injection_id: makeInjectionId(),
@@ -777,7 +777,7 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
     })),
     shipped_note_ids: rows.map((row) => row.note_id),
     indexed_through: ts,
-    config_snapshot: scoringConfigSnapshot(DEFAULT_SCORING_CONFIG),
+    config_snapshot: scoringConfigSnapshot(scoring),
   };
   writeInjectionTrace(options.diagnosticsDir, trace);
 }
@@ -797,16 +797,17 @@ function syncIndex(dataDir: string, indexDir: string): void {
 
 export function runRecall(options: RecallOptions): RecallPayload {
   const ts = new Date().toISOString();
+  const scoring = loadConfig().scoring;
   const db = openIndexRead(options.indexDir ?? INDEX_DIR);
   try {
     const { results: rows, candidates } = recallWithTrace(
       db,
       options.query,
       { projectSlug: options.projectSlug, global: options.global, origin: options.origin, limit: options.limit },
-      DEFAULT_SCORING_CONFIG,
+      scoring,
       ts,
     );
-    writePullTrace(options, candidates, rows, indexedThrough(db));
+    writePullTrace(options, candidates, rows, indexedThrough(db), scoring);
 
     const notesById = new Map(stateNotes(db, rows.map((row) => row.note_id)).map((note) => [note.note_id, note]));
     const results: RecallResult[] = rows.flatMap((row) => {
@@ -891,12 +892,13 @@ function formatWhyNot(result: WhyNotResult): string {
 
 function whyNotCommand(options: WhyNotOptions): void {
   const ts = new Date().toISOString();
+  const scoring = loadConfig().scoring;
   const db = openIndexRead(options.indexDir);
   try {
     // Explain against the pull-path result budget the seam actually ships (10), not the
     // scoring RESULT_CAP default (5), so the budget gate matches `librarian recall`.
     const opts = { ...options, limit: PULL_RECALL_DEFAULT_LIMIT };
-    process.stdout.write(formatWhyNot(whyNot(db, options.query, options.noteId, opts, DEFAULT_SCORING_CONFIG, ts)));
+    process.stdout.write(formatWhyNot(whyNot(db, options.query, options.noteId, opts, scoring, ts)));
   } finally {
     db.close();
   }
