@@ -1,6 +1,5 @@
-import Database from 'better-sqlite3';
+import { openIndexWrite } from '../index/database.ts';
 import { buildSearchText, indexNotes } from '../index/indexer.ts';
-import { migrate } from '../index/schema.ts';
 import type { NoteRevision } from '../note.ts';
 
 // FTS5 BM25 is lower-is-better; this is the positive score exposed by the gate.
@@ -15,7 +14,7 @@ function ftsQuery(text: string): string | undefined {
   return terms.map((_, omitted) => `(${terms.filter((__, index) => index !== omitted).join(' AND ')})`).join(' OR ');
 }
 
-export function findNearDuplicate(dataDir: string, draft: NoteRevision): { note_id: string; score: number } | null {
+export function findNearDuplicate(dataDir: string, draft: NoteRevision, indexDir?: string): { note_id: string; score: number } | null {
   const query = ftsQuery(buildSearchText(draft));
   if (query === undefined) return null;
 
@@ -26,9 +25,8 @@ export function findNearDuplicate(dataDir: string, draft: NoteRevision): { note_
       : undefined;
   if (scope === undefined) return null;
 
-  const db = new Database(':memory:');
+  const db = openIndexWrite(indexDir);
   try {
-    migrate(db);
     indexNotes(db, dataDir);
     const row = db
       .prepare(

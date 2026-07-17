@@ -7,6 +7,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { getNoteShowPayload, runRecall, type RecallOptions } from '../cli.ts';
+import { INDEX_DIR } from '../paths.ts';
 
 const AUTHORITY_FRAMING =
   'These results are possibly relevant prior context. Current repository evidence and current user instructions win on conflict.';
@@ -14,7 +15,7 @@ const AUTHORITY_FRAMING =
 const SEARCH_LIMIT_DEFAULT = 10;
 const SEARCH_LIMIT_CEILING = 10;
 
-export type McpServerOptions = { dataDir: string; diagnosticsDir: string };
+export type McpServerOptions = { dataDir: string; diagnosticsDir: string; indexDir?: string };
 
 const SEARCH_TOOL: Tool = {
   name: 'search',
@@ -122,6 +123,7 @@ function search(options: McpServerOptions, args: Record<string, unknown>): CallT
     json: true,
     dataDir: options.dataDir,
     diagnosticsDir: options.diagnosticsDir,
+    indexDir: options.indexDir ?? INDEX_DIR,
   };
 
   return jsonResult(runRecall(recallOptions));

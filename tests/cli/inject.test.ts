@@ -6,18 +6,29 @@ import os from 'node:os';
 import path from 'node:path';
 import { readAll } from '../../src/log/ndjson.ts';
 import { appendNote } from '../../src/log/noteLog.ts';
+import { openIndexWrite } from '../../src/index/database.ts';
+import { indexNotes } from '../../src/index/indexer.ts';
 import type { InjectionTrace } from '../../src/diagnostics/injectionTrace.ts';
 import type { NoteRevision } from '../../src/note.ts';
 
 const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
 
-function tempRoot(): { root: string; dataDir: string; diagnosticsDir: string } {
+function tempRoot(): { root: string; dataDir: string; diagnosticsDir: string; indexDir: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-inject-'));
-  return { root, dataDir: path.join(root, 'data'), diagnosticsDir: path.join(root, 'diagnostics') };
+  return { root, dataDir: path.join(root, 'data'), diagnosticsDir: path.join(root, 'diagnostics'), indexDir: path.join(root, 'index') };
 }
 
-function runCli(args: string[], stdin = ''): ReturnType<typeof spawnSync> {
-  return spawnSync('node', [CLI, ...args], { input: stdin, encoding: 'utf8' });
+function bootstrapIndex(dataDir: string, indexDir: string): void {
+  const db = openIndexWrite(indexDir);
+  try {
+    indexNotes(db, dataDir);
+  } finally {
+    db.close();
+  }
+}
+
+function runCli(args: string[], indexDir: string, stdin = ''): ReturnType<typeof spawnSync> {
+  return spawnSync('node', [CLI, ...args, '--index-dir', indexDir], { input: stdin, encoding: 'utf8' });
 }
 
 function note(index: number, overrides: Partial<NoteRevision> = {}): NoteRevision {
@@ -71,9 +82,10 @@ test('inject CLI renders §6 block, writes matching push trace, and leaves note 
   for (let i = 0; i < 8; i += 1) {
     appendNote(t.dataDir, note(20 + i, { body: { summary: `Unrelated filler ${i}.` } }));
   }
+  bootstrapIndex(t.dataDir, t.indexDir);
   const beforeNotes = snapshotNotes(t.dataDir);
 
-  const result = runCli(['inject', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], 'wombat\nfailover');
+  const result = runCli(['inject', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], t.indexDir, 'wombat\nfailover');
   assert.equal(result.status, 0, `inject should exit 0; stderr: ${result.stderr}`);
   assert.match(result.stdout, /^<librarian-memory injection_id="[^"]+" indexed_through="[^"]+">/);
   assert.match(result.stdout, /Possibly relevant prior context\. Prefer current repository evidence and current user instructions if they conflict\./);
@@ -102,8 +114,9 @@ test('inject CLI enforces push cap and budget, records budget cuts, and fail-clo
   for (let i = 0; i < 30; i += 1) {
     appendNote(t.dataDir, note(30 + i, { body: { summary: `Unrelated filler ${i}.` } }));
   }
+  bootstrapIndex(t.dataDir, t.indexDir);
 
-  const capped = runCli(['inject', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], 'wombat');
+  const capped = runCli(['inject', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], t.indexDir, 'wombat');
   assert.equal(capped.status, 0, `capped inject should exit 0; stderr: ${capped.stderr}`);
   assert.ok((capped.stdout.match(/^\d+\. \[/gm) ?? []).length <= 5, 'push block must ship at most five entries');
   assert.ok(capped.stdout.length <= 2400, 'push block must stay under the 600-token chars/4 budget');
@@ -112,7 +125,7 @@ test('inject CLI enforces push cap and budget, records budget cuts, and fail-clo
   assert.ok(cappedTrace);
   assert.ok(cappedTrace.candidates.some((candidate) => candidate.cut_reason === 'budget'));
 
-  const noScope = runCli(['inject', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], 'wombat');
+  const noScope = runCli(['inject', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], t.indexDir, 'wombat');
   assert.equal(noScope.status, 0, `no-scope inject should exit 0; stderr: ${noScope.stderr}`);
   assert.equal(noScope.stdout, '');
 
@@ -120,7 +133,8 @@ test('inject CLI enforces push cap and budget, records budget cuts, and fail-clo
   for (let i = 0; i < 12; i += 1) {
     appendNote(floorRoot.dataDir, note(i, { body: { summary: `commonfloor token in every note ${i}` } }));
   }
-  const belowFloor = runCli(['inject', '--project', 'alpha', '--data-dir', floorRoot.dataDir, '--diagnostics-dir', floorRoot.diagnosticsDir], 'commonfloor');
+  bootstrapIndex(floorRoot.dataDir, floorRoot.indexDir);
+  const belowFloor = runCli(['inject', '--project', 'alpha', '--data-dir', floorRoot.dataDir, '--diagnostics-dir', floorRoot.diagnosticsDir], floorRoot.indexDir, 'commonfloor');
   assert.equal(belowFloor.status, 0, `below-floor inject should exit 0; stderr: ${belowFloor.stderr}`);
   assert.equal(belowFloor.stdout, '');
   assert.ok(readTraces(floorRoot.diagnosticsDir).some((trace) => trace.candidates.some((candidate) => candidate.cut_reason === 'below_floor')));
@@ -153,8 +167,9 @@ test('inject excludes a stale fact with an explicit supersession record', () => 
   for (let i = 0; i < 5; i += 1) {
     appendNote(t.dataDir, note(20 + i, { body: { summary: `Unrelated filler ${i}.` } }));
   }
+  bootstrapIndex(t.dataDir, t.indexDir);
 
-  const result = runCli(['inject', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], 'staging API base URL');
+  const result = runCli(['inject', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], t.indexDir, 'staging API base URL');
   assert.equal(result.status, 0, `inject should exit 0; stderr: ${result.stderr}`);
   assert.match(result.stdout, /https:\/\/staging-new\.example\.test/);
   assert.doesNotMatch(result.stdout, /https:\/\/staging-old\.example\.test/);
@@ -176,8 +191,9 @@ test('inject --session-start excludes a superseded project summary', () => {
     superseded_by: 'project:alpha:summary-replacement', revision_id: 'summary-supersession',
     created_at: now, source: { kind: 'cli' },
   });
+  bootstrapIndex(t.dataDir, t.indexDir);
 
-  const result = runCli(['inject', '--session-start', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir]);
+  const result = runCli(['inject', '--session-start', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], t.indexDir);
   assert.equal(result.status, 0, `session-start should exit 0; stderr: ${result.stderr}`);
   assert.doesNotMatch(result.stdout, /Do not inject this stale project summary/);
 });
@@ -205,8 +221,9 @@ test('inject --session-start returns project brief and curated notes, or empty w
       body: { summary: 'Curated alpha runbook for startup context.' },
     }),
   );
+  bootstrapIndex(t.dataDir, t.indexDir);
 
-  const result = runCli(['inject', '--session-start', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir]);
+  const result = runCli(['inject', '--session-start', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], t.indexDir);
   assert.equal(result.status, 0, `session-start inject should exit 0; stderr: ${result.stderr}`);
   assert.match(result.stdout, /project_summary · llm\/opencode · 2026-07-06 · medium authority/);
   assert.match(result.stdout, /curated · human\/human · 2026-07-06 · high authority/);
@@ -222,7 +239,8 @@ test('inject --session-start returns project brief and curated notes, or empty w
   );
 
   const empty = tempRoot();
-  const emptyResult = runCli(['inject', '--session-start', '--project', 'alpha', '--data-dir', empty.dataDir, '--diagnostics-dir', empty.diagnosticsDir]);
+  bootstrapIndex(empty.dataDir, empty.indexDir);
+  const emptyResult = runCli(['inject', '--session-start', '--project', 'alpha', '--data-dir', empty.dataDir, '--diagnostics-dir', empty.diagnosticsDir], empty.indexDir);
   assert.equal(emptyResult.status, 0, `empty session-start inject should exit 0; stderr: ${emptyResult.stderr}`);
   assert.equal(emptyResult.stdout, '');
 });

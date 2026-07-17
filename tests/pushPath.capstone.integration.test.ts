@@ -39,17 +39,18 @@ const LLM_RESPONSE = JSON.stringify({
 });
 const FAITHFUL_RESPONSE = JSON.stringify({ faithful: true, errors: [], reason: 'Supported by the events.' });
 
-function makeTempDirs(): { root: string; dataDir: string; diagnosticsDir: string; fixturePath: string; repo: string } {
+function makeTempDirs(): { root: string; dataDir: string; diagnosticsDir: string; indexDir: string; fixturePath: string; repo: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'push-path-capstone-'));
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
   const fixturePath = path.join(root, 'llm-response.json');
   fs.writeFileSync(fixturePath, JSON.stringify(Array.from({ length: 10 }, () => [LLM_RESPONSE, FAITHFUL_RESPONSE]).flat()));
   // A real git repo named after the project so both adapters attribute --project <slug>.
   const repo = path.join(root, PROJECT_SLUG);
   fs.mkdirSync(repo);
   assert.equal(spawnSync('git', ['init'], { cwd: repo, encoding: 'utf8' }).status, 0, 'git init should succeed');
-  return { root, dataDir, diagnosticsDir, fixturePath, repo };
+  return { root, dataDir, diagnosticsDir, indexDir, fixturePath, repo };
 }
 
 function runCli(args: string[], stdin = ''): ReturnType<typeof spawnSync> {
@@ -106,13 +107,15 @@ function collect(dataDir: string, events: Array<Record<string, unknown>>): void 
   assert.equal(result.status, 0, `collect should exit 0; stderr: ${result.stderr}`);
 }
 
-function distill(t: { dataDir: string; diagnosticsDir: string; fixturePath: string }): void {
+function distill(t: { dataDir: string; diagnosticsDir: string; indexDir: string; fixturePath: string }): void {
   const result = runCli([
     'distill',
     '--data-dir',
     t.dataDir,
     '--diagnostics-dir',
     t.diagnosticsDir,
+    '--index-dir',
+    t.indexDir,
     '--provider-fixture',
     t.fixturePath,
   ]);
@@ -125,7 +128,7 @@ function distill(t: { dataDir: string; diagnosticsDir: string; fixturePath: stri
  * the hook still spawns a real process, this only redirects the data dir so the hook reads the
  * distilled note. (The alternative — mutating ~/.librarian — is what diagnostics isolation forbids.)
  */
-function makeLibrarianBin(root: string, dataDir: string, diagnosticsDir: string): string {
+function makeLibrarianBin(root: string, dataDir: string, diagnosticsDir: string, indexDir: string): string {
   const bin = fs.mkdtempSync(path.join(root, 'cc-bin-'));
   const script = path.join(bin, 'librarian');
   const body = `#!/usr/bin/env bash
@@ -134,7 +137,7 @@ cmd="$1"
 shift || true
 case "$cmd" in
   collect) exec node ${JSON.stringify(CLI)} collect --data-dir ${JSON.stringify(dataDir)} ;;
-  inject) exec node ${JSON.stringify(CLI)} inject "$@" --data-dir ${JSON.stringify(dataDir)} --diagnostics-dir ${JSON.stringify(diagnosticsDir)} ;;
+  inject) exec node ${JSON.stringify(CLI)} inject "$@" --data-dir ${JSON.stringify(dataDir)} --diagnostics-dir ${JSON.stringify(diagnosticsDir)} --index-dir ${JSON.stringify(indexDir)} ;;
   machine-id) printf 'capstone-machine-id\\n' ;;
   *) exec node ${JSON.stringify(CLI)} "$cmd" "$@" ;;
 esac
@@ -149,7 +152,7 @@ esac
  * data/diagnostics dirs (the plugin's injectArgs deliberately omit them → default ~/.librarian).
  * Node runs this .js shim, the shim spawns `node src/cli.ts …` — a real process both hops.
  */
-function makeOpenCodeBin(root: string, dataDir: string, diagnosticsDir: string): string {
+function makeOpenCodeBin(root: string, dataDir: string, diagnosticsDir: string, indexDir: string): string {
   const bin = path.join(fs.mkdtempSync(path.join(root, 'oc-bin-')), 'librarian.js');
   fs.writeFileSync(
     bin,
@@ -157,7 +160,7 @@ function makeOpenCodeBin(root: string, dataDir: string, diagnosticsDir: string):
 const args = process.argv.slice(2);
 const cmd = args[0];
 const dirs = cmd === 'inject'
-  ? ['--data-dir', ${JSON.stringify(dataDir)}, '--diagnostics-dir', ${JSON.stringify(diagnosticsDir)}]
+  ? ['--data-dir', ${JSON.stringify(dataDir)}, '--diagnostics-dir', ${JSON.stringify(diagnosticsDir)}, '--index-dir', ${JSON.stringify(indexDir)}]
   : cmd === 'collect'
     ? ['--data-dir', ${JSON.stringify(dataDir)}]
     : [];
@@ -243,7 +246,7 @@ function snapshotDir(dir: string): Record<string, string> {
  * Seed enough realistic decoys that the corpus IDF stays positive (a lone note scores below
  * floor, §6), then distill so the ONE source-provenanced note is the real thing recall ships.
  */
-function seedDecoysViaSession(t: { dataDir: string; diagnosticsDir: string; fixturePath: string }): void {
+function seedDecoysViaSession(t: { dataDir: string; diagnosticsDir: string; indexDir: string; fixturePath: string }): void {
   // Five extra eligible sessions with unrelated content → five extra distilled notes as decoys.
   const topics = [
     ['Release checklist', 'tagging the changelog'],
@@ -281,7 +284,7 @@ function seedDecoysViaSession(t: { dataDir: string; diagnosticsDir: string; fixt
       );
     }
     collect(t.dataDir, events);
-    distill({ dataDir: t.dataDir, diagnosticsDir: t.diagnosticsDir, fixturePath: decoyFixture });
+    distill({ dataDir: t.dataDir, diagnosticsDir: t.diagnosticsDir, indexDir: t.indexDir, fixturePath: decoyFixture });
   }
 }
 
@@ -306,7 +309,7 @@ test('push path capstone: a real distilled note surfaces unprompted through BOTH
 
   // --- Ground truth: the seam itself renders the §6 block for this query -----------------
   const seam = runCli(
-    ['inject', '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir],
+    ['inject', '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir, '--index-dir', t.indexDir],
     query,
   );
   assert.equal(seam.status, 0, `seam inject should exit 0; stderr: ${seam.stderr}`);
@@ -314,7 +317,7 @@ test('push path capstone: a real distilled note surfaces unprompted through BOTH
   assert.match(seam.stdout, /Quokka index rebuild decision/, 'the block carries the distilled note title');
 
   // --- Adapter A: Claude Code hook (UserPromptSubmit) → additionalContext ----------------
-  const bin = makeLibrarianBin(t.root, t.dataDir, t.diagnosticsDir);
+  const bin = makeLibrarianBin(t.root, t.dataDir, t.diagnosticsDir, t.indexDir);
   const ccResult = runHookEntry(
     { session_id: 'cc-capstone', cwd: t.repo, hook_event_name: 'UserPromptSubmit', prompt: query },
     t.repo,
@@ -349,7 +352,7 @@ test('push path capstone: a real distilled note surfaces unprompted through BOTH
   assert.deepEqual(ccTrace.shipped_note_ids, [noteId], 'the trace ships exactly the distilled note');
 
   // --- Adapter B: OpenCode two-phase splice → exactly one tagged part ---------------------
-  const ocBin = makeOpenCodeBin(t.root, t.dataDir, t.diagnosticsDir);
+  const ocBin = makeOpenCodeBin(t.root, t.dataDir, t.diagnosticsDir, t.indexDir);
   const prevBin = process.env.LIBRARIAN_BIN;
   const prevRuntime = process.env.LIBRARIAN_RUNTIME;
   const prevMachine = process.env.MACHINE_ID_PATH;
@@ -447,7 +450,7 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
       );
     }
     collect(t.dataDir, events);
-    distill({ dataDir: t.dataDir, diagnosticsDir: t.diagnosticsDir, fixturePath: floorFixture });
+    distill({ dataDir: t.dataDir, diagnosticsDir: t.diagnosticsDir, indexDir: t.indexDir, fixturePath: floorFixture });
   }
 
   const floorNote = (readAllNotes(t.dataDir) as Array<Record<string, unknown>>).find((note) =>
@@ -460,7 +463,7 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
 
   // Ground truth: the seam itself ships nothing for a below-floor query.
   const seam = runCli(
-    ['inject', '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir],
+    ['inject', '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir, '--index-dir', t.indexDir],
     query,
   );
   assert.equal(seam.status, 0, `seam inject should exit 0; stderr: ${seam.stderr}`);
@@ -470,7 +473,7 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
   // its trace store separate from the direct-seam one above, so the below_floor assertion below
   // is proven against the trace THIS transport wrote, not the seam's.
   const ccDiag = path.join(t.root, 'cc-diag');
-  const bin = makeLibrarianBin(t.root, t.dataDir, ccDiag);
+  const bin = makeLibrarianBin(t.root, t.dataDir, ccDiag, t.indexDir);
   const ccResult = runHookEntry(
     { session_id: 'cc-floor', cwd: t.repo, hook_event_name: 'UserPromptSubmit', prompt: query },
     t.repo,
@@ -481,7 +484,7 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
 
   // Adapter B: OpenCode splices zero tagged parts — likewise against its own diagnostics dir.
   const ocDiag = path.join(t.root, 'oc-diag');
-  const ocBin = makeOpenCodeBin(t.root, t.dataDir, ocDiag);
+  const ocBin = makeOpenCodeBin(t.root, t.dataDir, ocDiag, t.indexDir);
   const prevBin = process.env.LIBRARIAN_BIN;
   const prevRuntime = process.env.LIBRARIAN_RUNTIME;
   const prevMachine = process.env.MACHINE_ID_PATH;
@@ -527,7 +530,7 @@ test('push path capstone (negative): a below-floor prompt yields NO injection th
   }
 
   // `why-not` on the same note names the gate the floor applied — the human-facing explanation.
-  const whyNot = runCli(['why-not', query, floorNoteId, '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir]);
+  const whyNot = runCli(['why-not', query, floorNoteId, '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir, '--index-dir', t.indexDir]);
   assert.equal(whyNot.status, 0, `why-not should exit 0; stderr: ${whyNot.stderr}`);
   assert.match(whyNot.stdout, /Gate: below_floor/, 'why-not must name the below_floor gate for the cut note');
 
@@ -549,7 +552,7 @@ test('push path capstone (isolation): the bare inject/why seam confines every wr
   const query = 'quokka index rebuild';
 
   const seam = runCli(
-    ['inject', '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir],
+    ['inject', '--global', '--project', PROJECT_SLUG, '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir, '--index-dir', t.indexDir],
     query,
   );
   assert.equal(seam.status, 0, `seam inject should exit 0; stderr: ${seam.stderr}`);

@@ -278,7 +278,7 @@ function makeGitRepo(projectSlug = 'alpha'): string {
   return repo;
 }
 
-function makeLibrarianBin(dataDir: string, diagnosticsDir: string, failInject = false): string {
+function makeLibrarianBin(dataDir: string, diagnosticsDir: string, indexDir: string, failInject = false): string {
   const bin = tempDir('claude-code-bin-');
   const script = path.join(bin, 'librarian');
   const body = `#!/usr/bin/env bash
@@ -287,7 +287,7 @@ cmd="$1"
 shift || true
 case "$cmd" in
   collect) exec node ${JSON.stringify(CLI)} collect --data-dir ${JSON.stringify(dataDir)} ;;
-  inject) ${failInject ? 'exit 99' : `exec node ${JSON.stringify(CLI)} inject "$@" --data-dir ${JSON.stringify(dataDir)} --diagnostics-dir ${JSON.stringify(diagnosticsDir)}`} ;;
+  inject) ${failInject ? 'exit 99' : `exec node ${JSON.stringify(CLI)} inject "$@" --data-dir ${JSON.stringify(dataDir)} --diagnostics-dir ${JSON.stringify(diagnosticsDir)} --index-dir ${JSON.stringify(indexDir)}`} ;;
   machine-id) printf 'test-machine-id\n' ;;
   *) exec node ${JSON.stringify(CLI)} "$cmd" "$@" ;;
 esac
@@ -386,21 +386,24 @@ test('claude-code hook injects UserPromptSubmit context exactly as `librarian in
   const projectSlug = 'alpha';
   const dataDir = tempDir('claude-code-inject-data-');
   const diagnosticsDir = tempDir('claude-code-inject-diag-');
+  const indexDir = tempDir('claude-code-inject-index-');
   const repo = makeGitRepo(projectSlug);
   appendNote(dataDir, note(1, projectSlug));
   for (let i = 0; i < 8; i += 1) {
     appendNote(dataDir, note(20 + i, projectSlug, { body: { summary: `Unrelated filler ${i}.` } }));
   }
+  const drain = spawnSync('node', [CLI, 'drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir], { encoding: 'utf8' });
+  assert.equal(drain.status, 0, `drain should exit 0; stderr: ${drain.stderr}`);
 
   const direct = spawnSync(
     'node',
-    [CLI, 'inject', '--global', '--project', projectSlug, '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir],
+    [CLI, 'inject', '--global', '--project', projectSlug, '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir],
     { input: 'narwhal failover', encoding: 'utf8' },
   );
   assert.equal(direct.status, 0, `direct inject should exit 0; stderr: ${direct.stderr}`);
   assert.notEqual(direct.stdout, '', 'fixture prompt should produce an inject block');
 
-  const bin = makeLibrarianBin(dataDir, diagnosticsDir);
+  const bin = makeLibrarianBin(dataDir, diagnosticsDir, indexDir);
   const payload = {
     session_id: 'cc-inject-session',
     cwd: repo,
@@ -422,12 +425,15 @@ test('claude-code hook emits no additionalContext for a below-floor prompt but s
   const projectSlug = 'alpha';
   const dataDir = tempDir('claude-code-floor-data-');
   const diagnosticsDir = tempDir('claude-code-floor-diag-');
+  const indexDir = tempDir('claude-code-floor-index-');
   const repo = makeGitRepo(projectSlug);
   for (let i = 0; i < 12; i += 1) {
     appendNote(dataDir, note(i, projectSlug, { body: { summary: `commonfloor token in every note ${i}` } }));
   }
+  const drain = spawnSync('node', [CLI, 'drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir], { encoding: 'utf8' });
+  assert.equal(drain.status, 0, `drain should exit 0; stderr: ${drain.stderr}`);
 
-  const bin = makeLibrarianBin(dataDir, diagnosticsDir);
+  const bin = makeLibrarianBin(dataDir, diagnosticsDir, indexDir);
   const result = runHookEntry(
     { session_id: 'cc-floor-session', cwd: repo, hook_event_name: 'UserPromptSubmit', prompt: 'commonfloor' },
     repo,
@@ -443,6 +449,7 @@ test('claude-code hook injects SessionStart brief from `librarian inject --sessi
   const projectSlug = 'alpha';
   const dataDir = tempDir('claude-code-session-data-');
   const diagnosticsDir = tempDir('claude-code-session-diag-');
+  const indexDir = tempDir('claude-code-session-index-');
   const repo = makeGitRepo(projectSlug);
   appendNote(
     dataDir,
@@ -465,16 +472,18 @@ test('claude-code hook injects SessionStart brief from `librarian inject --sessi
       body: { summary: 'Curated alpha runbook for startup context.' },
     }),
   );
+  const drain = spawnSync('node', [CLI, 'drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir], { encoding: 'utf8' });
+  assert.equal(drain.status, 0, `drain should exit 0; stderr: ${drain.stderr}`);
 
   const direct = spawnSync(
     'node',
-    [CLI, 'inject', '--session-start', '--global', '--project', projectSlug, '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir],
+    [CLI, 'inject', '--session-start', '--global', '--project', projectSlug, '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir],
     { encoding: 'utf8' },
   );
   assert.equal(direct.status, 0, `direct session inject should exit 0; stderr: ${direct.stderr}`);
   assert.notEqual(direct.stdout, '', 'session-start fixture should produce a brief');
 
-  const bin = makeLibrarianBin(dataDir, diagnosticsDir);
+  const bin = makeLibrarianBin(dataDir, diagnosticsDir, indexDir);
   const result = runHookEntry(
     { session_id: 'cc-session-start', cwd: repo, hook_event_name: 'SessionStart', source: 'startup' },
     repo,
@@ -492,10 +501,13 @@ test('claude-code hook contains inject failure: exits 0, emits no context, and s
   const projectSlug = 'alpha';
   const dataDir = tempDir('claude-code-fail-data-');
   const diagnosticsDir = tempDir('claude-code-fail-diag-');
+  const indexDir = tempDir('claude-code-fail-index-');
   const repo = makeGitRepo(projectSlug);
   appendNote(dataDir, note(1, projectSlug));
+  const drain = spawnSync('node', [CLI, 'drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir], { encoding: 'utf8' });
+  assert.equal(drain.status, 0, `drain should exit 0; stderr: ${drain.stderr}`);
 
-  const bin = makeLibrarianBin(dataDir, diagnosticsDir, true);
+  const bin = makeLibrarianBin(dataDir, diagnosticsDir, indexDir, true);
   const result = runHookEntry(
     { session_id: 'cc-inject-fail', cwd: repo, hook_event_name: 'UserPromptSubmit', prompt: 'narwhal failover' },
     repo,

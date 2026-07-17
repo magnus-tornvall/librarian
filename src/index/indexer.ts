@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
-import { readAllNotes } from '../log/noteLog.ts';
-import { advanceCursor } from '../log/cursor.ts';
-import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from '../note.ts';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { NoteRecord, NoteRevision } from '../note.ts';
 
 export function buildSearchText(note: NoteRevision): string {
   return [
@@ -16,83 +16,137 @@ export function buildSearchText(note: NoteRevision): string {
     .join(' ');
 }
 
-export function indexNotes(db: Database.Database, dataDir: string, cursorPath?: string): number {
-  // ponytail: v1 re-reads the whole note log and upserts by note_id instead of tracking a
-  // true byte-offset cursor — cheap and correct at this scale; real incremental reads are
-  // the eventual target per §5 once the log grows large enough to matter.
-  const notes = readAllNotes(dataDir) as NoteRecord[];
-
+function updateFts(db: Database.Database, noteId: string): boolean {
   const deleteStmt = db.prepare('DELETE FROM notes_fts WHERE note_id = ?');
   const insertStmt = db.prepare(
     'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
-  const supersessions = new Map<string, { created_at: string; superseded_by: string }>();
-  for (const record of notes) {
-    if (record.kind !== 'note_supersession') continue;
-    const existing = supersessions.get(record.note_id);
-    if (existing === undefined || record.created_at < existing.created_at) {
-      supersessions.set(record.note_id, { created_at: record.created_at, superseded_by: record.superseded_by });
-    }
-  }
+  const state = db.prepare('SELECT record_json, record_kind, superseded_at, superseded_by FROM note_state WHERE note_id = ?').get(noteId) as
+    | { record_json: string; record_kind: string; superseded_at: string | null; superseded_by: string | null }
+    | undefined;
+  deleteStmt.run(noteId);
+  if (!state || state.record_kind === 'note_tombstone') return false;
+  const note = JSON.parse(state.record_json) as NoteRevision;
+  // Delete first regardless of record kind: a tombstoned note must lose any existing row, and a
+  // surviving revision is deleted-then-reinserted to upsert. This is how a tombstone removes a
+  // note from the index (and therefore from recall) with no separate removal pass.
+  if (!note.source?.origin) return false;
 
-  let indexedCount = 0;
-  for (const note of latestRecordPerNoteId(notes)) {
-    // Delete first regardless of record kind: a tombstoned note must lose any existing row, and a
-    // surviving revision is deleted-then-reinserted to upsert. This is how a tombstone removes a
-    // note from the index (and therefore from recall) with no separate removal pass.
-    deleteStmt.run(note.note_id);
+  let searchText: string;
+  try { searchText = buildSearchText(note); } catch { return false; }
 
-    if (note.kind === 'note_tombstone') {
-      continue; // latest record is a tombstone: leave the note deleted, never re-index it
-    }
+  // Scope columns carry §10.2 `scope` into the index so recall can enforce project
+  // match / explicit global scope (§6). A note with neither project_slug nor global
+  // is stored as project_slug='' + is_global=0 — recall can only reach it via a
+  // matching project scope, never via a global query.
+  const projectSlug = note.scope?.project_slug ?? '';
+  const isGlobal = note.scope?.global === true ? 1 : 0;
 
-    if (!note.source.origin) {
-      continue; // fail-closed: missing origin is a hard skip, never indexed with a null origin
-    }
+  const supersessionWins = state.superseded_at !== null && (note.invalid_at === undefined || state.superseded_at <= note.invalid_at);
+  const invalidAt = supersessionWins ? state.superseded_at : note.invalid_at ?? null;
 
-    let searchText: string;
-    try {
-      searchText = buildSearchText(note);
-    } catch {
-      continue; // fail-closed: one malformed note must not crash indexing for every note after it
-    }
-
-    // Scope columns carry §10.2 `scope` into the index so recall can enforce project
-    // match / explicit global scope (§6). A note with neither project_slug nor global
-    // is stored as project_slug='' + is_global=0 — recall can only reach it via a
-    // matching project scope, never via a global query.
-    const projectSlug = note.scope.project_slug ?? '';
-    const isGlobal = note.scope.global === true ? 1 : 0;
-
-    const supersession = supersessions.get(note.note_id);
-    const supersessionWins = supersession !== undefined && (note.invalid_at === undefined || supersession.created_at <= note.invalid_at);
-    const invalidAt = supersessionWins ? supersession.created_at : note.invalid_at ?? null;
-
-    insertStmt.run(
-      note.note_id,
+  insertStmt.run(
+      noteId,
       note.revision_id,
       note.source.origin,
       note.note_type,
       note.created_at,
       note.valid_at ?? note.created_at,
       invalidAt,
-      supersessionWins ? supersession.superseded_by : null,
+      supersessionWins ? state.superseded_by : null,
       projectSlug,
       isGlobal,
       searchText,
-    );
-    indexedCount += 1;
-  }
+  );
+  return true;
+}
 
-  if (cursorPath !== undefined) {
-    advanceCursor(cursorPath, {
-      consumer: 'indexer',
-      log_name: 'notes',
-      file_path: dataDir,
-      byte_offset: 0,
-      updated_at: new Date().toISOString(),
-    });
+function applyRecord(db: Database.Database, record: NoteRecord): boolean {
+  const current = db.prepare('SELECT record_created_at, superseded_at FROM note_state WHERE note_id = ?').get(record.note_id) as
+    | { record_created_at: string; superseded_at: string | null }
+    | undefined;
+  if (record.kind === 'note_supersession') {
+    if (!current || current.superseded_at === null || record.created_at < current.superseded_at) {
+      if (current) {
+        db.prepare('UPDATE note_state SET superseded_at = ?, superseded_by = ? WHERE note_id = ?').run(record.created_at, record.superseded_by, record.note_id);
+      } else {
+        db.prepare('INSERT INTO note_state (note_id, record_json, record_kind, record_created_at, superseded_at, superseded_by) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(record.note_id, '{}', 'note_supersession', '', record.created_at, record.superseded_by);
+      }
+      return current ? updateFts(db, record.note_id) : false;
+    }
+    return false;
   }
+  if (current && record.created_at < current.record_created_at) return false;
+  db.prepare(`INSERT INTO note_state (note_id, record_json, record_kind, record_created_at, superseded_at, superseded_by)
+    VALUES (?, ?, ?, ?, NULL, NULL)
+    ON CONFLICT(note_id) DO UPDATE SET record_json = excluded.record_json, record_kind = excluded.record_kind, record_created_at = excluded.record_created_at`)
+    .run(record.note_id, JSON.stringify(record), record.kind, record.created_at);
+  return updateFts(db, record.note_id);
+}
 
-  return indexedCount;
+function completeRecords(bytes: Buffer): { records: NoteRecord[]; consumed: number; lastId: string | null } {
+  const end = bytes.lastIndexOf(10);
+  if (end < 0) return { records: [], consumed: 0, lastId: null };
+  const text = bytes.subarray(0, end + 1).toString('utf8');
+  const records: NoteRecord[] = [];
+  let lastId: string | null = null;
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    const record = JSON.parse(line) as NoteRecord;
+    records.push(record);
+    lastId = record.revision_id;
+  }
+  return { records, consumed: end + 1, lastId };
+}
+
+function readPending(file: string, offset: number): Buffer {
+  const end = fs.statSync(file).size;
+  if (offset > end) throw new Error(`index cursor exceeds ${file}`);
+  const bytes = Buffer.alloc(end - offset);
+  if (bytes.length === 0) return bytes;
+  const fd = fs.openSync(file, 'r');
+  try {
+    fs.readSync(fd, bytes, 0, bytes.length, offset);
+    return bytes;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+export function indexNotes(db: Database.Database, dataDir: string): number {
+  const notesDir = path.join(dataDir, 'notes');
+  const segments = fs.existsSync(notesDir) ? fs.readdirSync(notesDir).filter((name) => name.endsWith('.ndjson')).sort() : [];
+  let cursor: { segment: string; byte_offset: number; data_dir: string } | undefined;
+  let indexed = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    cursor = db.prepare('SELECT segment, byte_offset, data_dir FROM index_cursor WHERE id = 1').get() as typeof cursor;
+    if (cursor && (cursor.data_dir !== dataDir || !segments.includes(cursor.segment) || cursor.byte_offset > fs.statSync(path.join(notesDir, cursor.segment)).size)) {
+      db.exec('DELETE FROM notes_fts; DELETE FROM note_state; DELETE FROM index_cursor;');
+      cursor = undefined;
+    }
+    const start = cursor ? segments.indexOf(cursor.segment) : 0;
+    for (let i = Math.max(0, start); i < segments.length; i += 1) {
+      const segment = segments[i];
+      const file = path.join(notesDir, segment);
+      const offset = cursor && i === start ? cursor.byte_offset : 0;
+      const bytes = readPending(file, offset);
+      const parsed = completeRecords(bytes);
+      for (const record of parsed.records) if (applyRecord(db, record)) indexed += 1;
+      if (parsed.consumed > 0) {
+        db.prepare(`INSERT INTO index_cursor (id, segment, byte_offset, last_record_id, updated_at, data_dir) VALUES (1, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET segment = excluded.segment, byte_offset = excluded.byte_offset, last_record_id = excluded.last_record_id, updated_at = excluded.updated_at, data_dir = excluded.data_dir`)
+          .run(segment, offset + parsed.consumed, parsed.lastId, new Date().toISOString(), dataDir);
+      }
+      // Preserve an incomplete trailing line for a later pass rather than moving
+      // the singleton cursor into a newer segment and losing those bytes.
+      if (parsed.consumed < bytes.length) break;
+    }
+    db.exec('COMMIT');
+    return indexed;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
