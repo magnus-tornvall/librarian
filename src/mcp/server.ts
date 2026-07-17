@@ -7,6 +7,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { getNoteShowPayload, runRecall, type RecallOptions } from '../cli.ts';
+import { openIndexRead, stateNotes } from '../index/database.ts';
 import { INDEX_DIR } from '../paths.ts';
 
 const AUTHORITY_FRAMING =
@@ -21,7 +22,7 @@ const SEARCH_TOOL: Tool = {
   name: 'search',
   title: 'Search Librarian Recall',
   description:
-    `Search Librarian's recall index for scored prior-context notes. ${AUTHORITY_FRAMING}`,
+    `Search Librarian's recall index for a compact scored note index. Use get_notes with selected IDs for full bodies, then get_note for source events. ${AUTHORITY_FRAMING}`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -44,9 +45,9 @@ const SEARCH_TOOL: Tool = {
 
 const GET_NOTE_TOOL: Tool = {
   name: 'get_note',
-  title: 'Get Librarian Note',
+  title: 'Get Librarian Note Provenance',
   description:
-    `Return a note by note_id, optionally with provenance source events. ${AUTHORITY_FRAMING}`,
+    `Drill into a note's verbatim provenance source events after search and get_notes; set with_provenance to true. ${AUTHORITY_FRAMING}`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -54,6 +55,21 @@ const GET_NOTE_TOOL: Tool = {
       with_provenance: { type: 'boolean', description: 'Include source provenance events when available.' },
     },
     required: ['note_id'],
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+};
+
+const GET_NOTES_TOOL: Tool = {
+  name: 'get_notes',
+  title: 'Get Librarian Note Bodies',
+  description:
+    `Return full bodies for note IDs selected from search. Use get_note afterwards only to drill into source events. ${AUTHORITY_FRAMING}`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      note_ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'One or more note_ids returned by search.' },
+    },
+    required: ['note_ids'],
   },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 };
@@ -86,6 +102,14 @@ function booleanArg(args: Record<string, unknown>, name: string): boolean | unde
   }
   if (typeof value !== 'boolean') {
     throw new Error(`${name} must be a boolean`);
+  }
+  return value;
+}
+
+function stringArrayArg(args: Record<string, unknown>, name: string): string[] {
+  const value = args[name];
+  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string' || item.length === 0)) {
+    throw new Error(`${name} must be a non-empty array of non-empty strings`);
   }
   return value;
 }
@@ -126,13 +150,43 @@ function search(options: McpServerOptions, args: Record<string, unknown>): CallT
     indexDir: options.indexDir ?? INDEX_DIR,
   };
 
-  return jsonResult(runRecall(recallOptions));
+  const payload = runRecall(recallOptions);
+  return jsonResult({
+    results: payload.results.map(({ note_id, note_type, title, summary, score, created_at, origin }) => ({
+      note_id,
+      note_type,
+      title,
+      summary: summary.replace(/\s+/g, ' ').trim(),
+      score,
+      date: created_at,
+      origin,
+    })),
+    ...(payload.message === undefined ? {} : { message: payload.message }),
+  });
 }
 
 function getNote(options: McpServerOptions, args: Record<string, unknown>): CallToolResult {
   const noteId = stringArg(args, 'note_id', true) ?? '';
   const withProvenance = booleanArg(args, 'with_provenance') ?? false;
   return jsonResult(getNoteShowPayload(options.dataDir, noteId, withProvenance));
+}
+
+function getNotes(options: McpServerOptions, args: Record<string, unknown>): CallToolResult {
+  const noteIds = stringArrayArg(args, 'note_ids');
+  const db = openIndexRead(options.indexDir ?? INDEX_DIR);
+  try {
+    const notesById = new Map(stateNotes(db, noteIds).map((note) => [note.note_id, note]));
+    return jsonResult({
+      notes: noteIds.map((note_id) => {
+        const note = notesById.get(note_id);
+        return note === undefined
+          ? { note_id, error: 'unknown note_id' }
+          : { note_id, body: note.body };
+      }),
+    });
+  } finally {
+    db.close();
+  }
 }
 
 export function createMcpServer(options: McpServerOptions): Server {
@@ -144,7 +198,7 @@ export function createMcpServer(options: McpServerOptions): Server {
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [SEARCH_TOOL, GET_NOTE_TOOL] }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [SEARCH_TOOL, GET_NOTES_TOOL, GET_NOTE_TOOL] }));
 
   server.setRequestHandler(CallToolRequestSchema, (request) => {
     try {
@@ -152,6 +206,8 @@ export function createMcpServer(options: McpServerOptions): Server {
       switch (request.params.name) {
         case 'search':
           return search(options, args);
+        case 'get_notes':
+          return getNotes(options, args);
         case 'get_note':
           return getNote(options, args);
         default:

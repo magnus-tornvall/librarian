@@ -191,11 +191,15 @@ test('pull path capstone: real collect/distill note is searchable by MCP and dri
     assert.equal(hit.summary, (note.body as Record<string, unknown>).summary, 'search result must include the note summary');
     assert.equal(hit.note_type, note.note_type, 'search result must include note_type metadata');
     assert.equal(hit.origin, 'opencode', 'search result must include origin metadata');
-    assert.equal(hit.project_slug, 'librarian', 'search result must include project scope metadata');
-    assert.equal(hit.is_global, false, 'project-scoped notes must not leak into global recall');
-    assert.equal(typeof hit.created_at, 'string', 'search result must include created_at metadata');
+    assert.equal(typeof hit.date, 'string', 'search result must include date metadata');
     assert.equal(typeof hit.score, 'number', 'search result must include a score');
     assert.ok((hit.score as number) > 0, 'the scored hit must clear the relevance floor');
+    assert.equal('body' in hit, false, 'search result must not include a full body');
+
+    const notesPayload = parseToolJson(
+      await client.callTool({ name: 'get_notes', arguments: { note_ids: [note.note_id] } }),
+    );
+    assert.deepEqual(notesPayload, { notes: [{ note_id: note.note_id, body: note.body }] }, 'get_notes must return the full body from the note log');
 
     const notePayload = parseToolJson(
       await client.callTool({ name: 'get_note', arguments: { note_id: note.note_id, with_provenance: true } }),
