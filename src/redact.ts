@@ -11,16 +11,18 @@ function tagFor(secret: string): string {
   return `[REDACTED:token:sha256:${hash}]`;
 }
 
-function stripTagBlocks(text: string, tag: string, replacement = ''): string {
-  const marker = new RegExp(`<(/?)${tag}>`, 'gi');
+function stripTagBlocks(text: string, tag: string, replacement = '', failClosed = false): string {
+  const marker = new RegExp(`<(/?)${tag}(?:\\s[^>]*)?>`, 'gi');
   let result = '';
   let depth = 0;
   let last = 0;
+  let openStart = 0;
 
   for (const match of text.matchAll(marker)) {
     if (depth === 0 && match[1] === '') {
       result += text.slice(last, match.index) + replacement;
       depth = 1;
+      openStart = match.index!;
     } else if (depth > 0 && match[1] === '') {
       depth += 1;
     } else if (depth > 0) {
@@ -29,11 +31,11 @@ function stripTagBlocks(text: string, tag: string, replacement = ''): string {
     }
   }
 
-  return depth > 0 ? result : result + text.slice(last);
+  return depth > 0 && failClosed ? result : result + text.slice(depth > 0 ? openStart : last);
 }
 
 export function redact(text: string): string {
-  const withoutPrivate = stripTagBlocks(text, 'private', '[PRIVATE]');
+  const withoutPrivate = stripTagBlocks(text, 'private', '[PRIVATE]', true);
   const withoutMemory = stripTagBlocks(withoutPrivate, 'librarian-memory');
   return SECRET_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, tagFor), withoutMemory);
 }

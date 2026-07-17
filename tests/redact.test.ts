@@ -25,9 +25,14 @@ test('private spans are fail-closed when unclosed and support nesting', () => {
 
 test('removes all injected librarian-memory blocks', () => {
   assert.equal(
-    redact('ask <librarian-memory>first <librarian-memory>nested</librarian-memory></librarian-memory> now <librarian-memory>second</librarian-memory>'),
+    redact('ask <librarian-memory injection_id="first">first <librarian-memory>nested</librarian-memory></librarian-memory> now <librarian-memory indexed_through="now">second</librarian-memory>'),
     'ask  now ',
   );
+});
+
+test('preserves an unclosed librarian-memory tag as literal prompt text', () => {
+  const text = 'show <librarian-memory> literally';
+  assert.equal(redact(text), text);
 });
 
 test('redacts an AWS-style access key', () => {

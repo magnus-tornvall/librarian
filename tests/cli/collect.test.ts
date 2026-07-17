@@ -94,8 +94,8 @@ test('collect: private spans and injected memory never reach prompt or command e
   ) as Record<string, unknown>;
   const privateText = 'declared private text';
   const memoryText = 'injected note text';
-  prompt.prompt = `keep <private>${privateText}</private> <librarian-memory>${memoryText}</librarian-memory> asking`;
-  command.command = `run <private>${privateText}</private> <librarian-memory>${memoryText}</librarian-memory> now`;
+  prompt.prompt = `keep <private>${privateText}</private> <librarian-memory injection_id="test" indexed_through="now">${memoryText}</librarian-memory> asking`;
+  command.command = `run <private>${privateText}</private> <librarian-memory injection_id="test" indexed_through="now">${memoryText}</librarian-memory> now`;
 
   const result = runCli(['collect', '--data-dir', dataDir], [prompt, command].map(ndjsonLine).join(''));
   assert.equal(result.status, 0, `collect should exit 0; stderr: ${result.stderr}`);
