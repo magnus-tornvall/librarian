@@ -14,11 +14,11 @@ import { openIndexWrite } from '../../src/index/database.ts';
 import { indexNotes } from '../../src/index/indexer.ts';
 import type { InjectionTrace } from '../../src/diagnostics/injectionTrace.ts';
 
-const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
-
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
+
+const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
 
 function runCli(args: string[]): ReturnType<typeof spawnSync> {
   return spawnSync('node', [CLI, ...args], { encoding: 'utf8' });
@@ -105,7 +105,11 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
   for (let i = 0; i < 3; i += 1) {
     appendNote(dataDir, note(i));
   }
-  appendNote(dataDir, note(9, { note_id: 'fact:mcp-email', source: { origin: 'email', distiller: 'llm' } }));
+  appendNote(dataDir, note(9, {
+    note_id: 'fact:mcp-email',
+    source: { origin: 'email', distiller: 'llm' },
+    body: { summary: 'MCP summary 9 with swordfish search term.' },
+  }));
   appendNote(
     dataDir,
     note(10, {
@@ -126,38 +130,38 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
     const tools = await client.listTools();
     assert.deepEqual(
       tools.tools.map((tool) => tool.name).sort(),
-      ['get_note', 'search'],
+      ['get_note', 'get_notes', 'search'],
     );
-    assert.match(tools.tools.find((tool) => tool.name === 'search')?.description ?? '', /current repository evidence/i);
+    assert.match(tools.tools.find((tool) => tool.name === 'search')?.description ?? '', /get_notes/i);
 
     const mcpSearch = parseToolJson(
-      await client.callTool({ name: 'search', arguments: { query: 'narwhal', project_slug: 'alpha', origin: 'email', limit: 50 } }),
+      await client.callTool({ name: 'search', arguments: { query: 'swordfish', project_slug: 'alpha', origin: 'email', limit: 50 } }),
     );
-    const cliSearch = runCli([
-      'recall',
-      'narwhal',
-      '--project',
-      'alpha',
-      '--origin',
-      'email',
-      '--limit',
-      '50',
-      '--json',
-      '--data-dir',
-      dataDir,
-      '--diagnostics-dir',
-      diagnosticsDir,
-      '--index-dir',
-      indexDir,
-    ]);
-    assert.equal(cliSearch.status, 0, `recall CLI should exit 0; stderr: ${cliSearch.stderr}`);
-    assert.deepEqual(mcpSearch.results, JSON.parse(cliSearch.stdout));
+    const searchResults = mcpSearch.results as Array<Record<string, unknown>>;
+    assert.equal(searchResults.length, 1);
+    assert.deepEqual(Object.keys(searchResults[0]).sort(), ['date', 'note_id', 'note_type', 'origin', 'score', 'summary', 'title']);
+    assert.equal(searchResults[0].note_id, 'fact:mcp-email');
+    assert.equal(searchResults[0].summary, 'MCP summary 9 with swordfish search term.');
     assert.ok(
       readTraces(diagnosticsDir).some(
-        (trace) => trace.path === 'pull' && trace.query === 'narwhal' && trace.candidates.length > 0,
+        (trace) => trace.path === 'pull' && trace.query === 'swordfish' && trace.candidates.length > 0,
       ),
       'MCP search must write a pull-marked diagnostics trace',
     );
+
+    const mcpNotes = parseToolJson(
+      await client.callTool({ name: 'get_notes', arguments: { note_ids: ['fact:mcp-email', 'fact:mcp-provenance', 'fact:missing'] } }),
+    );
+    assert.deepEqual(mcpNotes, {
+      notes: [
+        { note_id: 'fact:mcp-email', body: { summary: 'MCP summary 9 with swordfish search term.' } },
+        { note_id: 'fact:mcp-provenance', body: { summary: 'MCP summary 10 with narwhal search term.' } },
+        { note_id: 'fact:missing', error: 'unknown note_id' },
+      ],
+    });
+    const invalidIds = await client.callTool({ name: 'get_notes', arguments: { note_ids: [''] } });
+    assert.equal(invalidIds.isError, true);
+    assert.match(invalidIds.content[0]?.type === 'text' ? invalidIds.content[0].text : '', /non-empty array of non-empty strings/);
 
     const mcpNote = parseToolJson(
       await client.callTool({ name: 'get_note', arguments: { note_id: 'fact:mcp-provenance', with_provenance: true } }),
