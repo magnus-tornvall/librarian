@@ -108,7 +108,7 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
   appendNote(dataDir, note(9, {
     note_id: 'fact:mcp-email',
     source: { origin: 'email', distiller: 'llm' },
-    body: { summary: 'MCP summary 9 with swordfish search term.' },
+    body: { summary: 'MCP summary 9 with swordfish\nsearch term.' },
   }));
   appendNote(
     dataDir,
@@ -133,6 +133,7 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
       ['get_note', 'get_notes', 'search'],
     );
     assert.match(tools.tools.find((tool) => tool.name === 'search')?.description ?? '', /get_notes/i);
+    assert.match(tools.tools.find((tool) => tool.name === 'get_note')?.description ?? '', /with_provenance to true/i);
 
     const mcpSearch = parseToolJson(
       await client.callTool({ name: 'search', arguments: { query: 'swordfish', project_slug: 'alpha', origin: 'email', limit: 50 } }),
@@ -154,7 +155,7 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
     );
     assert.deepEqual(mcpNotes, {
       notes: [
-        { note_id: 'fact:mcp-email', body: { summary: 'MCP summary 9 with swordfish search term.' } },
+        { note_id: 'fact:mcp-email', body: { summary: 'MCP summary 9 with swordfish\nsearch term.' } },
         { note_id: 'fact:mcp-provenance', body: { summary: 'MCP summary 10 with narwhal search term.' } },
         { note_id: 'fact:missing', error: 'unknown note_id' },
       ],
@@ -198,6 +199,40 @@ test('MCP get_note surfaces missing provenance logs as tool errors', async () =>
     const result = await client.callTool({ name: 'get_note', arguments: { note_id: 'fact:mcp-1', with_provenance: true } });
     assert.equal(result.isError, true);
     assert.match(result.content[0]?.type === 'text' ? result.content[0].text : '', /missing provenance session log/);
+  } finally {
+    await client.close();
+    await transport.close();
+  }
+});
+
+test('MCP get_notes reads indexed note state when the note log is unavailable', async () => {
+  const root = tempDir('mcp-server-warm-index-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
+  const target = note(1, {
+    note_id: 'fact:mcp-warm-index',
+    body: { summary: 'Lantern protocol persists in the index.' },
+  });
+  appendNote(dataDir, target);
+  for (let i = 2; i < 8; i += 1) {
+    appendNote(dataDir, note(i));
+  }
+  bootstrapIndex(dataDir, indexDir);
+  fs.renameSync(path.join(dataDir, 'notes'), path.join(dataDir, 'notes-unavailable'));
+  const { client, transport } = await connectClient(dataDir, diagnosticsDir, indexDir);
+
+  try {
+    const searchPayload = parseToolJson(
+      await client.callTool({ name: 'search', arguments: { query: 'lantern', project_slug: 'alpha' } }),
+    );
+    const searchResults = searchPayload.results as Array<Record<string, unknown>>;
+    assert.ok(searchResults.some((result) => result.note_id === target.note_id));
+
+    const notesPayload = parseToolJson(
+      await client.callTool({ name: 'get_notes', arguments: { note_ids: [target.note_id] } }),
+    );
+    assert.deepEqual(notesPayload, { notes: [{ note_id: target.note_id, body: target.body }] });
   } finally {
     await client.close();
     await transport.close();

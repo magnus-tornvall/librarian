@@ -6,7 +6,8 @@ import {
   type CallToolResult,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { findLatestNote, getNoteShowPayload, runRecall, type RecallOptions } from '../cli.ts';
+import { getNoteShowPayload, runRecall, type RecallOptions } from '../cli.ts';
+import { openIndexRead, stateNotes } from '../index/database.ts';
 import { INDEX_DIR } from '../paths.ts';
 
 const AUTHORITY_FRAMING =
@@ -46,7 +47,7 @@ const GET_NOTE_TOOL: Tool = {
   name: 'get_note',
   title: 'Get Librarian Note Provenance',
   description:
-    `Drill into a note's verbatim provenance source events after search and get_notes. ${AUTHORITY_FRAMING}`,
+    `Drill into a note's verbatim provenance source events after search and get_notes; set with_provenance to true. ${AUTHORITY_FRAMING}`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -155,7 +156,7 @@ function search(options: McpServerOptions, args: Record<string, unknown>): CallT
       note_id,
       note_type,
       title,
-      summary,
+      summary: summary.replace(/\s+/g, ' ').trim(),
       score,
       date: created_at,
       origin,
@@ -172,14 +173,20 @@ function getNote(options: McpServerOptions, args: Record<string, unknown>): Call
 
 function getNotes(options: McpServerOptions, args: Record<string, unknown>): CallToolResult {
   const noteIds = stringArrayArg(args, 'note_ids');
-  return jsonResult({
-    notes: noteIds.map((note_id) => {
-      const note = findLatestNote(options.dataDir, note_id);
-      return note?.kind === 'note_revision'
-        ? { note_id, body: note.body }
-        : { note_id, error: 'unknown note_id' };
-    }),
-  });
+  const db = openIndexRead(options.indexDir ?? INDEX_DIR);
+  try {
+    const notesById = new Map(stateNotes(db, noteIds).map((note) => [note.note_id, note]));
+    return jsonResult({
+      notes: noteIds.map((note_id) => {
+        const note = notesById.get(note_id);
+        return note === undefined
+          ? { note_id, error: 'unknown note_id' }
+          : { note_id, body: note.body };
+      }),
+    });
+  } finally {
+    db.close();
+  }
 }
 
 export function createMcpServer(options: McpServerOptions): Server {
