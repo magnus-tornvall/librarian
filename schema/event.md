@@ -46,9 +46,11 @@ type SessionEvent = EventBase & { type: "session"; action: "start" | "stop" | "c
 
 ## Rules
 
-Redaction before append; `resource` stores facts, not authoritative identity; `project_slug`
-not on events; hints non-authoritative; partial lines ignored/quarantined; cursors advance
-after success; validators hard-reject `record_class: diagnostic`. **Provenance is
+Redaction before append: `<private>...</private>` spans in prompt and command fields become
+`[PRIVATE]` without a hash, and injected `<librarian-memory>...</librarian-memory>` blocks are
+removed. `resource` stores facts, not authoritative identity; `project_slug` not on events;
+hints non-authoritative; partial lines ignored/quarantined; cursors advance after success;
+validators hard-reject `record_class: diagnostic`. **Provenance is
 collector-stamped, never LLM-authored:** the renderer presents events with ordinal indexes;
 the LLM cites indexes; the collector maps indexes → ULIDs. Mechanical fields belong to code.
 

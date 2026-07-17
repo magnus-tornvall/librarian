@@ -11,6 +11,29 @@ function tagFor(secret: string): string {
   return `[REDACTED:token:sha256:${hash}]`;
 }
 
+function stripTagBlocks(text: string, tag: string, replacement = ''): string {
+  const marker = new RegExp(`<(/?)${tag}>`, 'gi');
+  let result = '';
+  let depth = 0;
+  let last = 0;
+
+  for (const match of text.matchAll(marker)) {
+    if (depth === 0 && match[1] === '') {
+      result += text.slice(last, match.index) + replacement;
+      depth = 1;
+    } else if (depth > 0 && match[1] === '') {
+      depth += 1;
+    } else if (depth > 0) {
+      depth -= 1;
+      if (depth === 0) last = match.index! + match[0].length;
+    }
+  }
+
+  return depth > 0 ? result : result + text.slice(last);
+}
+
 export function redact(text: string): string {
-  return SECRET_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, tagFor), text);
+  const withoutPrivate = stripTagBlocks(text, 'private', '[PRIVATE]');
+  const withoutMemory = stripTagBlocks(withoutPrivate, 'librarian-memory');
+  return SECRET_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, tagFor), withoutMemory);
 }

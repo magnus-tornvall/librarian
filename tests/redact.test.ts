@@ -11,6 +11,25 @@ test('plain text with no secret-shaped substring passes through unchanged', () =
   assert.equal(redact(text), text);
 });
 
+test('replaces private spans without retaining their content or a correlation hash', () => {
+  const result = redact('keep <private>do not persist this</private> and <private>this either</private>');
+  assert.equal(result, 'keep [PRIVATE] and [PRIVATE]');
+  assert.ok(!result.includes('do not persist this'));
+  assert.ok(!result.includes('sha256'));
+});
+
+test('private spans are fail-closed when unclosed and support nesting', () => {
+  assert.equal(redact('keep <private>outer <private>inner</private> secret</private> end'), 'keep [PRIVATE] end');
+  assert.equal(redact('keep <private>do not persist'), 'keep [PRIVATE]');
+});
+
+test('removes all injected librarian-memory blocks', () => {
+  assert.equal(
+    redact('ask <librarian-memory>first <librarian-memory>nested</librarian-memory></librarian-memory> now <librarian-memory>second</librarian-memory>'),
+    'ask  now ',
+  );
+});
+
 test('redacts an AWS-style access key', () => {
   const result = redact('export AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP');
   assert.match(result, /^export AWS_ACCESS_KEY_ID=\[REDACTED:token:sha256:[0-9a-f]{8}\]$/);

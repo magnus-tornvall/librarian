@@ -218,6 +218,26 @@ test('distill: an eligible session lands one note with correct origin and proven
   assert.equal(cursor.consumer, 'distiller');
 });
 
+test('distill: private prompt content stripped during collect cannot reach the provider or minted note', async () => {
+  const root = tempDir('cli-distill-private-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const sessionId = 'sess-private';
+  const privateText = 'the production database password is atlas-42';
+  const events = eligibleEvents(sessionId);
+  events[0].prompt = `fix the login redirect <private>${privateText}</private>`;
+  ingest(dataDir, events);
+
+  const scripted = scriptedProvider([LLM_RESPONSE, FAITHFUL_RESPONSE]);
+  const result = await runDistill({ dataDir, diagnosticsDir, provider: scripted.provider });
+  assert.equal(result.distilled, 1);
+  assert.ok(scripted.prompts.every((prompt) => !prompt.includes(privateText)));
+
+  const notes = noteRevisions(dataDir);
+  assert.equal(notes.length, 1);
+  assert.ok(!JSON.stringify(notes[0]).includes(privateText));
+});
+
 test('distill: faithful first try appends one note after exactly two provider calls', async () => {
   const root = tempDir('cli-distill-verify-faithful-');
   const dataDir = path.join(root, 'data');
