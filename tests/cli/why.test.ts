@@ -27,8 +27,8 @@ function bootstrapIndex(dataDir: string, indexDir: string): void {
   }
 }
 
-function runCli(args: string[], indexDir?: string, stdin = ''): ReturnType<typeof spawnSync> {
-  return spawnSync('node', [CLI, ...args, ...(indexDir ? ['--index-dir', indexDir] : [])], { input: stdin, encoding: 'utf8' });
+function runCli(args: string[], indexDir?: string, stdin = '', env?: NodeJS.ProcessEnv): ReturnType<typeof spawnSync> {
+  return spawnSync('node', [CLI, ...args, ...(indexDir ? ['--index-dir', indexDir] : [])], { input: stdin, encoding: 'utf8', env });
 }
 
 function note(index: number, overrides: Partial<NoteRevision> = {}): NoteRevision {
@@ -222,4 +222,61 @@ test('why-not budget gate matches the pull-path limit of 10, not the scoring cap
     assert.equal(result.status, 0, `why-not should exit 0; stderr: ${result.stderr}`);
     assert.match(result.stdout, /Gate: shipped/, `why-not must report ${noteId} as shipped, not cut, since recall ships it`);
   }
+});
+
+test('scoring config is loaded into injection snapshots and every recall explanation', () => {
+  const t = tempRoot();
+  const env = { ...process.env, HOME: path.join(t.root, 'home') };
+  appendNote(t.dataDir, note(1, {
+    note_id: 'fact:config-armadillo',
+    body: { summary: 'Armadillo policy must use the configured scoring policy.' },
+  }));
+  for (let i = 0; i < 12; i += 1) {
+    appendNote(t.dataDir, note(20 + i, { body: { summary: `Unrelated filler note ${i}.` } }));
+  }
+  bootstrapIndex(t.dataDir, t.indexDir);
+  const injectArgs = ['inject', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir];
+
+  const missing = runCli(injectArgs, t.indexDir, 'armadillo', env);
+  assert.equal(missing.status, 0, `missing config inject should exit 0; stderr: ${missing.stderr}`);
+  const missingTrace = readTraces(t.diagnosticsDir).filter((trace) => trace.query === 'armadillo').at(-1);
+  assert.ok(missingTrace);
+
+  fs.mkdirSync(path.join(env.HOME!, '.librarian'), { recursive: true });
+  fs.writeFileSync(path.join(env.HOME!, '.librarian', 'config.json'), '{}');
+  const empty = runCli(injectArgs, t.indexDir, 'armadillo', env);
+  assert.equal(empty.status, 0, `empty config inject should exit 0; stderr: ${empty.stderr}`);
+  const emptyTrace = readTraces(t.diagnosticsDir).filter((trace) => trace.query === 'armadillo').at(-1);
+  assert.ok(emptyTrace);
+  assert.deepEqual(emptyTrace.config_snapshot, missingTrace.config_snapshot);
+  assert.deepEqual(
+    emptyTrace.candidates.map(({ note_id, cut_reason }) => ({ note_id, cut_reason })),
+    missingTrace.candidates.map(({ note_id, cut_reason }) => ({ note_id, cut_reason })),
+    'an empty config must preserve the ranking and cuts',
+  );
+
+  fs.writeFileSync(path.join(env.HOME!, '.librarian', 'config.json'), JSON.stringify({
+    scoring: { originWeights: { opencode: 2 }, relevanceFloor: 1000 },
+  }));
+  const changed = runCli(injectArgs, t.indexDir, 'armadillo', env);
+  assert.equal(changed.status, 0, `configured inject should exit 0; stderr: ${changed.stderr}`);
+  const changedTrace = readTraces(t.diagnosticsDir).filter((trace) => trace.query === 'armadillo').at(-1);
+  assert.ok(changedTrace);
+  const snapshot = changedTrace.config_snapshot as { originWeights: Record<string, number>; relevanceFloor: number };
+  assert.equal(snapshot.originWeights.opencode, 2);
+  assert.equal(snapshot.relevanceFloor, 1000);
+
+  const why = runCli(['why', changedTrace.injection_id, '--diagnostics-dir', t.diagnosticsDir], undefined, '', env);
+  assert.equal(why.status, 0, `why should replay configured trace; stderr: ${why.stderr}`);
+  assert.match(why.stdout, /"opencode":2/);
+  assert.match(why.stdout, /"relevanceFloor":1000/);
+
+  const whyNot = runCli(['why-not', 'armadillo', 'fact:config-armadillo', '--project', 'alpha', '--data-dir', t.dataDir], t.indexDir, '', env);
+  assert.equal(whyNot.status, 0, `why-not should apply configured floor; stderr: ${whyNot.stderr}`);
+  assert.match(whyNot.stdout, /Gate: below_floor/);
+
+  fs.writeFileSync(path.join(env.HOME!, '.librarian', 'config.json'), JSON.stringify({ scoring: { projectBoost: 'large' } }));
+  const malformed = runCli(['recall', 'armadillo', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], t.indexDir, '', env);
+  assert.notEqual(malformed.status, 0);
+  assert.match(malformed.stderr, /scoring\.projectBoost/);
 });
