@@ -18,6 +18,9 @@ roadmap item 9 (issues #59–#63); the machine-facing proof is
 - A lock file (`data/locks/distiller.lock`) that outlives its owner is a crash
   artifact. `drain` recovers a stale lock automatically; deleting one by hand only
   short-circuits that recovery. Never delete a lock while a distill/drain is running.
+- `index/` contains only the disposable recall index. If it is missing, stale, or
+  incompatible, delete it with `rm -rf ~/.librarian/index` and run `librarian drain`.
+  The canonical note log in `data/` rebuilds `index/notes.db`.
 
 ## Reading a quarantine verdict
 

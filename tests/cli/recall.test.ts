@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { appendNote } from '../../src/log/noteLog.ts';
 import { readAll } from '../../src/log/ndjson.ts';
+import { openIndexWrite } from '../../src/index/database.ts';
+import { indexNotes } from '../../src/index/indexer.ts';
 import type { InjectionTrace } from '../../src/diagnostics/injectionTrace.ts';
 import type { NoteRevision } from '../../src/note.ts';
 
@@ -15,8 +17,17 @@ function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-function runCli(args: string[]): ReturnType<typeof spawnSync> {
-  return spawnSync('node', [CLI, ...args], { encoding: 'utf8' });
+function bootstrapIndex(dataDir: string, indexDir: string): void {
+  const db = openIndexWrite(indexDir);
+  try {
+    indexNotes(db, dataDir);
+  } finally {
+    db.close();
+  }
+}
+
+function runCli(args: string[], indexDir?: string): ReturnType<typeof spawnSync> {
+  return spawnSync('node', [CLI, ...args, ...(indexDir ? ['--index-dir', indexDir] : [])], { encoding: 'utf8' });
 }
 
 function note(index: number, overrides: Partial<NoteRevision> = {}): NoteRevision {
@@ -80,7 +91,9 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
   const root = tempDir('cli-recall-');
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
   seedRecallCorpus(dataDir);
+  bootstrapIndex(dataDir, indexDir);
 
   const capped = runCli([
     'recall',
@@ -94,7 +107,7 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
     dataDir,
     '--diagnostics-dir',
     diagnosticsDir,
-  ]);
+  ], indexDir);
   assert.equal(capped.status, 0, `recall should exit 0; stderr: ${capped.stderr}`);
   const cappedPayload = JSON.parse(capped.stdout) as Array<Record<string, unknown>>;
   assert.equal(cappedPayload.length, 10, 'pull recall must cap requested limits at 10');
@@ -124,7 +137,7 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
     dataDir,
     '--diagnostics-dir',
     diagnosticsDir,
-  ]);
+  ], indexDir);
   assert.equal(originFiltered.status, 0, `origin-filtered recall should exit 0; stderr: ${originFiltered.stderr}`);
   const originPayload = JSON.parse(originFiltered.stdout) as Array<Record<string, unknown>>;
   assert.deepEqual(originPayload.map((row) => row.note_id), ['fact:email-origin']);
@@ -138,7 +151,7 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
     dataDir,
     '--diagnostics-dir',
     diagnosticsDir,
-  ]);
+  ], indexDir);
   assert.equal(failClosed.status, 0, `bare recall should exit 0; stderr: ${failClosed.stderr}`);
   assert.deepEqual(JSON.parse(failClosed.stdout), []);
 
@@ -152,7 +165,7 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
     dataDir,
     '--diagnostics-dir',
     diagnosticsDir,
-  ]);
+  ], indexDir);
   assert.equal(punctuation.status, 0, `punctuation recall should exit 0; stderr: ${punctuation.stderr}`);
   const punctuationPayload = JSON.parse(punctuation.stdout) as Array<Record<string, unknown>>;
   assert.equal(punctuationPayload[0]?.note_id, 'fact:punctuation-query');
@@ -168,6 +181,7 @@ test('supersede appends an annotation, excludes only the stale fact, and why-not
   const root = tempDir('cli-supersede-');
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
   const oldNote = note(50, {
     note_id: 'fact:stale-mackerel', revision_id: 'stale-rev', title: 'Old mackerel fact',
     body: { summary: 'Mackerel uses the obsolete harbor protocol.' },
@@ -179,23 +193,24 @@ test('supersede appends an annotation, excludes only the stale fact, and why-not
   appendNote(dataDir, oldNote);
   appendNote(dataDir, newNote);
   for (let i = 0; i < 4; i += 1) appendNote(dataDir, note(60 + i, { body: { summary: `Unrelated decoy ${i}.` } }));
+  bootstrapIndex(dataDir, indexDir);
 
   const logPath = path.join(dataDir, 'notes', `${new Date().toISOString().slice(0, 7)}.ndjson`);
   const beforeLength = fs.statSync(logPath).size;
-  const superseded = runCli(['supersede', oldNote.note_id, newNote.note_id, '--reason', 'corrected', '--data-dir', dataDir]);
+  const superseded = runCli(['supersede', oldNote.note_id, newNote.note_id, '--reason', 'corrected', '--data-dir', dataDir], indexDir);
   assert.equal(superseded.status, 0, `supersede should exit 0; stderr: ${superseded.stderr}`);
   const annotation = JSON.parse(superseded.stdout) as Record<string, unknown>;
   assert.equal(annotation.kind, 'note_supersession');
   assert.equal(annotation.superseded_by, newNote.note_id);
   assert.ok(fs.statSync(logPath).size > beforeLength, 'supersede must append without mutating the prior log bytes');
 
-  const recalled = runCli(['recall', 'mackerel', '--project', 'alpha', '--json', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir]);
+  const recalled = runCli(['recall', 'mackerel', '--project', 'alpha', '--json', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir], indexDir);
   assert.equal(recalled.status, 0, `recall should exit 0; stderr: ${recalled.stderr}`);
   const ids = (JSON.parse(recalled.stdout) as Array<{ note_id: string }>).map((result) => result.note_id);
   assert.ok(ids.includes(newNote.note_id));
   assert.ok(!ids.includes(oldNote.note_id));
 
-  const whyNot = runCli(['why-not', 'mackerel', oldNote.note_id, '--project', 'alpha', '--data-dir', dataDir]);
+  const whyNot = runCli(['why-not', 'mackerel', oldNote.note_id, '--project', 'alpha', '--data-dir', dataDir], indexDir);
   assert.equal(whyNot.status, 0, `why-not should exit 0; stderr: ${whyNot.stderr}`);
   assert.match(whyNot.stdout, /Gate: superseded/);
   assert.match(whyNot.stdout, new RegExp(`Superseded By: ${newNote.note_id}`));
@@ -205,7 +220,7 @@ test('supersede appends an annotation, excludes only the stale fact, and why-not
   assert.equal((JSON.parse(shown.stdout) as { note: NoteRevision }).note.revision_id, oldNote.revision_id);
 
   const beforeUnknown = fs.statSync(logPath).size;
-  const unknown = runCli(['supersede', 'fact:missing', newNote.note_id, '--data-dir', dataDir]);
+  const unknown = runCli(['supersede', 'fact:missing', newNote.note_id, '--data-dir', dataDir], indexDir);
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr, /unknown note_id: fact:missing/);
   assert.equal(fs.statSync(logPath).size, beforeUnknown, 'unknown IDs must not append a record');

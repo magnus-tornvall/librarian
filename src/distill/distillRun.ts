@@ -5,6 +5,8 @@ import { distill } from './llmDistiller.ts';
 import { verifyNote, type VerifyVerdict } from './verifyNote.ts';
 import { findNearDuplicate } from './noveltyGate.ts';
 import { appendNote, readAllNotes } from '../log/noteLog.ts';
+import { openIndexWrite } from '../index/database.ts';
+import { indexNotes } from '../index/indexer.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
 import { acquireLock } from '../log/lock.ts';
@@ -265,6 +267,7 @@ export type DistillRunOptions = {
   dataDir: string;
   diagnosticsDir: string;
   provider: InferenceProvider;
+  indexDir?: string;
 };
 
 /**
@@ -335,7 +338,18 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
     return { distilled: 0, duplicates: 0, skipped: 0, noops: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
   }
   try {
-    return await runDistillPass(options);
+    const result = await runDistillPass(options);
+    try {
+      const db = openIndexWrite(options.indexDir);
+      try {
+        indexNotes(db, options.dataDir);
+      } finally {
+        db.close();
+      }
+    } catch (err) {
+      process.stderr.write(`librarian: note is durable but the index is stale; run librarian drain: ${(err as Error).message}\n`);
+    }
+    return result;
   } finally {
     lock.release();
   }
@@ -493,7 +507,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
       }
 
       const rejectDuplicate = (draft: NoteRevision): boolean => {
-        const duplicate = draft.identity.mode === 'episodic' ? findNearDuplicate(dataDir, draft) : null;
+        const duplicate = draft.identity.mode === 'episodic' ? findNearDuplicate(dataDir, draft, options.indexDir) : null;
         if (duplicate === null) return false;
         writeDistillVerdict(diagnosticsDir, {
           record_class: 'diagnostic',

@@ -24,9 +24,10 @@ function makeTempDirs() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pull-path-capstone-'));
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
   const fixturePath = path.join(root, 'llm-response.json');
   fs.writeFileSync(fixturePath, JSON.stringify([LLM_RESPONSE, FAITHFUL_RESPONSE]));
-  return { root, dataDir, diagnosticsDir, fixturePath };
+  return { root, dataDir, diagnosticsDir, indexDir, fixturePath };
 }
 
 function runCli(args: string[], stdin = ''): ReturnType<typeof spawnSync> {
@@ -82,22 +83,24 @@ function collect(dataDir: string, events: Array<Record<string, unknown>>): void 
   assert.equal(result.status, 0, `collect should exit 0; stderr: ${result.stderr}`);
 }
 
-function distill(t: { dataDir: string; diagnosticsDir: string; fixturePath: string }): void {
+function distill(t: { dataDir: string; diagnosticsDir: string; indexDir: string; fixturePath: string }): void {
   const result = runCli([
     'distill',
     '--data-dir',
     t.dataDir,
     '--diagnostics-dir',
     t.diagnosticsDir,
+    '--index-dir',
+    t.indexDir,
     '--provider-fixture',
     t.fixturePath,
   ]);
   assert.equal(result.status, 0, `distill should exit 0; stderr: ${result.stderr}`);
 }
 
-function seedDecoyNotes(dataDir: string): void {
+function seedDecoyNotes(t: { dataDir: string; diagnosticsDir: string; indexDir: string; fixturePath: string }): void {
   for (let i = 0; i < 5; i += 1) {
-    appendNote(dataDir, {
+    appendNote(t.dataDir, {
       kind: 'note_revision',
       schema_version: 1,
       note_id: `decoy:pull-${i}`,
@@ -113,6 +116,8 @@ function seedDecoyNotes(dataDir: string): void {
       body: { summary: `Assorted unrelated content ${i} about release checklists and editor settings.` },
     });
   }
+  const result = runCli(['drain', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir, '--index-dir', t.indexDir, '--provider-fixture', t.fixturePath]);
+  assert.equal(result.status, 0, `drain should exit 0; stderr: ${result.stderr}`);
 }
 
 function parseToolJson(result: Awaited<ReturnType<Client['callTool']>>): Record<string, unknown> {
@@ -147,10 +152,10 @@ function snapshotNotes(dataDir: string): Record<string, string> {
   );
 }
 
-async function connectClient(dataDir: string, diagnosticsDir: string): Promise<{ client: Client; transport: StdioClientTransport }> {
+async function connectClient(dataDir: string, diagnosticsDir: string, indexDir: string): Promise<{ client: Client; transport: StdioClientTransport }> {
   const transport = new StdioClientTransport({
     command: 'node',
-    args: [CLI, 'mcp', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir],
+    args: [CLI, 'mcp', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir],
     stderr: 'pipe',
   });
   const client = new Client({ name: 'librarian-pull-path-capstone', version: '0.0.0' });
@@ -163,7 +168,7 @@ test('pull path capstone: real collect/distill note is searchable by MCP and dri
   const sessionId = 'pull-path-capstone-session';
   const events = fixtureEvents(sessionId);
 
-  seedDecoyNotes(t.dataDir);
+  seedDecoyNotes(t);
   collect(t.dataDir, events);
   distill(t);
 
@@ -174,7 +179,7 @@ test('pull path capstone: real collect/distill note is searchable by MCP and dri
   const note = notes[0];
   const beforeNotes = snapshotNotes(t.dataDir);
 
-  const { client, transport } = await connectClient(t.dataDir, t.diagnosticsDir);
+  const { client, transport } = await connectClient(t.dataDir, t.diagnosticsDir, t.indexDir);
   try {
     const searchPayload = parseToolJson(
       await client.callTool({ name: 'search', arguments: { query: 'periwinkle', project_slug: 'librarian', limit: 10 } }),

@@ -10,6 +10,8 @@ import { appendNote } from '../../src/log/noteLog.ts';
 import type { NoteRevision } from '../../src/note.ts';
 import { appendRecord } from '../../src/log/ndjson.ts';
 import { readAll } from '../../src/log/ndjson.ts';
+import { openIndexWrite } from '../../src/index/database.ts';
+import { indexNotes } from '../../src/index/indexer.ts';
 import type { InjectionTrace } from '../../src/diagnostics/injectionTrace.ts';
 
 const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
@@ -20,6 +22,15 @@ function tempDir(prefix: string): string {
 
 function runCli(args: string[]): ReturnType<typeof spawnSync> {
   return spawnSync('node', [CLI, ...args], { encoding: 'utf8' });
+}
+
+function bootstrapIndex(dataDir: string, indexDir: string): void {
+  const db = openIndexWrite(indexDir);
+  try {
+    indexNotes(db, dataDir);
+  } finally {
+    db.close();
+  }
 }
 
 function note(index: number, overrides: Partial<NoteRevision> = {}): NoteRevision {
@@ -72,10 +83,10 @@ function readTraces(diagnosticsDir: string): InjectionTrace[] {
     .flatMap((name) => readAll(path.join(injectionsDir, name)) as InjectionTrace[]);
 }
 
-async function connectClient(dataDir: string, diagnosticsDir: string): Promise<{ client: Client; transport: StdioClientTransport }> {
+async function connectClient(dataDir: string, diagnosticsDir: string, indexDir: string): Promise<{ client: Client; transport: StdioClientTransport }> {
   const transport = new StdioClientTransport({
     command: 'node',
-    args: [CLI, 'mcp', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir],
+    args: [CLI, 'mcp', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir],
     stderr: 'pipe',
   });
   const client = new Client({ name: 'librarian-mcp-test', version: '0.0.0' });
@@ -87,6 +98,7 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
   const root = tempDir('mcp-server-');
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
   const sessionId = 'sess-mcp-provenance';
   const events = [event(sessionId, 1, 'remember the exact MCP prompt'), event(sessionId, 2, 'second provenance event')];
 
@@ -104,10 +116,11 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
   for (const storedEvent of events) {
     appendRecord(path.join(dataDir, 'events', `${sessionId}.ndjson`), storedEvent);
   }
+  bootstrapIndex(dataDir, indexDir);
 
   const noteLogPath = path.join(dataDir, 'notes', '2026-07.ndjson');
   const beforeNoteLog = fs.readFileSync(noteLogPath, 'utf8');
-  const { client, transport } = await connectClient(dataDir, diagnosticsDir);
+  const { client, transport } = await connectClient(dataDir, diagnosticsDir, indexDir);
 
   try {
     const tools = await client.listTools();
@@ -134,6 +147,8 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
       dataDir,
       '--diagnostics-dir',
       diagnosticsDir,
+      '--index-dir',
+      indexDir,
     ]);
     assert.equal(cliSearch.status, 0, `recall CLI should exit 0; stderr: ${cliSearch.stderr}`);
     assert.deepEqual(mcpSearch.results, JSON.parse(cliSearch.stdout));
@@ -170,8 +185,10 @@ test('MCP get_note surfaces missing provenance logs as tool errors', async () =>
   const root = tempDir('mcp-server-missing-log-');
   const dataDir = path.join(root, 'data');
   const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
   appendNote(dataDir, note(1, { provenance: { session_id: 'missing-session', event_ids: ['01J8X7QM01Z9R4M2N6P0S5T7WY'] } }));
-  const { client, transport } = await connectClient(dataDir, diagnosticsDir);
+  bootstrapIndex(dataDir, indexDir);
+  const { client, transport } = await connectClient(dataDir, diagnosticsDir, indexDir);
 
   try {
     const result = await client.callTool({ name: 'get_note', arguments: { note_id: 'fact:mcp-1', with_provenance: true } });

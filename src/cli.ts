@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
 import { ulid } from 'ulid';
 import { appendEvent } from './collector/append.ts';
 import { makeInjectionId, readInjectionTraces, writeInjectionTrace, type InjectionTrace } from './diagnostics/injectionTrace.ts';
@@ -13,13 +12,13 @@ import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { importCuratedNote } from './distill/humanDistiller.ts';
 import { loadConfig } from './config.ts';
 import { indexNotes } from './index/indexer.ts';
-import { migrate } from './index/schema.ts';
+import { indexedThrough, openIndexRead, openIndexWrite, stateNotes } from './index/database.ts';
 import { runDistill } from './distill/distillRun.ts';
 import { runExport } from './export/exportRun.ts';
 import { readAll } from './log/ndjson.ts';
 import { appendNote, readAllNotes } from './log/noteLog.ts';
 import { latestRecordPerNoteId, type NoteRecord, type NoteRevision, type NoteStateRecord, type NoteSupersession, type NoteTombstone } from './note.ts';
-import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, MACHINE_ID_PATH } from './paths.ts';
+import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, INDEX_DIR, MACHINE_ID_PATH } from './paths.ts';
 import { DEFAULT_SCORING_CONFIG, scoringConfigSnapshot } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
@@ -33,27 +32,27 @@ import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult }
 
 const USAGE = `usage:
   librarian collect [--data-dir <dir>]     read canonical-event NDJSON on stdin
-  librarian distill [--data-dir <dir>] [--diagnostics-dir <dir>] [--provider <claude|opencode>] [--model <provider/model>] [--provider-fixture <file>]
+  librarian distill [--data-dir <dir>] [--index-dir <dir>] [--diagnostics-dir <dir>] [--provider <claude|opencode>] [--model <provider/model>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
-  librarian drain [--data-dir <dir>] [--diagnostics-dir <dir>] [--vault <dir>] [--provider <claude|opencode>] [--model <provider/model>] [--provider-fixture <file>]
+  librarian drain [--data-dir <dir>] [--index-dir <dir>] [--diagnostics-dir <dir>] [--vault <dir>] [--provider <claude|opencode>] [--model <provider/model>] [--provider-fixture <file>]
                                            process everything pending: distill, then export to a vault
-  librarian recall <query> --project <slug> [--global] [--origin <origin>] [--limit N] [--json]
+  librarian recall <query> --project <slug> [--index-dir <dir>] [--global] [--origin <origin>] [--limit N] [--json]
                                            search the recall index for pull-path results
   librarian why <injection_id> [--json]    explain a diagnostics injection trace
-  librarian why-not <query> <note_id> --project <slug> [--global]
+  librarian why-not <query> <note_id> --project <slug> [--index-dir <dir>] [--global]
                                             explain why a note did not ship for a query
   librarian stats [--json]                  report admission, usage, and cut-reason diagnostics
-  librarian inject --project <slug> [--global] [--session-start]
+  librarian inject --project <slug> [--index-dir <dir>] [--global] [--session-start]
                                            read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
                                               print a note, optionally with source provenance
-  librarian note import-curated <file> --vault <dir> [--data-dir <dir>]
+  librarian note import-curated <file> --vault <dir> [--data-dir <dir>] [--index-dir <dir>]
                                               import a curated Markdown note
-  librarian note tombstone <note_id> [--data-dir <dir>] [--reason <text>]
+  librarian note tombstone <note_id> [--data-dir <dir>] [--index-dir <dir>] [--reason <text>]
                                                tombstone the latest note revision
-  librarian supersede <old_note_id> <new_note_id> [--data-dir <dir>] [--reason <text>]
+  librarian supersede <old_note_id> <new_note_id> [--data-dir <dir>] [--index-dir <dir>] [--reason <text>]
                                                append an annotation invalidating an old note for recall
-  librarian mcp [--data-dir <dir>] [--diagnostics-dir <dir>]
+  librarian mcp [--data-dir <dir>] [--index-dir <dir>] [--diagnostics-dir <dir>]
                                            start the MCP stdio server
   librarian machine-id [--path <file>]     print the persisted machine id
 `;
@@ -83,6 +82,7 @@ function parseInjectArgs(argv: string[]): InjectionOptions {
   const options: InjectionOptions = {
     dataDir: DATA_DIR,
     diagnosticsDir: DIAGNOSTICS_DIR,
+    indexDir: INDEX_DIR,
     global: false,
     sessionStart: false,
   };
@@ -114,6 +114,11 @@ function parseInjectArgs(argv: string[]): InjectionOptions {
       }
       options.diagnosticsDir = value;
       i += 1;
+    } else if (arg === '--index-dir') {
+      const value = argv[i + 1];
+      if (value === undefined) throw new Error('flag --index-dir requires a value');
+      options.indexDir = value;
+      i += 1;
     } else {
       throw new Error(`unexpected argument: ${arg}`);
     }
@@ -129,7 +134,9 @@ function noteImportCurated(argv: string[]): void {
   const flags = parseFlags(rest);
   const vault = flags.get('vault');
   if (!vault) throw new Error('note import-curated requires --vault <dir>');
-  const note = importCuratedNote(vault, file, flags.get('data-dir') ?? DATA_DIR);
+  const dataDir = flags.get('data-dir') ?? DATA_DIR;
+  const note = importCuratedNote(vault, file, dataDir);
+  syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR);
   process.stdout.write(JSON.stringify(note) + '\n');
 }
 
@@ -150,6 +157,7 @@ function noteTombstone(argv: string[]): void {
     created_at: new Date().toISOString(), source: { kind: 'cli' },
   };
   appendNote(dataDir, tombstone);
+  syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR);
   process.stdout.write(JSON.stringify(tombstone) + '\n');
 }
 
@@ -167,6 +175,7 @@ function supersede(argv: string[]): void {
     revision_id: ulid(), created_at: new Date().toISOString(), reason: flags.get('reason'), source: { kind: 'cli' },
   };
   appendNote(dataDir, record);
+  syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR);
   process.stdout.write(JSON.stringify(record) + '\n');
 }
 
@@ -179,6 +188,7 @@ export type RecallOptions = {
   json: boolean;
   dataDir: string;
   diagnosticsDir: string;
+  indexDir?: string;
 };
 
 export type RecallResult = {
@@ -198,7 +208,7 @@ export type RecallPayload = { results: RecallResult[]; message?: string };
 export type NoteShowPayload = { note: NoteStateRecord; provenance_events: Array<Record<string, unknown>> | null };
 
 type WhyOptions = { injectionId: string; json: boolean; diagnosticsDir: string };
-type WhyNotOptions = { query: string; noteId: string; projectSlug?: string; global: boolean; dataDir: string };
+type WhyNotOptions = { query: string; noteId: string; projectSlug?: string; global: boolean; dataDir: string; indexDir: string };
 
 function statsCommand(argv: string[]): void {
   let json = false;
@@ -266,6 +276,7 @@ function parseRecallArgs(argv: string[]): RecallOptions {
     json: false,
     dataDir: DATA_DIR,
     diagnosticsDir: DIAGNOSTICS_DIR,
+    indexDir: INDEX_DIR,
   };
 
   for (let i = 0; i < rest.length; i += 1) {
@@ -313,6 +324,11 @@ function parseRecallArgs(argv: string[]): RecallOptions {
       }
       options.diagnosticsDir = value;
       i += 1;
+    } else if (arg === '--index-dir') {
+      const value = rest[i + 1];
+      if (value === undefined) throw new Error('flag --index-dir requires a value');
+      options.indexDir = value;
+      i += 1;
     } else {
       throw new Error(`unexpected argument: ${arg}`);
     }
@@ -355,7 +371,7 @@ function parseWhyNotArgs(argv: string[]): WhyNotOptions {
     throw new Error('why-not requires <note_id>');
   }
 
-  const options: WhyNotOptions = { query, noteId, global: false, dataDir: DATA_DIR };
+  const options: WhyNotOptions = { query, noteId, global: false, dataDir: DATA_DIR, indexDir: INDEX_DIR };
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
     if (arg === '--global') {
@@ -374,6 +390,11 @@ function parseWhyNotArgs(argv: string[]): WhyNotOptions {
       }
       options.dataDir = value;
       i += 1;
+    } else if (arg === '--index-dir') {
+      const value = rest[i + 1];
+      if (value === undefined) throw new Error('flag --index-dir requires a value');
+      options.indexDir = value;
+      i += 1;
     } else {
       throw new Error(`unexpected argument: ${arg}`);
     }
@@ -387,17 +408,6 @@ function parseWhyNotArgs(argv: string[]): WhyNotOptions {
 export function findLatestNote(dataDir: string, noteId: string): NoteStateRecord | undefined {
   const latest = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[]);
   return latest.find((note) => note.note_id === noteId);
-}
-
-function latestNoteMap(dataDir: string): Map<string, NoteRevision> {
-  // ponytail: v1 hydrates recall results with an O(n) note-log scan; upgrade path is
-  // title/summary indexed columns or a small notes sidecar table keyed by note_id.
-  const records = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[]);
-  return new Map(
-    records
-      .filter((record): record is NoteRevision => record.kind === 'note_revision')
-      .map((note) => [note.note_id, note]),
-  );
 }
 
 function formatScope(scope: NoteRevision['scope']): string {
@@ -625,7 +635,7 @@ async function distillCommand(flags: Map<string, string>): Promise<void> {
   const diagnosticsDir = flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR;
   const provider = resolveProvider(flags);
 
-  await runDistill({ dataDir, diagnosticsDir, provider });
+  await runDistill({ dataDir, diagnosticsDir, provider, indexDir: flags.get('index-dir') ?? INDEX_DIR });
 }
 
 /**
@@ -648,10 +658,17 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const diagnosticsDir = flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR;
   const vaultDir = flags.get('vault');
+  const indexDir = flags.get('index-dir') ?? INDEX_DIR;
   const provider = resolveProvider(flags);
 
-  const distilled = await runDistill({ dataDir, diagnosticsDir, provider });
+  const distilled = await runDistill({ dataDir, diagnosticsDir, provider, indexDir });
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
+  const index = openIndexWrite(indexDir);
+  try {
+    indexNotes(index, dataDir);
+  } finally {
+    index.close();
+  }
 
   const distillWork = distilled.distilled + distilled.duplicates + distilled.skipped + distilled.noops + distilled.quarantined + distilled.rejected;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
@@ -765,13 +782,23 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
   writeInjectionTrace(options.diagnosticsDir, trace);
 }
 
+function syncIndex(dataDir: string, indexDir: string): void {
+  try {
+    const db = openIndexWrite(indexDir);
+    try {
+      indexNotes(db, dataDir);
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    process.stderr.write(`librarian: note is durable but the index is stale; run librarian drain: ${(err as Error).message}\n`);
+  }
+}
+
 export function runRecall(options: RecallOptions): RecallPayload {
   const ts = new Date().toISOString();
-  const db = new Database(':memory:');
+  const db = openIndexRead(options.indexDir ?? INDEX_DIR);
   try {
-    migrate(db);
-    indexNotes(db, options.dataDir);
-
     const { results: rows, candidates } = recallWithTrace(
       db,
       options.query,
@@ -779,9 +806,9 @@ export function runRecall(options: RecallOptions): RecallPayload {
       DEFAULT_SCORING_CONFIG,
       ts,
     );
-    writePullTrace(options, candidates, rows, ts);
+    writePullTrace(options, candidates, rows, indexedThrough(db));
 
-    const notesById = latestNoteMap(options.dataDir);
+    const notesById = new Map(stateNotes(db, rows.map((row) => row.note_id)).map((note) => [note.note_id, note]));
     const results: RecallResult[] = rows.flatMap((row) => {
       const note = notesById.get(row.note_id);
       if (!note) {
@@ -864,10 +891,8 @@ function formatWhyNot(result: WhyNotResult): string {
 
 function whyNotCommand(options: WhyNotOptions): void {
   const ts = new Date().toISOString();
-  const db = new Database(':memory:');
+  const db = openIndexRead(options.indexDir);
   try {
-    migrate(db);
-    indexNotes(db, options.dataDir);
     // Explain against the pull-path result budget the seam actually ships (10), not the
     // scoring RESULT_CAP default (5), so the budget gate matches `librarian recall`.
     const opts = { ...options, limit: PULL_RECALL_DEFAULT_LIMIT };
@@ -935,6 +960,7 @@ async function main(argv: string[]): Promise<void> {
       await runMcpServer({
         dataDir: flags.get('data-dir') ?? DATA_DIR,
         diagnosticsDir: flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR,
+        indexDir: flags.get('index-dir') ?? INDEX_DIR,
       });
       break;
     }

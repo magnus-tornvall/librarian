@@ -11,9 +11,9 @@ import type { NoteRevision } from '../../src/note.ts';
 
 const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
 
-function tempRoot(): { dataDir: string; diagnosticsDir: string } {
+function tempRoot(): { dataDir: string; diagnosticsDir: string; indexDir: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-inject-'));
-  return { dataDir: path.join(root, 'data'), diagnosticsDir: path.join(root, 'diagnostics') };
+  return { dataDir: path.join(root, 'data'), diagnosticsDir: path.join(root, 'diagnostics'), indexDir: path.join(root, 'index') };
 }
 
 function note(index: number, overrides: Partial<NoteRevision> = {}): NoteRevision {
@@ -35,11 +35,16 @@ function note(index: number, overrides: Partial<NoteRevision> = {}): NoteRevisio
   };
 }
 
-function runInject(dataDir: string, diagnosticsDir: string, query: string): ReturnType<typeof spawnSync> {
-  return spawnSync('node', [CLI, 'inject', '--project', 'alpha', '--global', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir], {
+function runInject(dataDir: string, diagnosticsDir: string, indexDir: string, query: string): ReturnType<typeof spawnSync> {
+  return spawnSync('node', [CLI, 'inject', '--project', 'alpha', '--global', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir], {
     input: query,
     encoding: 'utf8',
   });
+}
+
+function drain(dataDir: string, diagnosticsDir: string, indexDir: string): void {
+  const result = spawnSync('node', [CLI, 'drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir], { encoding: 'utf8' });
+  assert.equal(result.status, 0, `drain should exit 0; stderr: ${result.stderr}`);
 }
 
 async function withEnv<T>(env: Partial<Record<'LIBRARIAN_BIN' | 'MACHINE_ID_PATH', string | null>>, fn: () => Promise<T>): Promise<T> {
@@ -243,7 +248,8 @@ test('spawned inject output is spliced verbatim', () => {
   for (let i = 0; i < 8; i += 1) {
     appendNote(t.dataDir, note(20 + i, { body: { summary: `Unrelated filler ${i}.` } }));
   }
-  const result = runInject(t.dataDir, t.diagnosticsDir, 'wombat failover');
+  drain(t.dataDir, t.diagnosticsDir, t.indexDir);
+  const result = runInject(t.dataDir, t.diagnosticsDir, t.indexDir, 'wombat failover');
   assert.equal(result.status, 0, `inject should exit 0; stderr: ${result.stderr}`);
   assert.match(result.stdout, /^<librarian-memory /);
 
@@ -257,7 +263,8 @@ test('spawned inject output stays verbatim when a brief is also present', () => 
   for (let i = 0; i < 8; i += 1) {
     appendNote(t.dataDir, note(20 + i, { body: { summary: `Unrelated filler ${i}.` } }));
   }
-  const result = runInject(t.dataDir, t.diagnosticsDir, 'wombat failover');
+  drain(t.dataDir, t.diagnosticsDir, t.indexDir);
+  const result = runInject(t.dataDir, t.diagnosticsDir, t.indexDir, 'wombat failover');
   assert.equal(result.status, 0, `inject should exit 0; stderr: ${result.stderr}`);
 
   const spliced = spliceLibrarianInjection(
@@ -276,7 +283,8 @@ test('below-floor prompt adds zero parts', () => {
   for (let i = 0; i < 12; i += 1) {
     appendNote(t.dataDir, note(i, { body: { summary: `commonfloor token in every note ${i}` } }));
   }
-  const result = runInject(t.dataDir, t.diagnosticsDir, 'commonfloor');
+  drain(t.dataDir, t.diagnosticsDir, t.indexDir);
+  const result = runInject(t.dataDir, t.diagnosticsDir, t.indexDir, 'commonfloor');
   assert.equal(result.status, 0, `inject should exit 0; stderr: ${result.stderr}`);
   assert.equal(result.stdout, '');
 

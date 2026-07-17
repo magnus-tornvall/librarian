@@ -1,9 +1,6 @@
-import Database from 'better-sqlite3';
 import { makeInjectionId, writeInjectionTrace, type InjectionTrace } from '../diagnostics/injectionTrace.ts';
-import { indexNotes } from '../index/indexer.ts';
-import { migrate } from '../index/schema.ts';
-import { readAllNotes } from '../log/noteLog.ts';
-import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from '../note.ts';
+import { indexedThrough, openIndexRead, sessionStartNotes, stateNotes } from '../index/database.ts';
+import type { NoteRevision } from '../note.ts';
 import { DEFAULT_SCORING_CONFIG, scoringConfigSnapshot } from './scoring.ts';
 import { recallWithTrace } from './query.ts';
 
@@ -16,6 +13,7 @@ const FRAME = 'Possibly relevant prior context. Prefer current repository eviden
 export type InjectionOptions = {
   dataDir: string;
   diagnosticsDir: string;
+  indexDir?: string;
   query?: string;
   projectSlug?: string;
   global: boolean;
@@ -23,28 +21,6 @@ export type InjectionOptions = {
 };
 
 type Entry = { note: NoteRevision };
-
-function latestNotes(dataDir: string, now: string): NoteRevision[] {
-  const records = readAllNotes(dataDir) as NoteRecord[];
-  const supersededAt = new Map<string, string>();
-  for (const record of records) {
-    if (record.kind !== 'note_supersession') continue;
-    const existing = supersededAt.get(record.note_id);
-    if (existing === undefined || record.created_at < existing) supersededAt.set(record.note_id, record.created_at);
-  }
-  return latestRecordPerNoteId(records).filter((note): note is NoteRevision => {
-    if (note.kind !== 'note_revision') return false;
-    const supersessionAt = supersededAt.get(note.note_id);
-    const invalidAt = supersessionAt && note.invalid_at
-      ? (supersessionAt <= note.invalid_at ? supersessionAt : note.invalid_at)
-      : supersessionAt ?? note.invalid_at;
-    return (note.valid_at ?? note.created_at) <= now && (invalidAt === undefined || invalidAt > now);
-  });
-}
-
-function indexedThrough(notes: NoteRevision[], fallback: string): string {
-  return notes.reduce((latest, note) => (latest < note.created_at ? note.created_at : latest), fallback);
-}
 
 function authority(note: NoteRevision): string {
   if (note.note_type === 'curated' || note.source.distiller === 'human') {
@@ -125,11 +101,12 @@ function sessionStartEntries(notes: NoteRevision[], projectSlug: string | undefi
 export function buildInjection(options: InjectionOptions): string | undefined {
   const ts = new Date().toISOString();
   const injectionId = makeInjectionId();
-  const notes = latestNotes(options.dataDir, ts);
-  const indexed = indexedThrough(notes, ts);
+  const db = openIndexRead(options.indexDir);
+  try {
+    const indexed = indexedThrough(db);
 
   if (options.sessionStart) {
-    const entries = sessionStartEntries(notes, options.projectSlug, options.global);
+    const entries = sessionStartEntries(sessionStartNotes(db, options.projectSlug, options.global, ts), options.projectSlug, options.global);
     const shipped = trimToBudget(injectionId, indexed, entries);
     const shippedIds = shipped.map((entry) => entry.note.note_id);
     // Session-start has no query and no BM25 scores, but the shipped notes must still appear
@@ -143,10 +120,6 @@ export function buildInjection(options: InjectionOptions): string | undefined {
     return shipped.length === 0 ? undefined : renderBlock(injectionId, indexed, shipped);
   }
 
-  const db = new Database(':memory:');
-  try {
-    migrate(db);
-    indexNotes(db, options.dataDir);
     const { results, candidates } = recallWithTrace(
       db,
       options.query ?? '',
@@ -154,7 +127,7 @@ export function buildInjection(options: InjectionOptions): string | undefined {
       DEFAULT_SCORING_CONFIG,
       ts,
     );
-    const notesById = new Map(notes.map((note) => [note.note_id, note]));
+    const notesById = new Map(stateNotes(db, results.map((result) => result.note_id)).map((note) => [note.note_id, note]));
     const entries = results.flatMap((result) => {
       const note = notesById.get(result.note_id);
       return note === undefined ? [] : [{ note }];
