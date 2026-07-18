@@ -17,7 +17,9 @@ Three homes, no fourth. Never invent a tracking file.
   lines. No `→ issue #NN` mapping ledger.** Those are friction and they move out.
 - **GitHub issues** — every unit of work. Typed by label (`saga` / `story` /
   `task`), nested via native **sub-issues** (Saga → Story → Task), linked via
-  **blocked-by**. Holds status, dependencies, per-unit why/why-not, and the agent
+  **blocked-by** — set the native GitHub issue **relationship** field (`blocked by`),
+  and mirror it with a `**Blocked by #N**` line in the body as a human-readable
+  cue. Holds status, dependencies, per-unit why/why-not, and the agent
   instructions. This is what agents read to act; the spec is what you read to
   understand the mind.
 - **GitHub Project v2** — the view engine over the issues (roadmap = helicopter,
@@ -35,7 +37,7 @@ Three homes, no fourth. Never invent a tracking file.
 |--------------------------------------|------------------------------------------------------------------------|
 | New task/story/saga surfaces         | Create issue, label type, nest under parent, set blocked-by. Spec untouched. |
 | Work status changes                  | Issue state only. Never the spec.                                      |
-| A dependency emerges                 | blocked-by on the issue. Not prose.                                    |
+| A dependency emerges                 | Set the native GitHub **relationship** field (`blocked by`) on the issue; mirror with a `**Blocked by #N**` body line. Not prose-only. |
 | Per-unit why / why-not               | Issue body.                                                            |
 | A new decision is made               | Spec decisions register (§5). No issue.                                |
 | A decision is revoked/superseded     | Spec: mark superseded, keep old text + why. Then reconcile affected issues. |
