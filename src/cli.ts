@@ -23,7 +23,7 @@ import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, INDEX_DIR, MACHINE_ID_PATH } fr
 import { scoringConfigSnapshot, type ScoringConfig } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
-import { embedIndex, isEmbeddingModelMismatch, queryEmbedding } from './recall/embedding.ts';
+import { embedIndex, isEmbeddingModelMismatch, queryEmbedding, type QueryEmbedding } from './recall/embedding.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -871,7 +871,7 @@ function formatRecallResult(result: RecallResult): string {
   return `${prefix} scope=${scope || '(none)'} title=${result.title} summary=${result.summary}`;
 }
 
-function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string, scoring: ScoringConfig, embedding: InjectionTrace['embedding']): void {
+function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string, scoring: ScoringConfig, embedding: QueryEmbedding): void {
   const trace: InjectionTrace = {
     record_class: 'diagnostic',
     injection_id: makeInjectionId(),
@@ -882,11 +882,14 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
       note_id: candidate.note_id,
       raw_score: candidate.raw_bm25,
       post_weight_score: candidate.score,
+      bm25_rank: candidate.bm25_rank,
+      knn_rank: candidate.knn_rank,
       cut_reason: candidate.cut_reason,
     })),
     shipped_note_ids: rows.map((row) => row.note_id),
     indexed_through: ts,
-    embedding,
+    embedding: embedding.status,
+    ...(embedding.model ? { embedding_digest: embedding.model.digest } : {}),
     config_snapshot: scoringConfigSnapshot(scoring),
   };
   writeInjectionTrace(options.diagnosticsDir, trace);
@@ -919,8 +922,9 @@ export async function runRecall(options: RecallOptions): Promise<RecallPayload> 
       { projectSlug: options.projectSlug, global: options.global, origin: options.origin, limit: options.limit },
       scoring,
       ts,
+      embedding.vector,
     );
-    writePullTrace(options, candidates, rows, indexedThrough(db), scoring, embedding.status);
+    writePullTrace(options, candidates, rows, indexedThrough(db), scoring, embedding);
 
     const notesById = new Map(stateNotes(db, rows.map((row) => row.note_id)).map((note) => [note.note_id, note]));
     const results: RecallResult[] = rows.flatMap((row) => {
@@ -969,14 +973,16 @@ function formatTrace(trace: InjectionTrace): string {
     `Query: ${trace.query}`,
     `Indexed Through: ${trace.indexed_through}`,
     `Embedding: ${trace.embedding ?? 'disabled'}`,
+    ...(trace.embedding_digest ? [`Embedding Digest: ${trace.embedding_digest}`] : []),
     `Config: ${JSON.stringify(trace.config_snapshot)}`,
     'Candidates:',
   ];
   const shipped = new Set(trace.shipped_note_ids);
   for (const candidate of trace.candidates) {
     const status = shipped.has(candidate.note_id) ? 'shipped' : `cut=${candidate.cut_reason ?? '(unknown)'}`;
+    const ranks = `bm25=${candidate.bm25_rank ?? '-'} knn=${candidate.knn_rank ?? '-'}`;
     lines.push(
-      `- ${candidate.note_id}: raw=${candidate.raw_score.toFixed(4)} -> post=${candidate.post_weight_score.toFixed(4)} ${status}`,
+      `- ${candidate.note_id}: raw=${candidate.raw_score.toFixed(4)} -> post=${candidate.post_weight_score.toFixed(4)} [${ranks}] ${status}`,
     );
   }
   return lines.join('\n') + '\n';
@@ -1004,7 +1010,7 @@ function formatWhyNot(result: WhyNotResult): string {
   ].join('\n') + '\n';
 }
 
-function whyNotCommand(options: WhyNotOptions): void {
+async function whyNotCommand(options: WhyNotOptions): Promise<void> {
   const ts = new Date().toISOString();
   const scoring = loadConfig().scoring;
   const db = openIndexRead(options.indexDir);
@@ -1012,7 +1018,11 @@ function whyNotCommand(options: WhyNotOptions): void {
     // Explain against the pull-path result budget the seam actually ships (10), not the
     // scoring RESULT_CAP default (5), so the budget gate matches `librarian recall`.
     const opts = { ...options, limit: PULL_RECALL_DEFAULT_LIMIT };
-    process.stdout.write(formatWhyNot(whyNot(db, options.query, options.noteId, opts, scoring, ts)));
+    // Re-embed with the configured model so hybrid replay explains a KNN-only reach
+    // (§6). If embedding is off/unreachable the vector is absent and why-not degrades
+    // to BM25-only honestly.
+    const embedding = await queryEmbedding(db, options.query);
+    process.stdout.write(formatWhyNot(whyNot(db, options.query, options.noteId, opts, scoring, ts, embedding.vector)));
   } finally {
     db.close();
   }
@@ -1046,7 +1056,7 @@ async function main(argv: string[]): Promise<void> {
       whyCommand(parseWhyArgs(rest));
       break;
     case 'why-not':
-      whyNotCommand(parseWhyNotArgs(rest));
+      await whyNotCommand(parseWhyNotArgs(rest));
       break;
     case 'stats':
       statsCommand(rest);

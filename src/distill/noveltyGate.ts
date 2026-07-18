@@ -4,6 +4,15 @@ import type { NoteRevision } from '../note.ts';
 
 // FTS5 BM25 is lower-is-better; this is the positive score exposed by the gate.
 // Tuned for the near-identical fixture while excluding distinct drafts.
+//
+// §6 ruling (settled): embeddings FETCH candidates, never DECIDE the verdict. An
+// embedding model scores contradictions ("we chose Kamal" / "we abandoned Kamal")
+// as near neighbours, so a cosine NOOP would silently eat exactly the §12.1
+// knowledge-update notes the gate must let through. The duplicate verdict therefore
+// stays this deterministic BM25 rule even with embeddings on; hybrid's only licence
+// here is to widen the candidate *fetch*, which cannot raise the BM25 max and so is
+// a pure no-op for the verdict — deliberately not built (YAGNI) until a gate step
+// beyond top-1 BM25 needs the extra candidates.
 const NEAR_DUPLICATE_SCORE = 0.00001;
 
 function ftsQuery(text: string): string | undefined {
