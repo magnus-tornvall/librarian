@@ -84,6 +84,37 @@ test('collect: a command carrying a secret-looking token is stored with the [RED
   assert.match(persisted.command as string, /\[REDACTED:token:sha256:[0-9a-f]{8}\]/);
 });
 
+test('collect: private spans and injected memory never reach prompt or command event logs', () => {
+  const dataDir = tempDir('cli-collect-private-memory-');
+  const prompt = JSON.parse(
+    fs.readFileSync(path.join(GOLDEN_DIR, '01-prompt-in-git-repo.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  const command = JSON.parse(
+    fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  const privateText = 'declared private text';
+  const memoryText = 'injected note text';
+  prompt.prompt = `keep <private>${privateText}</private> <librarian-memory injection_id="test" indexed_through="now">${memoryText}</librarian-memory> asking`;
+  command.command = `run <private>${privateText}</private> <librarian-memory injection_id="test" indexed_through="now">${memoryText}</librarian-memory> now`;
+
+  const result = runCli(['collect', '--data-dir', dataDir], [prompt, command].map(ndjsonLine).join(''));
+  assert.equal(result.status, 0, `collect should exit 0; stderr: ${result.stderr}`);
+
+  for (const record of [prompt, command]) {
+    const sessionId = (record.context as Record<string, unknown>).session_id as string;
+    const raw = fs.readFileSync(path.join(dataDir, 'events', `${sessionId}.ndjson`), 'utf8');
+    assert.ok(!raw.includes(privateText), 'private content must never reach disk');
+    assert.ok(!raw.includes(memoryText), 'injected memory must never reach disk');
+    assert.ok(!raw.includes('librarian-memory'), 'memory tags must never reach disk');
+  }
+
+  const [persistedPrompt] = readAll(
+    path.join(dataDir, 'events', `${(prompt.context as Record<string, unknown>).session_id}.ndjson`),
+  ) as Array<Record<string, unknown>>;
+  assert.match(persistedPrompt.prompt as string, /\[PRIVATE\]/);
+  assert.ok(!(persistedPrompt.prompt as string).includes('sha256'));
+});
+
 test('collect: a record_class:diagnostic record exits non-zero, names the rejection, and leaves the log unchanged', () => {
   const dataDir = tempDir('cli-collect-diagnostic-');
   const diagnostic = {
