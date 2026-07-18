@@ -57,7 +57,7 @@ function scoringConfig(value: unknown, configPath: string): ScoringConfig {
 
 export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {
   if (!fs.existsSync(configPath)) {
-    return { inference: { provider: 'claude' }, scoring: scoringConfig(undefined, configPath) };
+    return { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, scoring: scoringConfig(undefined, configPath) };
   }
 
   let parsed: unknown;
@@ -72,12 +72,13 @@ export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {
   const inference = typeof root.inference === 'object' && root.inference !== null
     ? root.inference as Record<string, unknown>
     : {};
-  const provider = inference.provider ?? 'claude';
+  const provider = inference.provider ?? 'opencode';
   if (provider !== 'claude' && provider !== 'opencode') {
     throw new Error(`invalid inference.provider in ${configPath}: ${String(provider)}`);
   }
   if (inference.model !== undefined && typeof inference.model !== 'string') {
     throw new Error(`invalid inference.model in ${configPath}: expected a string`);
   }
-  return { inference: { provider, model: inference.model as string | undefined }, scoring: scoringConfig(root.scoring, configPath) };
+  const model = (inference.model as string | undefined) ?? (provider === 'opencode' ? 'opencode/big-pickle' : undefined);
+  return { inference: { provider, model }, scoring: scoringConfig(root.scoring, configPath) };
 }
