@@ -2,6 +2,8 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { NoteRecord, NoteRevision } from '../note.ts';
+import type { EmbeddingModel, EmbeddingProvider } from '../embedding/provider.ts';
+import { assertEmbeddingIndexModel, setEmbeddingIndexModel } from './database.ts';
 
 export function buildSearchText(note: NoteRevision): string {
   return [
@@ -25,6 +27,9 @@ function updateFts(db: Database.Database, noteId: string): boolean {
     | { record_json: string; record_kind: string; superseded_at: string | null; superseded_by: string | null }
     | undefined;
   deleteStmt.run(noteId);
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note_vectors'").get() !== undefined) {
+    db.prepare('DELETE FROM note_vectors WHERE note_id = ?').run(noteId);
+  }
   if (!state || state.record_kind === 'note_tombstone') return false;
   const note = JSON.parse(state.record_json) as NoteRevision;
   // Delete first regardless of record kind: a tombstoned note must lose any existing row, and a
@@ -59,6 +64,41 @@ function updateFts(db: Database.Database, noteId: string): boolean {
       searchText,
   );
   return true;
+}
+
+function vectorTableExists(db: Database.Database): boolean {
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note_vectors'").get() !== undefined;
+}
+
+function vectorDimension(db: Database.Database): number | undefined {
+  const row = db.prepare("SELECT value FROM index_metadata WHERE key = 'embedding_dimensions'").get() as { value: string } | undefined;
+  return row === undefined ? undefined : Number(row.value);
+}
+
+function createVectorTable(db: Database.Database, dimensions: number): void {
+  if (!Number.isInteger(dimensions) || dimensions <= 0) throw new Error('embedding provider returned an empty vector');
+  db.exec(`CREATE VIRTUAL TABLE note_vectors USING vec0(note_id TEXT PRIMARY KEY, embedding float[${dimensions}])`);
+  db.prepare("INSERT INTO index_metadata (key, value) VALUES ('embedding_dimensions', ?)").run(String(dimensions));
+}
+
+/** Embed active FTS rows that have no vector. Individual provider failures leave rows for the next pass. */
+export async function embedIndexedNotes(db: Database.Database, provider: EmbeddingProvider, model: EmbeddingModel): Promise<void> {
+  assertEmbeddingIndexModel(db, model);
+  setEmbeddingIndexModel(db, model);
+  const rows = db.prepare(vectorTableExists(db)
+    ? `SELECT note_id, search_text FROM notes_fts WHERE invalid_at IS NULL AND note_id NOT IN (SELECT note_id FROM note_vectors)`
+    : 'SELECT note_id, search_text FROM notes_fts WHERE invalid_at IS NULL').all() as Array<{ note_id: string; search_text: string }>;
+  for (const row of rows) {
+    try {
+      const vector = await provider.embed(row.search_text);
+      const dimensions = vectorDimension(db);
+      if (!vectorTableExists(db)) createVectorTable(db, vector.length);
+      else if (dimensions !== vector.length) throw new Error(`embedding provider changed vector dimensions from ${dimensions} to ${vector.length}`);
+      db.prepare('INSERT INTO note_vectors (note_id, embedding) VALUES (?, ?)').run(row.note_id, JSON.stringify(vector));
+    } catch {
+      // ponytail: retry failed embeddings on the next index pass; no separate retry store is needed.
+    }
+  }
 }
 
 function applyRecord(db: Database.Database, record: NoteRecord): boolean {

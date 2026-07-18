@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 
-export const INDEX_SCHEMA_VERSION = 3;
+export const INDEX_SCHEMA_VERSION = 4;
 
 /**
  * FTS5 recall index (§6). `project_slug`/`is_global` carry each note's scope

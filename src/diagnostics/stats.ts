@@ -33,6 +33,7 @@ export type StatsReport = {
     embedding: { total: number; mix: Record<(typeof EMBEDDING_STATES)[number], CountRate> };
   };
   cut_reasons: { total: number; mix: Record<(typeof CUT_REASONS)[number], CountRate> };
+  index?: { embedding: { embedded: number; total: number; state: 'disabled' | 'partial' | 'complete' } };
 };
 
 function breakdown(verdicts: DistillVerdict[]): Breakdown {
@@ -158,6 +159,7 @@ export function formatStats(report: StatsReport): string {
     'Usage',
     `Injection traces: ${report.usage.trace_count}`,
     `Embeddings: ${Object.entries(report.usage.embedding.mix).map(([state, value]) => `${state} ${value.count} (${percent(value.rate)})`).join(', ')}`,
+    ...(report.index ? [`Index embedding coverage: ${report.index.embedding.embedded}/${report.index.embedding.total} (${report.index.embedding.state})`] : []),
     `Injections per note: ${injections.length === 0 ? '(none)' : injections.map(([id, count]) => `${id}=${count}`).join(', ')}`,
     `Dead notes (${report.usage.dead_window_days}d): ${report.usage.dead_notes.length} (${percent(report.usage.dead_note_ratio)})`,
     ...report.usage.dead_notes.map((note) => `- ${note.note_id}: ${note.title}`),

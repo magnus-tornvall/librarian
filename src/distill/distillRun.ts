@@ -7,7 +7,7 @@ import { findNearDuplicate } from './noveltyGate.ts';
 import { appendNote, readAllNotes } from '../log/noteLog.ts';
 import { openIndexWrite } from '../index/database.ts';
 import { indexNotes } from '../index/indexer.ts';
-import { isEmbeddingModelMismatch, stampEmbeddingIndex } from '../recall/embedding.ts';
+import { embedIndex, isEmbeddingModelMismatch } from '../recall/embedding.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
 import { acquireLock } from '../log/lock.ts';
@@ -345,7 +345,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
       const db = openIndexWrite(options.indexDir);
       try {
         indexNotes(db, options.dataDir);
-        await stampEmbeddingIndex(db, options.configPath);
+        await embedIndex(db, options.configPath);
       } finally {
         db.close();
       }

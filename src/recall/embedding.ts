@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { loadConfig } from '../config.ts';
 import { assertEmbeddingIndexModel, setEmbeddingIndexModel } from '../index/database.ts';
+import { embedIndexedNotes } from '../index/indexer.ts';
 import { classifyEmbeddingError, makeOpenAiEmbeddingProvider, type EmbeddingModel } from '../embedding/provider.ts';
 
 export type QueryEmbedding = {
@@ -34,4 +35,16 @@ export async function stampEmbeddingIndex(db: Database.Database, configPath?: st
   assertEmbeddingIndexModel(db, model);
   setEmbeddingIndexModel(db, model);
   return 'ok';
+}
+
+/** Index-time embeddings are fail-soft: an unavailable provider leaves FTS recall intact. */
+export async function embedIndex(db: Database.Database, configPath?: string): Promise<void> {
+  const config = loadConfig(configPath);
+  if (!config.embedding) return;
+  const provider = makeOpenAiEmbeddingProvider(config.embedding);
+  try {
+    await embedIndexedNotes(db, provider, await provider.model());
+  } catch (error) {
+    if (isEmbeddingModelMismatch(error)) throw error;
+  }
 }
