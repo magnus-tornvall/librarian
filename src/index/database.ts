@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import { INDEX_DIR } from '../paths.ts';
 import { INDEX_SCHEMA_VERSION, migrate } from './schema.ts';
 import type { NoteRevision } from '../note.ts';
+import type { EmbeddingModel } from '../embedding/provider.ts';
 
 export function indexDbPath(indexDir = INDEX_DIR): string {
   return path.join(indexDir, 'notes.db');
@@ -54,6 +55,27 @@ export function openIndexRead(indexDir = INDEX_DIR): Database.Database {
 export function indexedThrough(db: Database.Database): string {
   const row = db.prepare('SELECT updated_at FROM index_cursor WHERE id = 1').get() as { updated_at: string } | undefined;
   return row?.updated_at ?? '';
+}
+
+export function embeddingIndexModel(db: Database.Database): EmbeddingModel | undefined {
+  const rows = db.prepare("SELECT key, value FROM index_metadata WHERE key IN ('embedding_model', 'embedding_digest')").all() as Array<{ key: string; value: string }>;
+  const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  return values.embedding_model && values.embedding_digest
+    ? { name: values.embedding_model, digest: values.embedding_digest }
+    : undefined;
+}
+
+export function setEmbeddingIndexModel(db: Database.Database, model: EmbeddingModel): void {
+  const write = db.prepare('INSERT INTO index_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+  write.run('embedding_model', model.name);
+  write.run('embedding_digest', model.digest);
+}
+
+export function assertEmbeddingIndexModel(db: Database.Database, model: EmbeddingModel): void {
+  const indexed = embeddingIndexModel(db);
+  if (indexed && (indexed.name !== model.name || indexed.digest !== model.digest)) {
+    throw new Error(`embedding model changed from ${indexed.name}@${indexed.digest} to ${model.name}@${model.digest}; delete the index directory and run librarian drain to rebuild it`);
+  }
 }
 
 export function stateNotes(db: Database.Database, noteIds?: readonly string[]): NoteRevision[] {

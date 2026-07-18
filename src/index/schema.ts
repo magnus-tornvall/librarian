@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 
-export const INDEX_SCHEMA_VERSION = 2;
+export const INDEX_SCHEMA_VERSION = 3;
 
 /**
  * FTS5 recall index (§6). `project_slug`/`is_global` carry each note's scope
@@ -36,6 +36,10 @@ export function migrate(db: Database.Database): void {
       last_record_id TEXT,
       updated_at TEXT NOT NULL,
       data_dir TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS index_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
     );
     PRAGMA user_version = ${INDEX_SCHEMA_VERSION};
   `);

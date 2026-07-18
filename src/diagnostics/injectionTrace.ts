@@ -35,6 +35,7 @@ export type InjectionTrace = {
   }>;
   shipped_note_ids: string[];
   indexed_through: string;
+  embedding: 'ok' | 'timeout' | 'error' | 'disabled';
   config_snapshot: unknown;
 };
 

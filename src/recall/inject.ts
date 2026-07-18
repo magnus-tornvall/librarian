@@ -4,6 +4,7 @@ import { indexedThrough, openIndexRead, sessionStartNotes, stateNotes } from '..
 import type { NoteRevision } from '../note.ts';
 import { scoringConfigSnapshot, type ScoringConfig } from './scoring.ts';
 import { recallWithTrace } from './query.ts';
+import { queryEmbedding } from './embedding.ts';
 
 const PUSH_CAP = 5;
 const PUSH_TOKEN_BUDGET = 600;
@@ -15,6 +16,7 @@ export type InjectionOptions = {
   dataDir: string;
   diagnosticsDir: string;
   indexDir?: string;
+  configPath?: string;
   query?: string;
   projectSlug?: string;
   global: boolean;
@@ -73,6 +75,7 @@ function writePushTrace(
   candidates: InjectionTrace['candidates'],
   shippedIds: string[],
   scoring: ScoringConfig,
+  embedding: InjectionTrace['embedding'],
 ): void {
   const trace: InjectionTrace = {
     record_class: 'diagnostic',
@@ -83,6 +86,7 @@ function writePushTrace(
     candidates,
     shipped_note_ids: shippedIds,
     indexed_through: indexed,
+    embedding,
     config_snapshot: scoringConfigSnapshot(scoring),
   };
   writeInjectionTrace(options.diagnosticsDir, trace);
@@ -100,13 +104,14 @@ function sessionStartEntries(notes: NoteRevision[], projectSlug: string | undefi
     .map((note) => ({ note }));
 }
 
-export function buildInjection(options: InjectionOptions): string | undefined {
+export async function buildInjection(options: InjectionOptions): Promise<string | undefined> {
   const ts = new Date().toISOString();
   const injectionId = makeInjectionId();
-  const scoring = loadConfig().scoring;
+  const scoring = loadConfig(options.configPath).scoring;
   const db = openIndexRead(options.indexDir);
   try {
     const indexed = indexedThrough(db);
+    const embedding = await queryEmbedding(db, options.sessionStart ? '' : (options.query ?? ''), options.configPath);
 
   if (options.sessionStart) {
     const entries = sessionStartEntries(sessionStartNotes(db, options.projectSlug, options.global, ts), options.projectSlug, options.global);
@@ -119,7 +124,7 @@ export function buildInjection(options: InjectionOptions): string | undefined {
       raw_score: 0,
       post_weight_score: 0,
     }));
-    writePushTrace(options, injectionId, ts, indexed, candidates, shippedIds, scoring);
+    writePushTrace(options, injectionId, ts, indexed, candidates, shippedIds, scoring, embedding.status);
     return shipped.length === 0 ? undefined : renderBlock(injectionId, indexed, shipped);
   }
 
@@ -143,7 +148,7 @@ export function buildInjection(options: InjectionOptions): string | undefined {
       post_weight_score: candidate.score,
       cut_reason: shippedIds.has(candidate.note_id) ? undefined : (candidate.cut_reason ?? 'budget'),
     }));
-    writePushTrace(options, injectionId, ts, indexed, traceCandidates, [...shippedIds], scoring);
+    writePushTrace(options, injectionId, ts, indexed, traceCandidates, [...shippedIds], scoring, embedding.status);
     return shipped.length === 0 ? undefined : renderBlock(injectionId, indexed, shipped);
   } finally {
     db.close();

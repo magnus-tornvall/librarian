@@ -17,6 +17,33 @@ QUALIFY_PROVIDER=opencode QUALIFY_MODEL=ollama/qwen3:8b npm run qualify
 Each fixture prints its own pass/fail result. Failures name the structural assertion
 that degraded, rather than comparing model-generated wording.
 
+## Embeddings (optional)
+
+Librarian works BM25-only with no embedding configuration. To enable the
+multilingual embedding seam with Ollama:
+
+```sh
+ollama pull qwen3-embedding:0.6b
+```
+
+Add this to `~/.librarian/config.json` (alongside any existing settings):
+
+```json
+{
+  "embedding": {
+    "endpoint": "http://127.0.0.1:11434",
+    "model": "qwen3-embedding:0.6b",
+    "timeoutMs": 400
+  }
+}
+```
+
+`librarian doctor` reports endpoint reachability, the configured model digest
+against the index stamp, embedding coverage, and index freshness. If it reports
+a digest mismatch, delete the disposable `~/.librarian/index/` directory and
+run `librarian drain` to rebuild it. A timeout or endpoint failure keeps recall
+BM25-only and records that state in the injection trace.
+
 ## MCP Server
 
 `librarian mcp` starts the local stdio MCP server with `search` and `get_note` tools. See [`docs/mcp.md`](docs/mcp.md) for Claude Code registration and tool behavior.

@@ -12,7 +12,8 @@ import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { importCuratedNote } from './distill/humanDistiller.ts';
 import { loadConfig } from './config.ts';
 import { indexNotes } from './index/indexer.ts';
-import { indexedThrough, openIndexRead, openIndexWrite, stateNotes } from './index/database.ts';
+import { embeddingIndexModel, indexedThrough, openIndexRead, openIndexWrite, stateNotes } from './index/database.ts';
+import { makeOpenAiEmbeddingProvider } from './embedding/provider.ts';
 import { runDistill } from './distill/distillRun.ts';
 import { runExport } from './export/exportRun.ts';
 import { readAll } from './log/ndjson.ts';
@@ -22,6 +23,7 @@ import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, INDEX_DIR, MACHINE_ID_PATH } fr
 import { scoringConfigSnapshot, type ScoringConfig } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
+import { queryEmbedding, stampEmbeddingIndex } from './recall/embedding.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -42,6 +44,8 @@ const USAGE = `usage:
   librarian why-not <query> <note_id> --project <slug> [--index-dir <dir>] [--global]
                                             explain why a note did not ship for a query
   librarian stats [--json]                  report admission, usage, and cut-reason diagnostics
+  librarian doctor [--index-dir <dir>] [--config <file>] [--json]
+                                            report embedding endpoint and index readiness
   librarian inject --project <slug> [--index-dir <dir>] [--global] [--session-start]
                                            read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
@@ -119,6 +123,11 @@ function parseInjectArgs(argv: string[]): InjectionOptions {
       if (value === undefined) throw new Error('flag --index-dir requires a value');
       options.indexDir = value;
       i += 1;
+    } else if (arg === '--config') {
+      const value = argv[i + 1];
+      if (value === undefined) throw new Error('flag --config requires a value');
+      options.configPath = value;
+      i += 1;
     } else {
       throw new Error(`unexpected argument: ${arg}`);
     }
@@ -189,6 +198,7 @@ export type RecallOptions = {
   dataDir: string;
   diagnosticsDir: string;
   indexDir?: string;
+  configPath?: string;
 };
 
 export type RecallResult = {
@@ -234,6 +244,82 @@ function statsCommand(argv: string[]): void {
     now: new Date(),
   });
   process.stdout.write(json ? JSON.stringify(report) + '\n' : formatStats(report));
+}
+
+export type DoctorReport = {
+  embedding: {
+    state: 'unconfigured' | 'unreachable' | 'mismatch' | 'ok';
+    model?: string;
+    digest?: string;
+    index_model?: string;
+    index_digest?: string;
+    error?: string;
+  };
+  coverage: { embedded: number; total: number };
+  indexed_through: string;
+  index_error?: string;
+};
+
+export async function doctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PATH): Promise<DoctorReport> {
+  const config = loadConfig(configPath);
+  let db: ReturnType<typeof openIndexRead> | undefined;
+  let total = 0;
+  let indexed = '';
+  let model: ReturnType<typeof embeddingIndexModel> = undefined;
+  let indexError: string | undefined;
+  try {
+    db = openIndexRead(indexDir);
+    total = (db.prepare("SELECT COUNT(*) AS count FROM note_state WHERE record_kind = 'note_revision'").get() as { count: number }).count;
+    indexed = indexedThrough(db);
+    model = embeddingIndexModel(db);
+  } catch (error) {
+    indexError = error instanceof Error ? error.message : String(error);
+  } finally {
+    db?.close();
+  }
+  if (!config.embedding) {
+    return { embedding: { state: 'unconfigured', ...(model ? { index_model: model.name, index_digest: model.digest } : {}) }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+  }
+  try {
+    const resolved = await makeOpenAiEmbeddingProvider(config.embedding).model();
+    if (model && (model.name !== resolved.name || model.digest !== resolved.digest)) {
+      return { embedding: { state: 'mismatch', model: resolved.name, digest: resolved.digest, index_model: model.name, index_digest: model.digest }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+    }
+    return { embedding: { state: 'ok', model: resolved.name, digest: resolved.digest, ...(model ? { index_model: model.name, index_digest: model.digest } : {}) }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+  } catch (error) {
+    return { embedding: { state: 'unreachable', model: config.embedding.model, error: error instanceof Error ? error.message : String(error) }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+  }
+}
+
+async function doctorCommand(argv: string[]): Promise<void> {
+  let indexDir = INDEX_DIR;
+  let configPath = CONFIG_PATH;
+  let json = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--json') json = true;
+    else if (arg === '--index-dir' || arg === '--config') {
+      const value = argv[++i];
+      if (value === undefined) throw new Error(`flag ${arg} requires a value`);
+      if (arg === '--index-dir') indexDir = value;
+      else configPath = value;
+    } else throw new Error(`unexpected argument: ${arg}`);
+  }
+  const report = await doctorReport(indexDir, configPath);
+  if (json) {
+    process.stdout.write(JSON.stringify(report) + '\n');
+    return;
+  }
+  const embedding = report.embedding;
+  process.stdout.write([
+    `Embedding: ${embedding.state}`,
+    ...(embedding.model ? [`Configured model: ${embedding.model}${embedding.digest ? `@${embedding.digest}` : ''}`] : []),
+    ...(embedding.index_model ? [`Index model: ${embedding.index_model}@${embedding.index_digest}`] : []),
+    ...(embedding.error ? [`Detail: ${embedding.error}`] : []),
+    ...(report.index_error ? [`Index: ${report.index_error}`] : []),
+    `Coverage: ${report.coverage.embedded}/${report.coverage.total}`,
+    `Indexed through: ${report.indexed_through || '(none)'}`,
+  ].join('\n') + '\n');
 }
 
 function parseNoteShowArgs(argv: string[]): NoteShowOptions {
@@ -328,6 +414,11 @@ function parseRecallArgs(argv: string[]): RecallOptions {
       const value = rest[i + 1];
       if (value === undefined) throw new Error('flag --index-dir requires a value');
       options.indexDir = value;
+      i += 1;
+    } else if (arg === '--config') {
+      const value = rest[i + 1];
+      if (value === undefined) throw new Error('flag --config requires a value');
+      options.configPath = value;
       i += 1;
     } else {
       throw new Error(`unexpected argument: ${arg}`);
@@ -666,6 +757,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const index = openIndexWrite(indexDir);
   try {
     indexNotes(index, dataDir);
+    await stampEmbeddingIndex(index);
   } finally {
     index.close();
   }
@@ -762,7 +854,7 @@ function formatRecallResult(result: RecallResult): string {
   return `${prefix} scope=${scope || '(none)'} title=${result.title} summary=${result.summary}`;
 }
 
-function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string, scoring: ScoringConfig): void {
+function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string, scoring: ScoringConfig, embedding: InjectionTrace['embedding']): void {
   const trace: InjectionTrace = {
     record_class: 'diagnostic',
     injection_id: makeInjectionId(),
@@ -777,6 +869,7 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
     })),
     shipped_note_ids: rows.map((row) => row.note_id),
     indexed_through: ts,
+    embedding,
     config_snapshot: scoringConfigSnapshot(scoring),
   };
   writeInjectionTrace(options.diagnosticsDir, trace);
@@ -795,11 +888,12 @@ function syncIndex(dataDir: string, indexDir: string): void {
   }
 }
 
-export function runRecall(options: RecallOptions): RecallPayload {
+export async function runRecall(options: RecallOptions): Promise<RecallPayload> {
   const ts = new Date().toISOString();
-  const scoring = loadConfig().scoring;
+  const scoring = loadConfig(options.configPath).scoring;
   const db = openIndexRead(options.indexDir ?? INDEX_DIR);
   try {
+    const embedding = await queryEmbedding(db, options.query, options.configPath);
     const { results: rows, candidates } = recallWithTrace(
       db,
       options.query,
@@ -807,7 +901,7 @@ export function runRecall(options: RecallOptions): RecallPayload {
       scoring,
       ts,
     );
-    writePullTrace(options, candidates, rows, indexedThrough(db), scoring);
+    writePullTrace(options, candidates, rows, indexedThrough(db), scoring, embedding.status);
 
     const notesById = new Map(stateNotes(db, rows.map((row) => row.note_id)).map((note) => [note.note_id, note]));
     const results: RecallResult[] = rows.flatMap((row) => {
@@ -840,8 +934,8 @@ export function runRecall(options: RecallOptions): RecallPayload {
   }
 }
 
-function recallCommand(options: RecallOptions): void {
-  const payload = runRecall(options);
+async function recallCommand(options: RecallOptions): Promise<void> {
+  const payload = await runRecall(options);
   if (options.json) {
     process.stdout.write(JSON.stringify(payload.results) + '\n');
     return;
@@ -904,9 +998,9 @@ function whyNotCommand(options: WhyNotOptions): void {
   }
 }
 
-function injectCommand(options: InjectionOptions): void {
+async function injectCommand(options: InjectionOptions): Promise<void> {
   options.query = options.sessionStart ? '' : fs.readFileSync(0, 'utf8');
-  const block = buildInjection(options);
+  const block = await buildInjection(options);
   if (block !== undefined) {
     process.stdout.write(block);
   }
@@ -926,7 +1020,7 @@ async function main(argv: string[]): Promise<void> {
       await drainCommand(parseFlags(rest));
       break;
     case 'recall':
-      recallCommand(parseRecallArgs(rest));
+      await recallCommand(parseRecallArgs(rest));
       break;
     case 'why':
       whyCommand(parseWhyArgs(rest));
@@ -937,11 +1031,14 @@ async function main(argv: string[]): Promise<void> {
     case 'stats':
       statsCommand(rest);
       break;
+    case 'doctor':
+      await doctorCommand(rest);
+      break;
     case 'supersede':
       supersede(rest);
       break;
     case 'inject':
-      injectCommand(parseInjectArgs(rest));
+      await injectCommand(parseInjectArgs(rest));
       break;
     case 'note': {
       const [subcommand, ...subRest] = rest;
