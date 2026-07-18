@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -69,6 +70,42 @@ test('a provider failure leaves FTS indexed and retries missing vectors on the n
     assert.deepEqual(embeddingCoverage(db), { embedded: 1, total: 1, state: 'complete' });
   } finally {
     db.close();
+  }
+});
+
+function runCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const cli = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
+  const child = spawn(process.execPath, [cli, ...args]);
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  return new Promise((resolve) => child.on('close', (code) => resolve({ code, stdout, stderr })));
+}
+
+test('drain with a fake provider reports full embedding coverage in stats', async () => {
+  const { dataDir, indexDir } = dirs();
+  const vaultDir = path.join(path.dirname(dataDir), 'vault');
+  const configPath = path.join(path.dirname(dataDir), 'config.json');
+  appendNote(dataDir, note('fact:smoke', 'smoke'));
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    if (request.url === '/api/tags') response.end(JSON.stringify({ models: [{ name: model.name, digest: model.digest }] }));
+    else if (request.url === '/v1/embeddings') response.end(JSON.stringify({ data: [{ embedding: [0.25, 0.75] }] }));
+    else response.writeHead(404).end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  fs.writeFileSync(configPath, JSON.stringify({ embedding: { endpoint: `http://127.0.0.1:${address.port}`, model: model.name, timeoutMs: 100 } }));
+  try {
+    const drain = await runCli(['drain', '--data-dir', dataDir, '--index-dir', indexDir, '--vault', vaultDir, '--config', configPath]);
+    assert.equal(drain.code, 0, drain.stderr);
+    const stats = await runCli(['stats', '--json', '--data-dir', dataDir, '--index-dir', indexDir]);
+    assert.equal(stats.code, 0, stats.stderr);
+    assert.deepEqual(JSON.parse(stats.stdout).index.embedding, { embedded: 1, total: 1, state: 'complete' });
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
 
