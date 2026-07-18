@@ -12,7 +12,7 @@ import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { importCuratedNote } from './distill/humanDistiller.ts';
 import { loadConfig } from './config.ts';
 import { indexNotes } from './index/indexer.ts';
-import { embeddingIndexModel, indexedThrough, openIndexRead, openIndexWrite, stateNotes } from './index/database.ts';
+import { embeddingCoverage, embeddingIndexModel, indexedThrough, openIndexRead, openIndexWrite, stateNotes } from './index/database.ts';
 import { makeOpenAiEmbeddingProvider } from './embedding/provider.ts';
 import { runDistill } from './distill/distillRun.ts';
 import { runExport } from './export/exportRun.ts';
@@ -23,7 +23,7 @@ import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, INDEX_DIR, MACHINE_ID_PATH } fr
 import { scoringConfigSnapshot, type ScoringConfig } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
-import { isEmbeddingModelMismatch, queryEmbedding, stampEmbeddingIndex } from './recall/embedding.ts';
+import { embedIndex, isEmbeddingModelMismatch, queryEmbedding } from './recall/embedding.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -43,7 +43,8 @@ const USAGE = `usage:
   librarian why <injection_id> [--json]    explain a diagnostics injection trace
   librarian why-not <query> <note_id> --project <slug> [--index-dir <dir>] [--global]
                                             explain why a note did not ship for a query
-  librarian stats [--json]                  report admission, usage, and cut-reason diagnostics
+  librarian stats [--index-dir <dir>] [--config <file>] [--json]
+                                            report admission, usage, cut reasons, and index embedding coverage
   librarian doctor [--index-dir <dir>] [--config <file>] [--json]
                                             report embedding endpoint and index readiness
   librarian inject --project <slug> [--index-dir <dir>] [--global] [--session-start]
@@ -224,14 +225,18 @@ function statsCommand(argv: string[]): void {
   let json = false;
   let dataDir = DATA_DIR;
   let diagnosticsDir = DIAGNOSTICS_DIR;
+  let indexDir = INDEX_DIR;
+  let configPath = CONFIG_PATH;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') json = true;
-    else if (arg === '--data-dir' || arg === '--diagnostics-dir') {
+    else if (arg === '--data-dir' || arg === '--diagnostics-dir' || arg === '--index-dir' || arg === '--config') {
       const value = argv[++i];
       if (value === undefined) throw new Error(`flag ${arg} requires a value`);
       if (arg === '--data-dir') dataDir = value;
-      else diagnosticsDir = value;
+      else if (arg === '--diagnostics-dir') diagnosticsDir = value;
+      else if (arg === '--index-dir') indexDir = value;
+      else configPath = value;
     } else throw new Error(`unexpected argument: ${arg}`);
   }
   const notes = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[])
@@ -243,6 +248,12 @@ function statsCommand(argv: string[]): void {
     notes,
     now: new Date(),
   });
+  try {
+    const db = openIndexRead(indexDir);
+    try { report.index = { embedding: embeddingCoverage(db, loadConfig(configPath).embedding !== undefined) }; } finally { db.close(); }
+  } catch {
+    // A missing index is normal before the first drain; diagnostics remain useful.
+  }
   process.stdout.write(json ? JSON.stringify(report) + '\n' : formatStats(report));
 }
 
@@ -263,13 +274,13 @@ export type DoctorReport = {
 export async function doctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PATH): Promise<DoctorReport> {
   const config = loadConfig(configPath);
   let db: ReturnType<typeof openIndexRead> | undefined;
-  let total = 0;
+  let coverage = { embedded: 0, total: 0 };
   let indexed = '';
   let model: ReturnType<typeof embeddingIndexModel> = undefined;
   let indexError: string | undefined;
   try {
     db = openIndexRead(indexDir);
-    total = (db.prepare("SELECT COUNT(*) AS count FROM note_state WHERE record_kind = 'note_revision'").get() as { count: number }).count;
+    coverage = embeddingCoverage(db, config.embedding !== undefined);
     indexed = indexedThrough(db);
     model = embeddingIndexModel(db);
   } catch (error) {
@@ -278,19 +289,19 @@ export async function doctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PAT
     db?.close();
   }
   if (!config.embedding) {
-    return { embedding: { state: 'unconfigured', ...(model ? { index_model: model.name, index_digest: model.digest } : {}) }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+    return { embedding: { state: 'unconfigured', ...(model ? { index_model: model.name, index_digest: model.digest } : {}) }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
   }
   try {
     const resolved = await makeOpenAiEmbeddingProvider(config.embedding).model();
     if (!model) {
-      return { embedding: { state: 'unpinned', model: resolved.name, digest: resolved.digest }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+      return { embedding: { state: 'unpinned', model: resolved.name, digest: resolved.digest }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
     }
     if (model && (model.name !== resolved.name || model.digest !== resolved.digest)) {
-      return { embedding: { state: 'mismatch', model: resolved.name, digest: resolved.digest, index_model: model.name, index_digest: model.digest }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+      return { embedding: { state: 'mismatch', model: resolved.name, digest: resolved.digest, index_model: model.name, index_digest: model.digest }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
     }
-    return { embedding: { state: 'ok', model: resolved.name, digest: resolved.digest, ...(model ? { index_model: model.name, index_digest: model.digest } : {}) }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+    return { embedding: { state: 'ok', model: resolved.name, digest: resolved.digest, ...(model ? { index_model: model.name, index_digest: model.digest } : {}) }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
   } catch (error) {
-    return { embedding: { state: 'unreachable', model: config.embedding.model, error: error instanceof Error ? error.message : String(error) }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+    return { embedding: { state: 'unreachable', model: config.embedding.model, error: error instanceof Error ? error.message : String(error) }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
   }
 }
 
@@ -758,9 +769,11 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const distilled = await runDistill({ dataDir, diagnosticsDir, provider, indexDir, configPath: flags.get('config') });
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
   const index = openIndexWrite(indexDir);
+  let coverage: ReturnType<typeof embeddingCoverage>;
   try {
     indexNotes(index, dataDir);
-    await stampEmbeddingIndex(index, flags.get('config'));
+    await embedIndex(index, flags.get('config'));
+    coverage = embeddingCoverage(index, loadConfig(flags.get('config')).embedding !== undefined);
   } finally {
     index.close();
   }
@@ -779,6 +792,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
     `sessions noops: ${distilled.noops}`,
     `sessions quarantined: ${distilled.quarantined}`,
     `sessions rejected: ${distilled.rejected}`,
+    `index embedding coverage: ${coverage!.embedded}/${coverage!.total} (${coverage!.state})`,
   ];
   if (vaultDir !== undefined) {
     lines.push(`notes exported: ${exported!.exported}`);
@@ -883,7 +897,7 @@ async function syncIndex(dataDir: string, indexDir: string, configPath?: string)
     const db = openIndexWrite(indexDir);
     try {
       indexNotes(db, dataDir);
-      await stampEmbeddingIndex(db, configPath);
+      await embedIndex(db, configPath);
     } finally {
       db.close();
     }

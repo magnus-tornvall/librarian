@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import { load as loadSqliteVec } from 'sqlite-vec';
 import { INDEX_DIR } from '../paths.ts';
 import { INDEX_SCHEMA_VERSION, migrate } from './schema.ts';
 import type { NoteRevision } from '../note.ts';
@@ -13,6 +14,7 @@ export function indexDbPath(indexDir = INDEX_DIR): string {
 function configure(db: Database.Database): void {
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
+  loadSqliteVec(db);
 }
 
 export function openIndexWrite(indexDir = INDEX_DIR): Database.Database {
@@ -41,6 +43,7 @@ export function openIndexRead(indexDir = INDEX_DIR): Database.Database {
   try {
     db = new Database(file, { readonly: true, fileMustExist: true });
     db.pragma('busy_timeout = 5000');
+    loadSqliteVec(db);
   } catch (err) {
     throw new Error(`cannot open recall index at ${file}; run librarian drain to rebuild it: ${(err as Error).message}`);
   }
@@ -69,6 +72,24 @@ export function setEmbeddingIndexModel(db: Database.Database, model: EmbeddingMo
   const write = db.prepare('INSERT INTO index_metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
   write.run('embedding_model', model.name);
   write.run('embedding_digest', model.digest);
+}
+
+export type EmbeddingCoverage = { embedded: number; total: number; state: 'disabled' | 'partial' | 'complete' };
+
+/**
+ * `enabled` comes from config (embedding configured or not) — the index alone
+ * cannot distinguish "disabled" from "configured but the provider never
+ * succeeded", and that difference is exactly what coverage must not hide.
+ * Callers without config fall back to the stamped index model.
+ */
+export function embeddingCoverage(db: Database.Database, enabled?: boolean): EmbeddingCoverage {
+  const total = (db.prepare("SELECT COUNT(*) AS count FROM notes_fts WHERE invalid_at IS NULL OR invalid_at > ?").get(new Date().toISOString()) as { count: number }).count;
+  const hasVectors = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note_vectors'").get() !== undefined;
+  const embedded = hasVectors
+    ? (db.prepare('SELECT COUNT(*) AS count FROM note_vectors').get() as { count: number }).count
+    : 0;
+  const active = enabled ?? embeddingIndexModel(db) !== undefined;
+  return { embedded, total, state: !active ? 'disabled' : embedded === total ? 'complete' : 'partial' };
 }
 
 export function assertEmbeddingIndexModel(db: Database.Database, model: EmbeddingModel): void {
