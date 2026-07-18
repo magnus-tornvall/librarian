@@ -43,7 +43,7 @@ const USAGE = `usage:
   librarian why <injection_id> [--json]    explain a diagnostics injection trace
   librarian why-not <query> <note_id> --project <slug> [--index-dir <dir>] [--global]
                                             explain why a note did not ship for a query
-  librarian stats [--index-dir <dir>] [--json]
+  librarian stats [--index-dir <dir>] [--config <file>] [--json]
                                             report admission, usage, cut reasons, and index embedding coverage
   librarian doctor [--index-dir <dir>] [--config <file>] [--json]
                                             report embedding endpoint and index readiness
@@ -226,15 +226,17 @@ function statsCommand(argv: string[]): void {
   let dataDir = DATA_DIR;
   let diagnosticsDir = DIAGNOSTICS_DIR;
   let indexDir = INDEX_DIR;
+  let configPath = CONFIG_PATH;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') json = true;
-    else if (arg === '--data-dir' || arg === '--diagnostics-dir' || arg === '--index-dir') {
+    else if (arg === '--data-dir' || arg === '--diagnostics-dir' || arg === '--index-dir' || arg === '--config') {
       const value = argv[++i];
       if (value === undefined) throw new Error(`flag ${arg} requires a value`);
       if (arg === '--data-dir') dataDir = value;
       else if (arg === '--diagnostics-dir') diagnosticsDir = value;
-      else indexDir = value;
+      else if (arg === '--index-dir') indexDir = value;
+      else configPath = value;
     } else throw new Error(`unexpected argument: ${arg}`);
   }
   const notes = latestRecordPerNoteId(readAllNotes(dataDir) as NoteRecord[])
@@ -248,7 +250,7 @@ function statsCommand(argv: string[]): void {
   });
   try {
     const db = openIndexRead(indexDir);
-    try { report.index = { embedding: embeddingCoverage(db) }; } finally { db.close(); }
+    try { report.index = { embedding: embeddingCoverage(db, loadConfig(configPath).embedding !== undefined) }; } finally { db.close(); }
   } catch {
     // A missing index is normal before the first drain; diagnostics remain useful.
   }
@@ -278,7 +280,7 @@ export async function doctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PAT
   let indexError: string | undefined;
   try {
     db = openIndexRead(indexDir);
-    coverage = embeddingCoverage(db);
+    coverage = embeddingCoverage(db, config.embedding !== undefined);
     indexed = indexedThrough(db);
     model = embeddingIndexModel(db);
   } catch (error) {
@@ -771,7 +773,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   try {
     indexNotes(index, dataDir);
     await embedIndex(index, flags.get('config'));
-    coverage = embeddingCoverage(index);
+    coverage = embeddingCoverage(index, loadConfig(flags.get('config')).embedding !== undefined);
   } finally {
     index.close();
   }

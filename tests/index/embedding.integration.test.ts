@@ -73,6 +73,81 @@ test('a provider failure leaves FTS indexed and retries missing vectors on the n
   }
 });
 
+test('a configured but never-successful provider reports partial, not disabled', () => {
+  const { dataDir, indexDir } = dirs();
+  appendNote(dataDir, note('fact:unreached', 'unreached'));
+  const db = openIndexWrite(indexDir);
+  try {
+    indexNotes(db, dataDir);
+    // No model stamp exists (model() itself failed), but config says embeddings are on.
+    assert.deepEqual(embeddingCoverage(db, true), { embedded: 0, total: 1, state: 'partial' });
+    assert.deepEqual(embeddingCoverage(db, false), { embedded: 0, total: 1, state: 'disabled' });
+  } finally {
+    db.close();
+  }
+});
+
+test('a data-dir change resets vectors together with the FTS rows', async () => {
+  const { dataDir, indexDir } = dirs();
+  const otherDataDir = path.join(path.dirname(dataDir), 'other-data');
+  appendNote(dataDir, note('fact:reset', 'reset'));
+  appendNote(otherDataDir, note('fact:fresh', 'fresh'));
+  const db = openIndexWrite(indexDir);
+  try {
+    indexNotes(db, dataDir);
+    await embedIndexedNotes(db, provider(async () => [1, 0]), model);
+    assert.equal((db.prepare('SELECT COUNT(*) AS count FROM note_vectors').get() as { count: number }).count, 1);
+
+    indexNotes(db, otherDataDir);
+    assert.deepEqual(
+      db.prepare('SELECT note_id FROM note_vectors').all(),
+      [],
+      'stale vectors from the previous data dir must not survive the reset',
+    );
+    assert.deepEqual(embeddingCoverage(db), { embedded: 0, total: 1, state: 'partial' });
+  } finally {
+    db.close();
+  }
+});
+
+test('a revision replaced while its embedding is in flight never persists a stale vector', async () => {
+  const { dataDir, indexDir } = dirs();
+  appendNote(dataDir, note('fact:race', 'rev-old'));
+  const db = openIndexWrite(indexDir);
+  try {
+    indexNotes(db, dataDir);
+    await embedIndexedNotes(db, provider(async () => {
+      // A concurrent index pass lands a newer revision while the provider call is in flight.
+      appendNote(dataDir, { ...note('fact:race', 'rev-new'), created_at: '2026-07-18T12:00:00.000Z' });
+      indexNotes(db, dataDir);
+      return [9, 9];
+    }), model);
+    assert.deepEqual(db.prepare('SELECT note_id FROM note_vectors').all(), [], 'the stale rev-old vector must be discarded');
+
+    await embedIndexedNotes(db, provider(async () => [1, 1]), model);
+    assert.deepEqual(embeddingCoverage(db), { embedded: 1, total: 1, state: 'complete' });
+  } finally {
+    db.close();
+  }
+});
+
+test('a future-invalidated note stays embeddable while recall can still ship it', async () => {
+  const { dataDir, indexDir } = dirs();
+  appendNote(dataDir, note('fact:sunset', 'sunset'));
+  appendNote(dataDir, {
+    kind: 'note_supersession', schema_version: 1, note_id: 'fact:sunset', superseded_by: 'fact:later',
+    revision_id: 'future-supersession', created_at: '2099-01-01T00:00:00.000Z', source: { kind: 'cli' },
+  });
+  const db = openIndexWrite(indexDir);
+  try {
+    indexNotes(db, dataDir);
+    await embedIndexedNotes(db, provider(async () => [1, 0]), model);
+    assert.deepEqual(embeddingCoverage(db), { embedded: 1, total: 1, state: 'complete' });
+  } finally {
+    db.close();
+  }
+});
+
 function runCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const cli = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
   const child = spawn(process.execPath, [cli, ...args]);
@@ -101,7 +176,7 @@ test('drain with a fake provider reports full embedding coverage in stats', asyn
   try {
     const drain = await runCli(['drain', '--data-dir', dataDir, '--index-dir', indexDir, '--vault', vaultDir, '--config', configPath]);
     assert.equal(drain.code, 0, drain.stderr);
-    const stats = await runCli(['stats', '--json', '--data-dir', dataDir, '--index-dir', indexDir]);
+    const stats = await runCli(['stats', '--json', '--data-dir', dataDir, '--index-dir', indexDir, '--config', configPath]);
     assert.equal(stats.code, 0, stats.stderr);
     assert.deepEqual(JSON.parse(stats.stdout).index.embedding, { embedded: 1, total: 1, state: 'complete' });
   } finally {
@@ -121,7 +196,7 @@ test('no embedding configuration leaves the index operational with disabled zero
     db.close();
   }
   const cli = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
-  const result = spawnSync('node', [cli, 'stats', '--json', '--data-dir', dataDir, '--index-dir', indexDir], { encoding: 'utf8' });
+  const result = spawnSync('node', [cli, 'stats', '--json', '--data-dir', dataDir, '--index-dir', indexDir, '--config', path.join(path.dirname(dataDir), 'missing-config.json')], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).index.embedding, { embedded: 0, total: 1, state: 'disabled' });
 });

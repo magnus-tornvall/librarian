@@ -82,19 +82,29 @@ function createVectorTable(db: Database.Database, dimensions: number): void {
 }
 
 /** Embed active FTS rows that have no vector. Individual provider failures leave rows for the next pass. */
-export async function embedIndexedNotes(db: Database.Database, provider: EmbeddingProvider, model: EmbeddingModel): Promise<void> {
+export async function embedIndexedNotes(db: Database.Database, provider: EmbeddingProvider, model: EmbeddingModel, nowIso = new Date().toISOString()): Promise<void> {
   assertEmbeddingIndexModel(db, model);
   setEmbeddingIndexModel(db, model);
+  // Match recall's active-row rule (invalid_at open interval), so a note recall can
+  // still ship never sits unembeddable; future-valid rows embed ahead of need.
   const rows = db.prepare(vectorTableExists(db)
-    ? `SELECT note_id, search_text FROM notes_fts WHERE invalid_at IS NULL AND note_id NOT IN (SELECT note_id FROM note_vectors)`
-    : 'SELECT note_id, search_text FROM notes_fts WHERE invalid_at IS NULL').all() as Array<{ note_id: string; search_text: string }>;
+    ? `SELECT note_id, revision_id, search_text FROM notes_fts WHERE (invalid_at IS NULL OR invalid_at > ?) AND note_id NOT IN (SELECT note_id FROM note_vectors)`
+    : 'SELECT note_id, revision_id, search_text FROM notes_fts WHERE invalid_at IS NULL OR invalid_at > ?').all(nowIso) as Array<{ note_id: string; revision_id: string; search_text: string }>;
   for (const row of rows) {
     try {
       const vector = await provider.embed(row.search_text);
       const dimensions = vectorDimension(db);
       if (!vectorTableExists(db)) createVectorTable(db, vector.length);
       else if (dimensions !== vector.length) throw new Error(`embedding provider changed vector dimensions from ${dimensions} to ${vector.length}`);
-      db.prepare('INSERT INTO note_vectors (note_id, embedding) VALUES (?, ?)').run(row.note_id, JSON.stringify(vector));
+      // The provider call yields between reading the row and writing the vector; a
+      // concurrent index pass may have replaced or removed the revision meanwhile.
+      // Re-check inside one transaction so a stale vector is never persisted.
+      db.transaction(() => {
+        const current = db.prepare('SELECT revision_id FROM notes_fts WHERE note_id = ?').get(row.note_id) as { revision_id: string } | undefined;
+        if (current?.revision_id !== row.revision_id) return;
+        if (db.prepare('SELECT 1 FROM note_vectors WHERE note_id = ?').get(row.note_id) !== undefined) return;
+        db.prepare('INSERT INTO note_vectors (note_id, embedding) VALUES (?, ?)').run(row.note_id, JSON.stringify(vector));
+      })();
     } catch {
       // ponytail: retry failed embeddings on the next index pass; no separate retry store is needed.
     }
@@ -164,6 +174,7 @@ export function indexNotes(db: Database.Database, dataDir: string): number {
     cursor = db.prepare('SELECT segment, byte_offset, data_dir FROM index_cursor WHERE id = 1').get() as typeof cursor;
     if (cursor && (cursor.data_dir !== dataDir || !segments.includes(cursor.segment) || cursor.byte_offset > fs.statSync(path.join(notesDir, cursor.segment)).size)) {
       db.exec('DELETE FROM notes_fts; DELETE FROM note_state; DELETE FROM index_cursor;');
+      if (vectorTableExists(db)) db.exec('DELETE FROM note_vectors;');
       cursor = undefined;
     }
     const start = cursor ? segments.indexOf(cursor.segment) : 0;

@@ -76,14 +76,20 @@ export function setEmbeddingIndexModel(db: Database.Database, model: EmbeddingMo
 
 export type EmbeddingCoverage = { embedded: number; total: number; state: 'disabled' | 'partial' | 'complete' };
 
-export function embeddingCoverage(db: Database.Database): EmbeddingCoverage {
-  const total = (db.prepare('SELECT COUNT(*) AS count FROM notes_fts WHERE invalid_at IS NULL').get() as { count: number }).count;
+/**
+ * `enabled` comes from config (embedding configured or not) — the index alone
+ * cannot distinguish "disabled" from "configured but the provider never
+ * succeeded", and that difference is exactly what coverage must not hide.
+ * Callers without config fall back to the stamped index model.
+ */
+export function embeddingCoverage(db: Database.Database, enabled?: boolean): EmbeddingCoverage {
+  const total = (db.prepare("SELECT COUNT(*) AS count FROM notes_fts WHERE invalid_at IS NULL OR invalid_at > ?").get(new Date().toISOString()) as { count: number }).count;
   const hasVectors = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note_vectors'").get() !== undefined;
   const embedded = hasVectors
     ? (db.prepare('SELECT COUNT(*) AS count FROM note_vectors').get() as { count: number }).count
     : 0;
-  const enabled = embeddingIndexModel(db) !== undefined;
-  return { embedded, total, state: !enabled ? 'disabled' : embedded === total ? 'complete' : 'partial' };
+  const active = enabled ?? embeddingIndexModel(db) !== undefined;
+  return { embedded, total, state: !active ? 'disabled' : embedded === total ? 'complete' : 'partial' };
 }
 
 export function assertEmbeddingIndexModel(db: Database.Database, model: EmbeddingModel): void {
