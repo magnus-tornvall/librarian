@@ -7,6 +7,12 @@ export type LibrarianConfig = {
     provider: 'claude' | 'opencode';
     model?: string;
   };
+  embedding?: {
+    endpoint: string;
+    model: string;
+    digest?: string;
+    timeoutMs: number;
+  };
   scoring: ScoringConfig;
 };
 
@@ -55,9 +61,31 @@ function scoringConfig(value: unknown, configPath: string): ScoringConfig {
   };
 }
 
+function embeddingConfig(value: unknown, configPath: string): LibrarianConfig['embedding'] {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    invalid('embedding', configPath, 'an object');
+  }
+  const embedding = value as Record<string, unknown>;
+  if (typeof embedding.endpoint !== 'string' || embedding.endpoint.length === 0) {
+    invalid('embedding.endpoint', configPath, 'a non-empty string');
+  }
+  if (typeof embedding.model !== 'string' || embedding.model.length === 0) {
+    invalid('embedding.model', configPath, 'a non-empty string');
+  }
+  if (embedding.digest !== undefined && (typeof embedding.digest !== 'string' || embedding.digest.length === 0)) {
+    invalid('embedding.digest', configPath, 'a non-empty string');
+  }
+  const timeoutMs = embedding.timeoutMs ?? 400;
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    invalid('embedding.timeoutMs', configPath, 'a positive finite number');
+  }
+  return { endpoint: embedding.endpoint, model: embedding.model, ...(embedding.digest ? { digest: embedding.digest } : {}), timeoutMs };
+}
+
 export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {
   if (!fs.existsSync(configPath)) {
-    return { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, scoring: scoringConfig(undefined, configPath) };
+    return { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, scoring: scoringConfig(undefined, configPath) };
   }
 
   let parsed: unknown;
@@ -80,5 +108,5 @@ export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {
     throw new Error(`invalid inference.model in ${configPath}: expected a string`);
   }
   const model = (inference.model as string | undefined) ?? (provider === 'opencode' ? 'opencode/big-pickle' : undefined);
-  return { inference: { provider, model }, scoring: scoringConfig(root.scoring, configPath) };
+  return { inference: { provider, model }, embedding: embeddingConfig(root.embedding, configPath), scoring: scoringConfig(root.scoring, configPath) };
 }

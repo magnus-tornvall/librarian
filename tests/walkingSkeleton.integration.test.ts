@@ -149,6 +149,7 @@ test('walking skeleton: fixture events → distill → note log → export → i
     })),
     shipped_note_ids: [shippedNoteId],
     indexed_through: note.revision_id,
+    embedding: 'disabled',
     config_snapshot: {},
   };
   writeInjectionTrace(t.diagnosticsDir, trace);

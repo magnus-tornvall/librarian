@@ -137,7 +137,7 @@ function toolError(err: unknown): CallToolResult {
   return { isError: true, content: [{ type: 'text', text: message }] };
 }
 
-function search(options: McpServerOptions, args: Record<string, unknown>): CallToolResult {
+async function search(options: McpServerOptions, args: Record<string, unknown>): Promise<CallToolResult> {
   const recallOptions: RecallOptions = {
     query: stringArg(args, 'query', true) ?? '',
     projectSlug: stringArg(args, 'project_slug', false),
@@ -150,7 +150,7 @@ function search(options: McpServerOptions, args: Record<string, unknown>): CallT
     indexDir: options.indexDir ?? INDEX_DIR,
   };
 
-  const payload = runRecall(recallOptions);
+  const payload = await runRecall(recallOptions);
   return jsonResult({
     results: payload.results.map(({ note_id, note_type, title, summary, score, created_at, origin }) => ({
       note_id,
@@ -200,12 +200,12 @@ export function createMcpServer(options: McpServerOptions): Server {
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [SEARCH_TOOL, GET_NOTES_TOOL, GET_NOTE_TOOL] }));
 
-  server.setRequestHandler(CallToolRequestSchema, (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
       const args = objectArgs(request.params.arguments);
       switch (request.params.name) {
         case 'search':
-          return search(options, args);
+          return await search(options, args);
         case 'get_notes':
           return getNotes(options, args);
         case 'get_note':

@@ -7,6 +7,7 @@ import { findNearDuplicate } from './noveltyGate.ts';
 import { appendNote, readAllNotes } from '../log/noteLog.ts';
 import { openIndexWrite } from '../index/database.ts';
 import { indexNotes } from '../index/indexer.ts';
+import { isEmbeddingModelMismatch, stampEmbeddingIndex } from '../recall/embedding.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
 import { acquireLock } from '../log/lock.ts';
@@ -268,6 +269,7 @@ export type DistillRunOptions = {
   diagnosticsDir: string;
   provider: InferenceProvider;
   indexDir?: string;
+  configPath?: string;
 };
 
 /**
@@ -343,10 +345,12 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
       const db = openIndexWrite(options.indexDir);
       try {
         indexNotes(db, options.dataDir);
+        await stampEmbeddingIndex(db, options.configPath);
       } finally {
         db.close();
       }
     } catch (err) {
+      if (isEmbeddingModelMismatch(err)) throw err;
       process.stderr.write(`librarian: note is durable but the index is stale; run librarian drain: ${(err as Error).message}\n`);
     }
     return result;
