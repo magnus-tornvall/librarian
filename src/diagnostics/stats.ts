@@ -8,6 +8,7 @@ const DECISIONS: DistillVerdict['decision'][] = [
   'distilled', 'duplicate', 'skipped', 'noop', 'quarantined', 'rejected',
 ];
 const CUT_REASONS = ['below_floor', 'budget', 'scope_mismatch', 'superseded', 'ttl_expired', 'unknown'] as const;
+const EMBEDDING_STATES = ['ok', 'timeout', 'error', 'disabled'] as const;
 
 type CountRate = { count: number; rate: number };
 type Breakdown = { total: number; decisions: Record<DistillVerdict['decision'], CountRate> };
@@ -29,6 +30,7 @@ export type StatsReport = {
     dead_note_ratio: number;
     perpetual_candidate_min_appearances: number;
     perpetual_candidates: Array<ReportNote & { appearances: number }>;
+    embedding: { total: number; mix: Record<(typeof EMBEDDING_STATES)[number], CountRate> };
   };
   cut_reasons: { total: number; mix: Record<(typeof CUT_REASONS)[number], CountRate> };
 };
@@ -68,9 +70,11 @@ export function computeStats({
   const recentShipped = new Set<string>();
   const candidateStats = new Map<string, { appearances: number; onlyBelowFloor: boolean }>();
   const cutCounts = Object.fromEntries(CUT_REASONS.map((reason) => [reason, 0])) as Record<(typeof CUT_REASONS)[number], number>;
+  const embeddingCounts = Object.fromEntries(EMBEDDING_STATES.map((state) => [state, 0])) as Record<(typeof EMBEDDING_STATES)[number], number>;
   const cutoff = now.getTime() - DEAD_NOTE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
   for (const trace of traces) {
+    embeddingCounts[trace.embedding ?? 'disabled'] += 1;
     const isRecent = new Date(trace.ts).getTime() >= cutoff;
     for (const noteId of trace.shipped_note_ids) {
       shipped.set(noteId, (shipped.get(noteId) ?? 0) + 1);
@@ -118,6 +122,10 @@ export function computeStats({
       dead_note_ratio: eligibleNotes.length === 0 || !hasRecentTraces ? 0 : deadNotes.length / eligibleNotes.length,
       perpetual_candidate_min_appearances: PERPETUAL_CANDIDATE_MIN_APPEARANCES,
       perpetual_candidates: perpetualCandidates,
+      embedding: {
+        total: traces.length,
+        mix: Object.fromEntries(EMBEDDING_STATES.map((state) => [state, { count: embeddingCounts[state], rate: traces.length === 0 ? 0 : embeddingCounts[state] / traces.length }])) as StatsReport['usage']['embedding']['mix'],
+      },
     },
     cut_reasons: {
       total: cutTotal,
@@ -149,6 +157,7 @@ export function formatStats(report: StatsReport): string {
     '',
     'Usage',
     `Injection traces: ${report.usage.trace_count}`,
+    `Embeddings: ${Object.entries(report.usage.embedding.mix).map(([state, value]) => `${state} ${value.count} (${percent(value.rate)})`).join(', ')}`,
     `Injections per note: ${injections.length === 0 ? '(none)' : injections.map(([id, count]) => `${id}=${count}`).join(', ')}`,
     `Dead notes (${report.usage.dead_window_days}d): ${report.usage.dead_notes.length} (${percent(report.usage.dead_note_ratio)})`,
     ...report.usage.dead_notes.map((note) => `- ${note.note_id}: ${note.title}`),

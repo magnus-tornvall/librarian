@@ -19,11 +19,11 @@ function verdict(id: string, ts: string, decision: DistillVerdict['decision'], e
   };
 }
 
-function trace(id: string, ts: string, noteId: string, cutReason?: 'below_floor' | 'budget' | 'scope_mismatch', shipped: string[] = []): InjectionTrace {
+function trace(id: string, ts: string, noteId: string, cutReason?: 'below_floor' | 'budget' | 'scope_mismatch', shipped: string[] = [], embedding: InjectionTrace['embedding'] = 'disabled'): InjectionTrace {
   return {
     record_class: 'diagnostic', injection_id: id, ts, query: id,
     candidates: [{ note_id: noteId, raw_score: 1, post_weight_score: 1, ...(cutReason ? { cut_reason: cutReason } : {}) }],
-    shipped_note_ids: shipped, indexed_through: ts, config_snapshot: {},
+    shipped_note_ids: shipped, indexed_through: ts, embedding, config_snapshot: {},
   };
 }
 
@@ -53,7 +53,7 @@ test('stats joins monthly verdicts, note usage, perpetual candidates, and cut re
   assert.deepEqual(readDistillVerdicts(diagnosticsDir), verdicts);
 
   const traces = [
-    trace('t1', '2026-06-20T00:00:00.000Z', 'shipped', undefined, ['shipped']),
+    trace('t1', '2026-06-20T00:00:00.000Z', 'shipped', undefined, ['shipped'], 'ok'),
     trace('t2', '2026-06-21T00:00:00.000Z', 'perpetual', 'below_floor'),
     trace('t3', '2026-06-22T00:00:00.000Z', 'perpetual', 'below_floor'),
     trace('t4', '2026-06-23T00:00:00.000Z', 'perpetual', 'below_floor'),
@@ -77,6 +77,8 @@ test('stats joins monthly verdicts, note usage, perpetual candidates, and cut re
   assert.deepEqual(report.usage.dead_notes.map((row) => row.note_id), ['never-seen', 'perpetual']);
   assert.equal(report.usage.dead_note_ratio, 2 / 3);
   assert.deepEqual(report.usage.perpetual_candidates, [{ note_id: 'perpetual', title: 'Perpetual note', appearances: 3 }]);
+  assert.equal(report.usage.embedding.mix.ok.count, 1);
+  assert.equal(report.usage.embedding.mix.disabled.count, 4);
   assert.equal(report.cut_reasons.total, 4);
   assert.equal(report.cut_reasons.mix.unknown.count, 0);
   assert.equal(Object.values(report.cut_reasons.mix).reduce((sum, row) => sum + row.count, 0), 4);
@@ -93,6 +95,7 @@ test('stats joins monthly verdicts, note usage, perpetual candidates, and cut re
   assert.match(text.stdout, /Admission funnel/);
   assert.match(text.stdout, /noop 1 \(50\.0%\)/);
   assert.match(text.stdout, /Usage/);
+  assert.match(text.stdout, /Embeddings: ok 1 \(20\.0%\)/);
   assert.match(text.stdout, /Perpetual candidates \(>=3\): 1/);
   assert.match(text.stdout, /Cut-reason mix/);
   assert.match(text.stdout, /Total cut candidates: 4/);

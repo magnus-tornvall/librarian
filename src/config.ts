@@ -10,6 +10,7 @@ export type LibrarianConfig = {
   embedding?: {
     endpoint: string;
     model: string;
+    digest?: string;
     timeoutMs: number;
   };
   scoring: ScoringConfig;
@@ -72,11 +73,14 @@ function embeddingConfig(value: unknown, configPath: string): LibrarianConfig['e
   if (typeof embedding.model !== 'string' || embedding.model.length === 0) {
     invalid('embedding.model', configPath, 'a non-empty string');
   }
+  if (embedding.digest !== undefined && (typeof embedding.digest !== 'string' || embedding.digest.length === 0)) {
+    invalid('embedding.digest', configPath, 'a non-empty string');
+  }
   const timeoutMs = embedding.timeoutMs ?? 400;
   if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     invalid('embedding.timeoutMs', configPath, 'a positive finite number');
   }
-  return { endpoint: embedding.endpoint, model: embedding.model, timeoutMs };
+  return { endpoint: embedding.endpoint, model: embedding.model, ...(embedding.digest ? { digest: embedding.digest } : {}), timeoutMs };
 }
 
 export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {

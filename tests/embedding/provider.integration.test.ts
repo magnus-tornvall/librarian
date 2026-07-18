@@ -16,8 +16,8 @@ import type { NoteRevision } from '../../src/note.ts';
 
 function root(): string { return fs.mkdtempSync(path.join(os.tmpdir(), 'embedding-provider-')); }
 
-function config(file: string, endpoint: string, timeoutMs = 100): void {
-  fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint, model: 'qwen3-embedding:0.6b', timeoutMs } }));
+function config(file: string, endpoint: string, timeoutMs = 100, digest?: string): void {
+  fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint, model: 'qwen3-embedding:0.6b', timeoutMs, ...(digest ? { digest } : {}) } }));
 }
 
 function note(): NoteRevision {
@@ -57,6 +57,23 @@ test('fixture provider is a normal provider seam', async () => {
   const provider = makeFixtureEmbeddingProvider({ name: 'fixture', digest: 'sha256:fixture' }, [1, 2]);
   assert.deepEqual(await provider.model(), { name: 'fixture', digest: 'sha256:fixture' });
   assert.deepEqual(await provider.embed('Swedish query'), [1, 2]);
+});
+
+test('an OpenAI-compatible endpoint needs no Ollama metadata endpoint when digest is configured', async () => {
+  const server = http.createServer((request, response) => {
+    assert.equal(request.url, '/v1/embeddings');
+    response.setHeader('content-type', 'application/json').end(JSON.stringify({ data: [{ embedding: [1, 2] }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  try {
+    const provider = makeOpenAiEmbeddingProvider({ endpoint: `http://127.0.0.1:${address.port}`, model: 'remote-model', digest: 'deployment-revision', timeoutMs: 100 });
+    assert.deepEqual(await provider.model(), { name: 'remote-model', digest: 'deployment-revision' });
+    assert.deepEqual(await provider.embed('query'), [1, 2]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test('real Ollama endpoint returns a digest and vector when explicitly enabled', { skip: process.env.LIBRARIAN_TEST_OLLAMA !== '1' }, async () => {
@@ -117,8 +134,9 @@ test('digest mismatch refuses recall and doctor reports every readiness state', 
   try {
     config(configPath, endpoint.endpoint);
     const missingIndex = await doctorReport(path.join(temp, 'missing-index'), configPath);
-    assert.equal(missingIndex.embedding.state, 'ok');
+    assert.equal(missingIndex.embedding.state, 'unpinned');
     assert.match(missingIndex.index_error ?? '', /recall index is missing/);
+    assert.equal((await doctorReport(indexDir, configPath)).embedding.state, 'unpinned');
     const db = openIndexWrite(indexDir);
     try {
       assert.equal(await stampEmbeddingIndex(db, configPath), 'ok');

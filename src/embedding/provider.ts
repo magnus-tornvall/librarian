@@ -31,6 +31,7 @@ async function request(url: string, init: RequestInit, timeoutMs: number): Promi
 export function makeOpenAiEmbeddingProvider(config: NonNullable<LibrarianConfig['embedding']>): EmbeddingProvider {
   return {
     async model(): Promise<EmbeddingModel> {
+      if (config.digest) return { name: config.model, digest: config.digest };
       const response = await request(endpointUrl(config.endpoint, '/api/tags'), { method: 'GET' }, config.timeoutMs);
       const body = await response.json() as { models?: Array<{ name?: unknown; digest?: unknown }> };
       const digest = body.models?.find((model) => model.name === config.model)?.digest;
@@ -61,5 +62,5 @@ export function makeFixtureEmbeddingProvider(model: EmbeddingModel, vector: numb
 }
 
 export function classifyEmbeddingError(error: unknown): 'timeout' | 'error' {
-  return error instanceof EmbeddingTimeoutError ? 'timeout' : 'error';
+  return error instanceof EmbeddingTimeoutError || (error instanceof DOMException && error.name === 'TimeoutError') ? 'timeout' : 'error';
 }

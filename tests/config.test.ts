@@ -46,8 +46,12 @@ test('loadConfig reads optional embedding settings and rejects malformed values'
   const file = path.join(dir, 'config.json');
   fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint: 'http://127.0.0.1:11434', model: 'qwen3-embedding:0.6b', timeoutMs: 400 } }));
   assert.deepEqual(loadConfig(file).embedding, { endpoint: 'http://127.0.0.1:11434', model: 'qwen3-embedding:0.6b', timeoutMs: 400 });
+  fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint: 'https://embeddings.example.test', model: 'multilingual', digest: 'revision-123' } }));
+  assert.deepEqual(loadConfig(file).embedding, { endpoint: 'https://embeddings.example.test', model: 'multilingual', digest: 'revision-123', timeoutMs: 400 });
   fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint: '', model: 'model' } }));
   assert.throws(() => loadConfig(file), /embedding\.endpoint/);
   fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint: 'http://localhost', model: 'model', timeoutMs: 0 } }));
   assert.throws(() => loadConfig(file), /embedding\.timeoutMs/);
+  fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint: 'http://localhost', model: 'model', digest: '' } }));
+  assert.throws(() => loadConfig(file), /embedding\.digest/);
 });

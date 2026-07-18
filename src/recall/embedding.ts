@@ -9,6 +9,10 @@ export type QueryEmbedding = {
   vector?: number[];
 };
 
+export function isEmbeddingModelMismatch(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('embedding model changed from ');
+}
+
 export async function queryEmbedding(db: Database.Database, query: string, configPath?: string): Promise<QueryEmbedding> {
   const config = loadConfig(configPath);
   if (!config.embedding || query.length === 0) return { status: 'disabled' };
@@ -18,7 +22,7 @@ export async function queryEmbedding(db: Database.Database, query: string, confi
     assertEmbeddingIndexModel(db, model);
     return { status: 'ok', model, vector };
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('embedding model changed from ')) throw error;
+    if (isEmbeddingModelMismatch(error)) throw error;
     return { status: classifyEmbeddingError(error) };
   }
 }
@@ -26,13 +30,8 @@ export async function queryEmbedding(db: Database.Database, query: string, confi
 export async function stampEmbeddingIndex(db: Database.Database, configPath?: string): Promise<QueryEmbedding['status']> {
   const config = loadConfig(configPath);
   if (!config.embedding) return 'disabled';
-  try {
-    const model = await makeOpenAiEmbeddingProvider(config.embedding).model();
-    assertEmbeddingIndexModel(db, model);
-    setEmbeddingIndexModel(db, model);
-    return 'ok';
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('embedding model changed from ')) throw error;
-    return classifyEmbeddingError(error);
-  }
+  const model = await makeOpenAiEmbeddingProvider(config.embedding).model();
+  assertEmbeddingIndexModel(db, model);
+  setEmbeddingIndexModel(db, model);
+  return 'ok';
 }

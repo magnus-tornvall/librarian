@@ -23,7 +23,7 @@ import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, INDEX_DIR, MACHINE_ID_PATH } fr
 import { scoringConfigSnapshot, type ScoringConfig } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
-import { queryEmbedding, stampEmbeddingIndex } from './recall/embedding.ts';
+import { isEmbeddingModelMismatch, queryEmbedding, stampEmbeddingIndex } from './recall/embedding.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -137,7 +137,7 @@ function parseInjectArgs(argv: string[]): InjectionOptions {
 
 type NoteShowOptions = { noteId: string; dataDir: string; withProvenance: boolean; json: boolean };
 
-function noteImportCurated(argv: string[]): void {
+async function noteImportCurated(argv: string[]): Promise<void> {
   const [file, ...rest] = argv;
   if (!file || file.startsWith('--')) throw new Error('note import-curated requires <file>');
   const flags = parseFlags(rest);
@@ -145,11 +145,11 @@ function noteImportCurated(argv: string[]): void {
   if (!vault) throw new Error('note import-curated requires --vault <dir>');
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const note = importCuratedNote(vault, file, dataDir);
-  syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR);
+  await syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR, flags.get('config'));
   process.stdout.write(JSON.stringify(note) + '\n');
 }
 
-function noteTombstone(argv: string[]): void {
+async function noteTombstone(argv: string[]): Promise<void> {
   const [noteId, ...rest] = argv;
   if (!noteId || noteId.startsWith('--')) throw new Error('note tombstone requires <note_id>');
   const flags = parseFlags(rest);
@@ -166,11 +166,11 @@ function noteTombstone(argv: string[]): void {
     created_at: new Date().toISOString(), source: { kind: 'cli' },
   };
   appendNote(dataDir, tombstone);
-  syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR);
+  await syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR, flags.get('config'));
   process.stdout.write(JSON.stringify(tombstone) + '\n');
 }
 
-function supersede(argv: string[]): void {
+async function supersede(argv: string[]): Promise<void> {
   const [oldNoteId, newNoteId, ...rest] = argv;
   if (!oldNoteId || oldNoteId.startsWith('--') || !newNoteId || newNoteId.startsWith('--')) {
     throw new Error('supersede requires <old_note_id> <new_note_id>');
@@ -184,7 +184,7 @@ function supersede(argv: string[]): void {
     revision_id: ulid(), created_at: new Date().toISOString(), reason: flags.get('reason'), source: { kind: 'cli' },
   };
   appendNote(dataDir, record);
-  syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR);
+  await syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR, flags.get('config'));
   process.stdout.write(JSON.stringify(record) + '\n');
 }
 
@@ -248,7 +248,7 @@ function statsCommand(argv: string[]): void {
 
 export type DoctorReport = {
   embedding: {
-    state: 'unconfigured' | 'unreachable' | 'mismatch' | 'ok';
+    state: 'unconfigured' | 'unreachable' | 'unpinned' | 'mismatch' | 'ok';
     model?: string;
     digest?: string;
     index_model?: string;
@@ -282,6 +282,9 @@ export async function doctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PAT
   }
   try {
     const resolved = await makeOpenAiEmbeddingProvider(config.embedding).model();
+    if (!model) {
+      return { embedding: { state: 'unpinned', model: resolved.name, digest: resolved.digest }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+    }
     if (model && (model.name !== resolved.name || model.digest !== resolved.digest)) {
       return { embedding: { state: 'mismatch', model: resolved.name, digest: resolved.digest, index_model: model.name, index_digest: model.digest }, coverage: { embedded: 0, total }, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
     }
@@ -724,9 +727,9 @@ export function resolveProvider(flags: Map<string, string>, configPath = CONFIG_
 async function distillCommand(flags: Map<string, string>): Promise<void> {
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const diagnosticsDir = flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR;
-  const provider = resolveProvider(flags);
+  const provider = resolveProvider(flags, flags.get('config'));
 
-  await runDistill({ dataDir, diagnosticsDir, provider, indexDir: flags.get('index-dir') ?? INDEX_DIR });
+  await runDistill({ dataDir, diagnosticsDir, provider, indexDir: flags.get('index-dir') ?? INDEX_DIR, configPath: flags.get('config') });
 }
 
 /**
@@ -750,14 +753,14 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const diagnosticsDir = flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR;
   const vaultDir = flags.get('vault');
   const indexDir = flags.get('index-dir') ?? INDEX_DIR;
-  const provider = resolveProvider(flags);
+  const provider = resolveProvider(flags, flags.get('config'));
 
-  const distilled = await runDistill({ dataDir, diagnosticsDir, provider, indexDir });
+  const distilled = await runDistill({ dataDir, diagnosticsDir, provider, indexDir, configPath: flags.get('config') });
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
   const index = openIndexWrite(indexDir);
   try {
     indexNotes(index, dataDir);
-    await stampEmbeddingIndex(index);
+    await stampEmbeddingIndex(index, flags.get('config'));
   } finally {
     index.close();
   }
@@ -875,15 +878,17 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
   writeInjectionTrace(options.diagnosticsDir, trace);
 }
 
-function syncIndex(dataDir: string, indexDir: string): void {
+async function syncIndex(dataDir: string, indexDir: string, configPath?: string): Promise<void> {
   try {
     const db = openIndexWrite(indexDir);
     try {
       indexNotes(db, dataDir);
+      await stampEmbeddingIndex(db, configPath);
     } finally {
       db.close();
     }
   } catch (err) {
+    if (isEmbeddingModelMismatch(err)) throw err;
     process.stderr.write(`librarian: note is durable but the index is stale; run librarian drain: ${(err as Error).message}\n`);
   }
 }
@@ -949,6 +954,7 @@ function formatTrace(trace: InjectionTrace): string {
     `Path: ${trace.path ?? '(unknown)'}`,
     `Query: ${trace.query}`,
     `Indexed Through: ${trace.indexed_through}`,
+    `Embedding: ${trace.embedding ?? 'disabled'}`,
     `Config: ${JSON.stringify(trace.config_snapshot)}`,
     'Candidates:',
   ];
@@ -1035,7 +1041,7 @@ async function main(argv: string[]): Promise<void> {
       await doctorCommand(rest);
       break;
     case 'supersede':
-      supersede(rest);
+      await supersede(rest);
       break;
     case 'inject':
       await injectCommand(parseInjectArgs(rest));
@@ -1045,9 +1051,9 @@ async function main(argv: string[]): Promise<void> {
       if (subcommand === 'show') {
         noteShow(parseNoteShowArgs(subRest));
       } else if (subcommand === 'import-curated') {
-        noteImportCurated(subRest);
+        await noteImportCurated(subRest);
       } else if (subcommand === 'tombstone') {
-        noteTombstone(subRest);
+        await noteTombstone(subRest);
       } else {
         throw new Error('expected note subcommand: show, import-curated, or tombstone');
       }

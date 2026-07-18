@@ -38,10 +38,19 @@ Add this to `~/.librarian/config.json` (alongside any existing settings):
 }
 ```
 
+Any OpenAI-compatible endpoint can be used for `/v1/embeddings`. Ollama users
+can omit `digest`, which Librarian resolves from Ollama's model list. Other
+endpoints must set the immutable deployment digest explicitly:
+
+```json
+"digest": "your-immutable-model-revision"
+```
+
 `librarian doctor` reports endpoint reachability, the configured model digest
-against the index stamp, embedding coverage, and index freshness. If it reports
-a digest mismatch, delete the disposable `~/.librarian/index/` directory and
-run `librarian drain` to rebuild it. A timeout or endpoint failure keeps recall
+against the index stamp, embedding coverage, and index freshness. `unpinned`
+means run `librarian drain` after configuring the endpoint. If it reports a
+digest mismatch, delete the disposable `~/.librarian/index/` directory and run
+`librarian drain` to rebuild it. A timeout or endpoint failure keeps recall
 BM25-only and records that state in the injection trace.
 
 ## MCP Server
