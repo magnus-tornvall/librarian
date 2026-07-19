@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 
-export const INDEX_SCHEMA_VERSION = 4;
+export const INDEX_SCHEMA_VERSION = 5;
 
 /**
  * FTS5 recall index (§6). `project_slug`/`is_global` carry each note's scope
@@ -18,6 +18,7 @@ export function migrate(db: Database.Database): void {
     CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
       note_id UNINDEXED, revision_id UNINDEXED, origin UNINDEXED,
       note_type UNINDEXED, created_at UNINDEXED, valid_at UNINDEXED, invalid_at UNINDEXED, superseded_by UNINDEXED,
+      invalidation_kind UNINDEXED,
       project_slug UNINDEXED, is_global UNINDEXED,
       search_text
     );
@@ -27,7 +28,8 @@ export function migrate(db: Database.Database): void {
       record_kind TEXT NOT NULL,
       record_created_at TEXT NOT NULL,
       superseded_at TEXT,
-      superseded_by TEXT
+      superseded_by TEXT,
+      superseded_kind TEXT
     );
     CREATE TABLE IF NOT EXISTS index_cursor (
       id INTEGER PRIMARY KEY CHECK (id = 1),

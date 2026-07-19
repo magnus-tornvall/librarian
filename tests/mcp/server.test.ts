@@ -130,7 +130,7 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
     const tools = await client.listTools();
     assert.deepEqual(
       tools.tools.map((tool) => tool.name).sort(),
-      ['get_note', 'get_notes', 'search'],
+      ['flag_note', 'get_note', 'get_notes', 'search'],
     );
     assert.match(tools.tools.find((tool) => tool.name === 'search')?.description ?? '', /get_notes/i);
     assert.match(tools.tools.find((tool) => tool.name === 'get_note')?.description ?? '', /with_provenance to true/i);
@@ -184,6 +184,60 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
   }
 
   assert.equal(fs.readFileSync(noteLogPath, 'utf8'), beforeNoteLog, 'MCP session must not write to the note log');
+});
+
+test('MCP flag_note appends a validity-close-only record, excludes the note from recall, and errors on unknown ids', async () => {
+  const root = tempDir('mcp-flag-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
+  const target = note(1, {
+    note_id: 'fact:mcp-flag-target',
+    body: { summary: 'Flagworthy summary with narwhal search term.' },
+  });
+  appendNote(dataDir, target);
+  for (let i = 2; i < 6; i += 1) appendNote(dataDir, note(i, { body: { summary: `Decoy ${i} narwhal.` } }));
+  bootstrapIndex(dataDir, indexDir);
+
+  const noteLogPath = path.join(dataDir, 'notes', '2026-07.ndjson');
+  const beforeNoteLog = fs.readFileSync(noteLogPath, 'utf8');
+  const { client, transport } = await connectClient(dataDir, diagnosticsDir, indexDir);
+
+  try {
+    const tools = await client.listTools();
+    const flagTool = tools.tools.find((tool) => tool.name === 'flag_note');
+    assert.ok(flagTool, 'flag_note tool must be listed');
+    assert.match(flagTool?.description ?? '', /append-only/i);
+    assert.equal(flagTool?.annotations?.destructiveHint, true);
+
+    const flagged = parseToolJson(
+      await client.callTool({ name: 'flag_note', arguments: { note_id: target.note_id, reason: 'model confirmed this note is wrong' } }),
+    );
+    assert.equal(flagged.kind, 'note_flag');
+    assert.equal(flagged.reason, 'model confirmed this note is wrong');
+    assert.deepEqual(flagged.source, { kind: 'human' });
+
+    assert.notEqual(fs.readFileSync(noteLogPath, 'utf8'), beforeNoteLog, 'flag_note must append to the note log');
+    assert.ok(fs.readFileSync(noteLogPath, 'utf8').startsWith(beforeNoteLog), 'flag_note must append, not mutate prior bytes');
+
+    const recalled = parseToolJson(
+      await client.callTool({ name: 'search', arguments: { query: 'narwhal', project_slug: 'alpha', limit: 50 } }),
+    );
+    const ids = (recalled.results as Array<{ note_id: string }>).map((r) => r.note_id);
+    assert.ok(!ids.includes(target.note_id), 'flagged note is excluded from MCP search');
+
+    // Same exclusion the CLI why-not reports.
+    const whyNot = runCli(['why-not', 'narwhal', target.note_id, '--project', 'alpha', '--data-dir', dataDir, '--index-dir', indexDir]);
+    assert.equal(whyNot.status, 0, `why-not should exit 0; stderr: ${whyNot.stderr}`);
+    assert.match(whyNot.stdout, /Gate: flagged/);
+
+    const unknown = await client.callTool({ name: 'flag_note', arguments: { note_id: 'fact:missing', reason: 'nope' } });
+    assert.equal(unknown.isError, true);
+    assert.match(unknown.content[0]?.type === 'text' ? unknown.content[0].text : '', /unknown note_id: fact:missing/);
+  } finally {
+    await client.close();
+    await transport.close();
+  }
 });
 
 test('MCP get_note surfaces missing provenance logs as tool errors', async () => {

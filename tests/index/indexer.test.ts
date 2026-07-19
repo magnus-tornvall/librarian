@@ -6,7 +6,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { migrate } from '../../src/index/schema.ts';
 import { indexNotes } from '../../src/index/indexer.ts';
-import { recall } from '../../src/recall/query.ts';
+import { recall, whyNot } from '../../src/recall/query.ts';
 import { appendNote } from '../../src/log/noteLog.ts';
 import { runExport } from '../../src/export/exportRun.ts';
 
@@ -255,3 +255,137 @@ test('a supersession does not create or remove a vault file', () => {
   assert.deepEqual(runExport({ dataDir, vaultDir }), { exported: 0, removed: 0 });
   assert.equal(fs.readFileSync(generated, 'utf8'), before);
 });
+
+test('a flag does not create or remove a vault file (#106)', () => {
+  const dataDir = tempDataDir();
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flag-vault-'));
+  appendNote(dataDir, TOMBSTONABLE_NOTE);
+  assert.equal(runExport({ dataDir, vaultDir }).exported, 1);
+  const generated = path.join(vaultDir, 'generated', 'curated', 'curated-01J8X9F1TZ6R3M8N0P5Q7S9TOMB.md');
+  const before = fs.readFileSync(generated, 'utf8');
+
+  appendNote(dataDir, {
+    kind: 'note_flag', schema_version: 1, note_id: TOMBSTONABLE_NOTE.note_id,
+    revision_id: 'flag-rev', created_at: '2026-07-05T11:00:00.000Z',
+    reason: 'flagged wrong', source: { kind: 'cli' },
+  });
+  // Validity-close-only: mints no content, resolves to the same revision, so the
+  // export delta touches nothing — exported: 0, and the file is byte-unchanged.
+  assert.deepEqual(runExport({ dataDir, vaultDir }), { exported: 0, removed: 0 });
+  assert.equal(fs.readFileSync(generated, 'utf8'), before);
+});
+
+// A close (flag/supersession) applies only to revisions it post-dates; a newer revision re-opens
+// the note (spec 12.2/12.12 amendment 2026-07-19). These fixtures pin that behavior and its edges.
+
+function flag(noteId: string, createdAt: string, revisionId = `flag-${createdAt}`) {
+  return { kind: 'note_flag', schema_version: 1, note_id: noteId, revision_id: revisionId, created_at: createdAt, reason: 'wrong', source: { kind: 'cli' } };
+}
+function revisionAt(createdAt: string, revisionId: string) {
+  return { ...TOMBSTONABLE_NOTE, revision_id: revisionId, previous_revision_id: TOMBSTONABLE_NOTE.revision_id, created_at: createdAt };
+}
+function freshIndex(dataDir: string, cursorPath?: string): Database.Database {
+  const db = new Database(':memory:');
+  migrate(db);
+  indexNotes(db, dataDir, cursorPath);
+  return db;
+}
+function ships(db: Database.Database, at = '2026-07-06T00:00:00.000Z'): boolean {
+  return recall(db, TOMBSTONE_TERM, { projectSlug: 'librarian' }, undefined, at).some((r) => r.note_id === TOMBSTONABLE_NOTE.note_id);
+}
+
+test('flag -> newer revision re-opens the note for recall (#106 re-open rule)', () => {
+  const dataDir = tempDataDir();
+  seedDecoyNotes(dataDir);
+  appendNote(dataDir, TOMBSTONABLE_NOTE);                                   // 10:00 revision
+  appendNote(dataDir, flag(TOMBSTONABLE_NOTE.note_id, '2026-07-05T11:00:00.000Z')); // 11:00 flag closes it
+  appendNote(dataDir, revisionAt('2026-07-05T12:00:00.000Z', 'reopen-rev'));        // 12:00 revision re-opens
+
+  const db = freshIndex(dataDir);
+  const row = db.prepare('SELECT invalid_at, invalidation_kind FROM notes_fts WHERE note_id = ?').get(TOMBSTONABLE_NOTE.note_id) as
+    | { invalid_at: string | null; invalidation_kind: string | null } | undefined;
+  assert.ok(row, 'the re-opening revision must be indexed');
+  assert.equal(row.invalid_at, null, 'a newer revision clears the flag close');
+  assert.equal(row.invalidation_kind, null);
+  assert.ok(ships(db), 'the re-opened note must ship in recall again');
+});
+
+test('flag -> newer revision -> newer flag closes it again (#106)', () => {
+  const dataDir = tempDataDir();
+  seedDecoyNotes(dataDir);
+  appendNote(dataDir, TOMBSTONABLE_NOTE);                                   // 10:00
+  appendNote(dataDir, flag(TOMBSTONABLE_NOTE.note_id, '2026-07-05T11:00:00.000Z', 'flag-a'));
+  appendNote(dataDir, revisionAt('2026-07-05T12:00:00.000Z', 'reopen-rev'));
+  appendNote(dataDir, flag(TOMBSTONABLE_NOTE.note_id, '2026-07-05T13:00:00.000Z', 'flag-b')); // newer flag
+
+  const db = freshIndex(dataDir);
+  assert.ok(!ships(db, '2026-07-05T14:00:00.000Z'), 'a flag newer than the re-opening revision closes it again');
+  const row = db.prepare('SELECT invalidation_kind FROM notes_fts WHERE note_id = ?').get(TOMBSTONABLE_NOTE.note_id) as { invalidation_kind: string | null };
+  assert.equal(row.invalidation_kind, 'flag');
+});
+
+test('adversarial replay: revision -> flag -> newer revision -> newer flag ends CLOSED (single-row state)', () => {
+  // The single note_state row keeps one close (earliest effective). This pins that the timestamp
+  // rule survives the sequence the reviewer flagged: the note must end closed, not spuriously open.
+  const dataDir = tempDataDir();
+  seedDecoyNotes(dataDir);
+  appendNote(dataDir, revisionAt('2026-07-05T10:00:00.000Z', 'rev-1'));
+  appendNote(dataDir, flag(TOMBSTONABLE_NOTE.note_id, '2026-07-05T10:30:00.000Z', 'flag-1'));
+  appendNote(dataDir, revisionAt('2026-07-05T11:00:00.000Z', 'rev-2'));
+  appendNote(dataDir, flag(TOMBSTONABLE_NOTE.note_id, '2026-07-05T11:30:00.000Z', 'flag-2'));
+
+  const db = freshIndex(dataDir);
+  assert.ok(!ships(db, '2026-07-05T12:00:00.000Z'), 'the newest flag post-dates the newest revision → closed');
+});
+
+test('a close older than the current winning revision is void (#106)', () => {
+  // Revision at 12:00 is already the winner; a flag at 11:00 (older) must not close it.
+  const dataDir = tempDataDir();
+  seedDecoyNotes(dataDir);
+  appendNote(dataDir, revisionAt('2026-07-05T12:00:00.000Z', 'rev-late'));
+  appendNote(dataDir, flag(TOMBSTONABLE_NOTE.note_id, '2026-07-05T11:00:00.000Z', 'stale-flag'));
+
+  const db = freshIndex(dataDir);
+  assert.ok(ships(db, '2026-07-05T13:00:00.000Z'), 'a flag predating the winning revision is void');
+});
+
+test('placeholder ordering: a flag newer than its revision still excludes when indexed first (#106)', () => {
+  // The flag is appended BEFORE the revision it closes, but carries a newer timestamp — it must win.
+  const dataDir = tempDataDir();
+  seedDecoyNotes(dataDir);
+  appendNote(dataDir, flag(TOMBSTONABLE_NOTE.note_id, '2026-07-05T11:00:00.000Z')); // placeholder close
+  appendNote(dataDir, TOMBSTONABLE_NOTE);                                            // 10:00 revision arrives after
+
+  const db = freshIndex(dataDir);
+  assert.ok(!ships(db), 'a flag newer than the revision must exclude regardless of index order');
+  const row = db.prepare('SELECT invalidation_kind FROM notes_fts WHERE note_id = ?').get(TOMBSTONABLE_NOTE.note_id) as { invalidation_kind: string | null };
+  assert.equal(row.invalidation_kind, 'flag');
+});
+
+test('supersede -> revise old note re-opens it (12.2 amendment: closes apply only to revisions they post-date)', () => {
+  const dataDir = tempDataDir();
+  seedDecoyNotes(dataDir);
+  appendNote(dataDir, TOMBSTONABLE_NOTE);                                   // 10:00
+  appendNote(dataDir, {
+    kind: 'note_supersession', schema_version: 1, note_id: TOMBSTONABLE_NOTE.note_id,
+    superseded_by: 'curated:replacement', revision_id: 'supersession-rev',
+    created_at: '2026-07-05T11:00:00.000Z', source: { kind: 'cli' },
+  });
+  appendNote(dataDir, revisionAt('2026-07-05T12:00:00.000Z', 'revised-rev')); // human revises the old note
+
+  const db = freshIndex(dataDir);
+  assert.ok(ships(db, '2026-07-05T13:00:00.000Z'), 'a revision newer than the supersession re-opens the old note');
+});
+
+test('why-not reports intrinsic invalid_at expiry as expired, not flagged (#106 finding 2)', () => {
+  const dataDir = tempDataDir();
+  seedDecoyNotes(dataDir);
+  // A revision whose OWN validity window has closed — no flag, no supersession record exists.
+  appendNote(dataDir, { ...TOMBSTONABLE_NOTE, revision_id: 'intrinsic-rev', invalid_at: '2026-07-05T11:00:00.000Z' });
+
+  const db = freshIndex(dataDir);
+  const result = whyNot(db, TOMBSTONE_TERM, TOMBSTONABLE_NOTE.note_id, { projectSlug: 'librarian' }, undefined, '2026-07-05T12:00:00.000Z');
+  assert.equal(result.matched, true);
+  assert.equal(result.gate, 'expired', 'intrinsic expiry must not be mislabeled as a human flag');
+});
+

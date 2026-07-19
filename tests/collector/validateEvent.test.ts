@@ -32,6 +32,18 @@ test('a record missing event_id throws a plain error', () => {
   });
 });
 
+test('a note_flag record fed to the collector is hard-rejected (non-event record class)', () => {
+  const flag = {
+    kind: 'note_flag', schema_version: 1, note_id: 'fact:x', revision_id: 'rev-x',
+    created_at: '2026-07-16T00:00:00.000Z', reason: 'wrong', source: { kind: 'cli' },
+  };
+  assert.throws(() => validateEvent(flag), (err: unknown) => {
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /type must be one of/);
+    return true;
+  });
+});
+
 test('a PromptEvent missing prompt throws', () => {
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '01-prompt-in-git-repo.json'), 'utf8'),
