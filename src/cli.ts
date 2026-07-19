@@ -871,7 +871,7 @@ function formatRecallResult(result: RecallResult): string {
   return `${prefix} scope=${scope || '(none)'} title=${result.title} summary=${result.summary}`;
 }
 
-function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string, scoring: ScoringConfig, embedding: QueryEmbedding): void {
+function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate[], rows: RecallTraceCandidate[], ts: string, indexedThroughWatermark: string, scoring: ScoringConfig, embedding: QueryEmbedding): void {
   const trace: InjectionTrace = {
     record_class: 'diagnostic',
     injection_id: makeInjectionId(),
@@ -887,7 +887,7 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
       cut_reason: candidate.cut_reason,
     })),
     shipped_note_ids: rows.map((row) => row.note_id),
-    indexed_through: ts,
+    indexed_through: indexedThroughWatermark,
     embedding: embedding.status,
     ...(embedding.model ? { embedding_digest: embedding.model.digest } : {}),
     config_snapshot: scoringConfigSnapshot(scoring),
@@ -924,7 +924,7 @@ export async function runRecall(options: RecallOptions): Promise<RecallPayload> 
       ts,
       embedding.vector,
     );
-    writePullTrace(options, candidates, rows, indexedThrough(db), scoring, embedding);
+    writePullTrace(options, candidates, rows, ts, indexedThrough(db), scoring, embedding);
 
     const notesById = new Map(stateNotes(db, rows.map((row) => row.note_id)).map((note) => [note.note_id, note]));
     const results: RecallResult[] = rows.flatMap((row) => {
