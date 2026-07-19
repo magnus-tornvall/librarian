@@ -59,7 +59,10 @@ Three homes, no fourth. Never invent a tracking file.
   the observable change this ships, one for the pain/value that justifies it (no
   user-story persona; the user never varies). Use a job story
   (`When <situation>, <capability>, so <outcome>`) only when the trigger is the
-  point.
+  point. Every issue states its **success signal(s)** — one or more observable,
+  checkable conditions that tell an agent the work is done (a command that
+  passes, a behavior you can drive, an artifact that exists). No fuzzy "works
+  well"; if you can't name what to check, the issue isn't ready.
 - **GitHub Project v2** — the view engine over the issues (roadmap = helicopter,
   board/table grouped by epic = mid, open issue = zoom). Auto-add workflow, so new
   issues appear with no bookkeeping. Read-only lens — never hand-edited.
