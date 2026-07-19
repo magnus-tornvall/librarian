@@ -31,11 +31,16 @@ export type InjectionTrace = {
     note_id: string;
     raw_score: number;
     post_weight_score: number;
+    bm25_rank?: number;
+    knn_rank?: number;
     cut_reason?: 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'ttl_expired';
   }>;
   shipped_note_ids: string[];
   indexed_through: string;
   embedding: 'ok' | 'timeout' | 'error' | 'disabled';
+  // The embedding model digest recall fused against, so `why`/`why-not` can replay
+  // the exact hybrid state (or refuse if it can no longer re-embed with it).
+  embedding_digest?: string;
   config_snapshot: unknown;
 };
 
