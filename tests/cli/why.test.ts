@@ -112,6 +112,39 @@ test('why reads real pull and push traces, supports JSON, and handles missing tr
   assert.match(missing.stderr, /trace not found — diagnostics may have been deleted/);
 });
 
+test('why replays an old trace that shipped a note honestly after the note is later flagged (#106)', () => {
+  const t = tempRoot();
+  appendNote(t.dataDir, note(1));
+  for (let i = 2; i < 12; i += 1) {
+    appendNote(t.dataDir, note(i, { body: { summary: `Unrelated filler note ${i}.` } }));
+  }
+  bootstrapIndex(t.dataDir, t.indexDir);
+
+  // Recall records a pull trace in which fact:why-1 shipped.
+  const recall = runCli(['recall', 'narwhal', '--project', 'alpha', '--data-dir', t.dataDir, '--diagnostics-dir', t.diagnosticsDir], t.indexDir);
+  assert.equal(recall.status, 0, `recall should exit 0; stderr: ${recall.stderr}`);
+  const pullTrace = readTraces(t.diagnosticsDir).find((trace) => trace.path === 'pull' && trace.query === 'narwhal');
+  assert.ok(pullTrace, 'recall must produce the trace consumed by why');
+  const before = runCli(['why', pullTrace.injection_id, '--diagnostics-dir', t.diagnosticsDir]);
+  assert.equal(before.status, 0, `why should exit 0; stderr: ${before.stderr}`);
+  assert.match(before.stdout, /fact:why-1: raw=.* -> post=.* shipped/);
+
+  // Flag the note that shipped in that trace.
+  const flagged = runCli(['flag', 'fact:why-1', '--reason', 'this note was wrong', '--data-dir', t.dataDir], t.indexDir);
+  assert.equal(flagged.status, 0, `flag should exit 0; stderr: ${flagged.stderr}`);
+
+  // The historical trace replays byte-identically: flagging is a forward-only annotation,
+  // it never rewrites what an earlier injection actually shipped.
+  const after = runCli(['why', pullTrace.injection_id, '--diagnostics-dir', t.diagnosticsDir]);
+  assert.equal(after.status, 0, `why should still exit 0; stderr: ${after.stderr}`);
+  assert.equal(after.stdout, before.stdout, 'why must replay the old trace unchanged after a flag');
+  assert.match(after.stdout, /fact:why-1: raw=.* -> post=.* shipped/);
+
+  const json = runCli(['why', pullTrace.injection_id, '--json', '--diagnostics-dir', t.diagnosticsDir]);
+  assert.equal(json.status, 0, `why --json should exit 0; stderr: ${json.stderr}`);
+  assert.deepEqual(JSON.parse(json.stdout), pullTrace, 'flag must not mutate the recorded trace');
+});
+
 test('why-not explains floor, scope, and BM25 misses without writing diagnostics', () => {
   const t = tempRoot();
   for (let i = 0; i < 12; i += 1) {

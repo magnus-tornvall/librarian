@@ -255,3 +255,22 @@ test('a supersession does not create or remove a vault file', () => {
   assert.deepEqual(runExport({ dataDir, vaultDir }), { exported: 0, removed: 0 });
   assert.equal(fs.readFileSync(generated, 'utf8'), before);
 });
+
+test('a flag does not create or remove a vault file (#106)', () => {
+  const dataDir = tempDataDir();
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flag-vault-'));
+  appendNote(dataDir, TOMBSTONABLE_NOTE);
+  assert.equal(runExport({ dataDir, vaultDir }).exported, 1);
+  const generated = path.join(vaultDir, 'generated', 'curated', 'curated-01J8X9F1TZ6R3M8N0P5Q7S9TOMB.md');
+  const before = fs.readFileSync(generated, 'utf8');
+
+  appendNote(dataDir, {
+    kind: 'note_flag', schema_version: 1, note_id: TOMBSTONABLE_NOTE.note_id,
+    revision_id: 'flag-rev', created_at: '2026-07-05T11:00:00.000Z',
+    reason: 'flagged wrong', source: { kind: 'cli' },
+  });
+  // Validity-close-only: mints no content, resolves to the same revision, so the
+  // export delta touches nothing — exported: 0, and the file is byte-unchanged.
+  assert.deepEqual(runExport({ dataDir, vaultDir }), { exported: 0, removed: 0 });
+  assert.equal(fs.readFileSync(generated, 'utf8'), before);
+});

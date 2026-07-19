@@ -213,7 +213,8 @@ async function flagNote(options: McpServerOptions, args: Record<string, unknown>
   return jsonResult(record);
 }
 
-export function createMcpServer(options: McpServerOptions): Server {  const server = new Server(
+export function createMcpServer(options: McpServerOptions): Server {
+  const server = new Server(
     { name: 'librarian', version: '0.0.0' },
     {
       capabilities: { tools: {} },

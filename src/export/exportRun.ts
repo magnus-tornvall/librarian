@@ -92,7 +92,13 @@ export function runExport(options: ExportRunOptions): ExportRunResult {
   // Which note_ids changed in this delta. Only those get re-materialized, but
   // their winning record is resolved against the FULL history so a delta
   // tombstone correctly retires a revision exported in an earlier pass.
-  const touched = new Set(allRecords.slice(start).filter((record) => record.kind !== 'note_supersession').map((r) => r.note_id));
+  // Validity-close-only records (supersession, flag) mint no content and resolve
+  // to the same winning revision, so they touch nothing to re-materialize.
+  const touched = new Set(
+    allRecords.slice(start)
+      .filter((record) => record.kind !== 'note_supersession' && record.kind !== 'note_flag')
+      .map((r) => r.note_id),
+  );
   const latestById = new Map(
     latestRecordPerNoteId(allRecords).map((record) => [record.note_id, record]),
   );
