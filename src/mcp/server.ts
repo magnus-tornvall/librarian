@@ -78,7 +78,7 @@ const FLAG_NOTE_TOOL: Tool = {
   name: 'flag_note',
   title: 'Flag Librarian Note As Wrong',
   description:
-    `Flag a specific note as wrong so recall excludes it. Flagging is logical and append-only: it records a new invalidation about the note, never mutates or deletes it, and a human can supersede back. Reason is mandatory — it is the audit trail. ${AUTHORITY_FRAMING}`,
+    `Flag a specific note as wrong so recall excludes it. Flagging is logical and append-only: it records a new invalidation about the note, never mutates or deletes it. It is reversible — a newer revision of the note (a re-distill, a human edit, or a supersession pointing at a replacement) re-opens it. Reason is mandatory — it is the audit trail. ${AUTHORITY_FRAMING}`,
   inputSchema: {
     type: 'object',
     properties: {

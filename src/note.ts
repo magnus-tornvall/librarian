@@ -65,7 +65,8 @@ export type NoteSupersession = {
 /**
  * Validity-close-only invalidation (spec §12.12, #106): flags a note as wrong so
  * recall excludes it, without minting replacement content (no `superseded_by`).
- * Reuses the supersession → `invalid_at` index path; a human can supersede back.
+ * Reuses the supersession → `invalid_at` index path; reversible — a newer revision
+ * of the note re-opens it (a close applies only to revisions it post-dates).
  */
 export type NoteFlag = {
   kind: 'note_flag';
@@ -86,7 +87,6 @@ export function buildFlagRecord(noteId: string, reason: string, source: { kind: 
     created_at: new Date().toISOString(), reason, source,
   };
 }
-
 
 export function latestRecordPerNoteId(records: NoteRecord[]): NoteStateRecord[] {
   const latest = new Map<string, NoteStateRecord>();

@@ -49,6 +49,13 @@ type NoteSupersession = {
   created_at: string; reason?: string;
   source: { kind: "human" | "cli" };
 };
+
+type NoteFlag = {                                     // #106: validity-close, no replacement
+  kind: "note_flag"; schema_version: 1;
+  note_id: string; revision_id: string;               // revision_id: ULID
+  created_at: string; reason: string;                 // reason mandatory — the audit trail
+  source: { kind: "human" | "cli" };
+};
 ```
 
 ## Rules
@@ -56,10 +63,13 @@ type NoteSupersession = {
 `origin` mandatory, denormalized, indexed, fail-closed. Human distiller preserves Markdown
 verbatim in `body.details`, derives `title` from H1 and `summary` from first paragraph.
 Curated frontmatter may declare `note_id`; importer tombstones orphaned IDs on rename.
-`search_text` is indexer-derived. Tombstones and supersessions are CLI/human only in v1.
-`NoteSupersession` never competes with revisions in latest-revision-wins. The index retains
-the revision and carries its earliest supersession timestamp as `invalid_at`; recall excludes
-the closed interval at query time so `why-not` can report `superseded`.
+`search_text` is indexer-derived. Tombstones, supersessions, and flags are CLI/human only in v1.
+`NoteSupersession` and `NoteFlag` never compete with revisions in latest-revision-wins. The index
+retains the revision and carries the earliest close timestamp as `invalid_at`; recall excludes the
+closed interval at query time so `why-not` can report `superseded` (supersession, with a
+replacement) or `flagged` (a flag, no replacement). A close applies only to revisions it post-dates:
+a revision strictly newer than the close re-opens the note (amendment 2026-07-19, #106) — so a
+re-distill or human edit of a wrongly-closed note revives it, aligning the index with latest-wins.
 
 Only deterministic-ID notes (`project:{slug}:summary`, `person:{normalized_name}`,
 `daily:{yyyy-mm-dd}`, `curated:{id}`) may be revised — the distiller fetches a prior

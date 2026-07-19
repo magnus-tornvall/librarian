@@ -21,10 +21,10 @@ export function buildSearchText(note: NoteRevision): string {
 function updateFts(db: Database.Database, noteId: string): boolean {
   const deleteStmt = db.prepare('DELETE FROM notes_fts WHERE note_id = ?');
   const insertStmt = db.prepare(
-    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, invalidation_kind, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
-  const state = db.prepare('SELECT record_json, record_kind, superseded_at, superseded_by FROM note_state WHERE note_id = ?').get(noteId) as
-    | { record_json: string; record_kind: string; superseded_at: string | null; superseded_by: string | null }
+  const state = db.prepare('SELECT record_json, record_kind, superseded_at, superseded_by, superseded_kind FROM note_state WHERE note_id = ?').get(noteId) as
+    | { record_json: string; record_kind: string; superseded_at: string | null; superseded_by: string | null; superseded_kind: string | null }
     | undefined;
   deleteStmt.run(noteId);
   if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note_vectors'").get() !== undefined) {
@@ -49,6 +49,10 @@ function updateFts(db: Database.Database, noteId: string): boolean {
 
   const supersessionWins = state.superseded_at !== null && (note.invalid_at === undefined || state.superseded_at <= note.invalid_at);
   const invalidAt = supersessionWins ? state.superseded_at : note.invalid_at ?? null;
+  // invalidation_kind names *why* invalid_at is set so why-not can report it honestly (#106):
+  // 'flag'/'supersession' when a close record won, 'intrinsic' when the revision's own validity
+  // window closed (an episode TTL, say) — never mislabel intrinsic expiry as a human flag action.
+  const invalidationKind = invalidAt === null ? null : supersessionWins ? (state.superseded_kind ?? 'supersession') : 'intrinsic';
 
   insertStmt.run(
       noteId,
@@ -59,6 +63,7 @@ function updateFts(db: Database.Database, noteId: string): boolean {
       note.valid_at ?? note.created_at,
       invalidAt,
       supersessionWins ? state.superseded_by : null,
+      invalidationKind,
       projectSlug,
       isGlobal,
       searchText,
@@ -115,26 +120,54 @@ function applyRecord(db: Database.Database, record: NoteRecord): boolean {
   const current = db.prepare('SELECT record_created_at, superseded_at FROM note_state WHERE note_id = ?').get(record.note_id) as
     | { record_created_at: string; superseded_at: string | null }
     | undefined;
-  // note_flag is a validity-close with no replacement (#106): same invalidation path as
-  // supersession, superseded_by stays null. Sharing the branch keeps the earliest-close rule.
+  // A close (supersession or flag, #106) applies only to revisions it post-dates. This aligns
+  // the index with the log's latest-wins philosophy: latestRecordPerNoteId already lets a newer
+  // revision revive a tombstone, so the softer close must be revivable too (spec 12.2/12.12
+  // amendment 2026-07-19). superseded_at holds the earliest *effective* close; superseded_by is
+  // null for a flag (no replacement). record_created_at is '' on a placeholder row (close indexed
+  // before its revision) — a real revision's created_at always post-dates '', so it wins the guard.
   if (record.kind === 'note_supersession' || record.kind === 'note_flag') {
     const supersededBy = record.kind === 'note_supersession' ? record.superseded_by : null;
+    const supersededKind = record.kind === 'note_supersession' ? 'supersession' : 'flag';
+    // Void a close that strictly predates the current winning revision — a newer revision already
+    // re-opened the note, and an older close can never re-close it. Equal timestamps ⇒ the close
+    // wins (a supersession/flag minted at the same instant as its revision still closes it, the
+    // common case). record_created_at '' (placeholder) or undefined leaves the close eligible.
+    if (current && current.record_created_at !== '' && record.created_at < current.record_created_at) {
+      return false;
+    }
     if (!current || current.superseded_at === null || record.created_at < current.superseded_at) {
       if (current) {
-        db.prepare('UPDATE note_state SET superseded_at = ?, superseded_by = ? WHERE note_id = ?').run(record.created_at, supersededBy, record.note_id);
+        db.prepare('UPDATE note_state SET superseded_at = ?, superseded_by = ?, superseded_kind = ? WHERE note_id = ?').run(record.created_at, supersededBy, supersededKind, record.note_id);
       } else {
-        db.prepare('INSERT INTO note_state (note_id, record_json, record_kind, record_created_at, superseded_at, superseded_by) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(record.note_id, '{}', record.kind, '', record.created_at, supersededBy);
+        db.prepare('INSERT INTO note_state (note_id, record_json, record_kind, record_created_at, superseded_at, superseded_by, superseded_kind) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(record.note_id, '{}', record.kind, '', record.created_at, supersededBy, supersededKind);
       }
       return current ? updateFts(db, record.note_id) : false;
     }
     return false;
   }
   if (current && record.created_at < current.record_created_at) return false;
-  db.prepare(`INSERT INTO note_state (note_id, record_json, record_kind, record_created_at, superseded_at, superseded_by)
-    VALUES (?, ?, ?, ?, NULL, NULL)
-    ON CONFLICT(note_id) DO UPDATE SET record_json = excluded.record_json, record_kind = excluded.record_kind, record_created_at = excluded.record_created_at`)
-    .run(record.note_id, JSON.stringify(record), record.kind, record.created_at);
+  // A revision that post-dates the stored close re-opens the note: clear superseded_at/by so
+  // updateFts drops invalid_at. An older-or-equal close survives (the revision it closed is gone,
+  // but the timestamp rule still holds against this newer revision only if the close post-dates it).
+  const reopens = current !== undefined && current.superseded_at !== null && current.superseded_at < record.created_at;
+  db.prepare(`INSERT INTO note_state (note_id, record_json, record_kind, record_created_at, superseded_at, superseded_by, superseded_kind)
+    VALUES (@note_id, @record_json, @record_kind, @record_created_at, NULL, NULL, NULL)
+    ON CONFLICT(note_id) DO UPDATE SET
+      record_json = excluded.record_json,
+      record_kind = excluded.record_kind,
+      record_created_at = excluded.record_created_at,
+      superseded_at = CASE WHEN @reopens THEN NULL ELSE note_state.superseded_at END,
+      superseded_by = CASE WHEN @reopens THEN NULL ELSE note_state.superseded_by END,
+      superseded_kind = CASE WHEN @reopens THEN NULL ELSE note_state.superseded_kind END`)
+    .run({
+      note_id: record.note_id,
+      record_json: JSON.stringify(record),
+      record_kind: record.kind,
+      record_created_at: record.created_at,
+      reopens: reopens ? 1 : 0,
+    });
   return updateFts(db, record.note_id);
 }
 

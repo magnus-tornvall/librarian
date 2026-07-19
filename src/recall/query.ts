@@ -28,6 +28,7 @@ type FtsRow = {
   valid_at: string | null;
   invalid_at: string | null;
   superseded_by: string | null;
+  invalidation_kind: string | null;
   project_slug: string;
   is_global: number;
   raw_score: number;
@@ -87,7 +88,7 @@ export type WhyNotResult =
       rank: number;
       raw_score: number;
       post_weight_score: number;
-      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'flagged' | 'not_yet_valid' | 'ttl_expired';
+      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'flagged' | 'expired' | 'not_yet_valid' | 'ttl_expired';
       superseded_by?: string;
     }
   | { matched: false; note_id: string; gate: 'not_matched_by_bm25' };
@@ -170,7 +171,7 @@ export function recallWithTrace(
     ? []
     : (db
         .prepare(
-          `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, bm25(notes_fts) as raw_score
+          `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, invalidation_kind, project_slug, is_global, bm25(notes_fts) as raw_score
            FROM notes_fts
            WHERE notes_fts MATCH ? AND (${scopeClauses.join(' OR ')})${originClause}`,
         )
@@ -189,7 +190,7 @@ export function recallWithTrace(
     ? []
     : (db
         .prepare(
-          `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, 0 as raw_score
+          `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, invalidation_kind, project_slug, is_global, 0 as raw_score
            FROM notes_fts
            WHERE note_id IN (${knnOnlyIds.map(() => '?').join(', ')}) AND (${scopeClauses.join(' OR ')})${originClause}`,
         )
@@ -298,7 +299,7 @@ export function whyNot(
     ? []
     : (db
         .prepare(
-          `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, bm25(notes_fts) as raw_score
+          `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, invalidation_kind, project_slug, is_global, bm25(notes_fts) as raw_score
            FROM notes_fts
            WHERE notes_fts MATCH ?`,
         )
@@ -310,7 +311,7 @@ export function whyNot(
     ? []
     : (db
         .prepare(
-          `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, project_slug, is_global, 0 as raw_score
+          `SELECT note_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, invalidation_kind, project_slug, is_global, 0 as raw_score
            FROM notes_fts
            WHERE note_id IN (${knnOnlyIds.map(() => '?').join(', ')})`,
         )
@@ -355,10 +356,13 @@ export function whyNot(
     !isTtlExpired(row, config, nowIso),
   );
   const rank = active.findIndex((row) => row.note_id === noteId) + 1;
-  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'flagged' | 'not_yet_valid' | 'ttl_expired';
+  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'flagged' | 'expired' | 'not_yet_valid' | 'ttl_expired';
   if (target.invalid_at !== null && target.invalid_at <= nowIso) {
-    // Validity closed with no replacement ⇒ flagged (#106); with a replacement ⇒ superseded.
-    gate = target.superseded_by !== null ? 'superseded' : 'flagged';
+    // invalidation_kind names why the interval closed: a flag record (#106), a supersession, or the
+    // revision's own validity window expiring. Never label intrinsic expiry as a human flag action.
+    gate = target.invalidation_kind === 'flag' ? 'flagged'
+      : target.invalidation_kind === 'intrinsic' ? 'expired'
+      : 'superseded';
   } else if (target.valid_at !== null && target.valid_at > nowIso) {
     gate = 'not_yet_valid';
   } else if (isTtlExpired(target, config, nowIso)) {
