@@ -88,6 +88,7 @@ function readTraces(diagnosticsDir: string): InjectionTrace[] {
   if (!fs.existsSync(injectionsDir)) return [];
   return fs.readdirSync(injectionsDir)
     .filter((name) => name.endsWith('.ndjson'))
+    .sort()
     .flatMap((name) => readAll(path.join(injectionsDir, name)) as InjectionTrace[]);
 }
 
@@ -113,7 +114,10 @@ test('push injection surfaces an English note for a Swedish prompt via the KNN c
     assert.doesNotMatch(block, /fact:cats/, 'the orthogonal distractor is not resurrected');
     const trace = readTraces(d.diagnosticsDir).at(-1);
     assert.equal(trace?.embedding, 'ok', 'the trace records a successful query embedding');
+    assert.equal(trace?.embedding_digest, MODEL.digest, 'the fused model digest is recorded for why-not replay');
     assert.deepEqual(trace?.shipped_note_ids, ['fact:deploy-en']);
+    const knnHit = trace?.candidates.find((candidate) => candidate.note_id === 'fact:deploy-en');
+    assert.ok(knnHit?.knn_rank !== undefined, 'the KNN-reached candidate carries its per-channel rank in the trace');
   } finally {
     await server.close();
   }
