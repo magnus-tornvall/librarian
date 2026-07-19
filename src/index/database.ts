@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import { load as loadSqliteVec } from 'sqlite-vec';
 import { INDEX_DIR } from '../paths.ts';
 import { INDEX_SCHEMA_VERSION, migrate } from './schema.ts';
-import type { NoteRevision } from '../note.ts';
+import { projectSummaryId, type NoteRevision } from '../note.ts';
 import type { EmbeddingModel } from '../embedding/provider.ts';
 
 export function indexDbPath(indexDir = INDEX_DIR): string {
@@ -113,7 +113,7 @@ export function sessionStartNotes(db: Database.Database, projectSlug: string | u
   const params: unknown[] = [];
   if (projectSlug !== undefined) {
     clauses.push("note_id = ?");
-    params.push(`project:${projectSlug}:summary`);
+    params.push(projectSummaryId(projectSlug));
     clauses.push("(json_extract(record_json, '$.note_type') = 'curated' AND json_extract(record_json, '$.scope.project_slug') = ?)");
     params.push(projectSlug);
   }

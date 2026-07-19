@@ -6,6 +6,20 @@
 
 import { ulid } from 'ulid';
 
+// Single source of truth for the note-type vocabulary: the union is DERIVED from this
+// array (`typeof NOTE_TYPES[number]`), so a value added here updates both the type and the
+// runtime list distillers validate against — they can't drift and silently coerce a new
+// type to 'episode'.
+export const NOTE_TYPES = ['fact', 'decision', 'project_summary', 'person', 'daily', 'episode', 'curated'] as const;
+export type NoteType = typeof NOTE_TYPES[number];
+
+/** Deterministic note id for a project's rolling summary. Written by the distiller and
+ *  read by the index and injector — one place so this write/read identity contract can't
+ *  drift silently (a typo at one site would empty session-start summaries). */
+export function projectSummaryId(projectSlug: string): string {
+  return `project:${projectSlug}:summary`;
+}
+
 export type NoteRevision = {
   kind: 'note_revision';
   schema_version: 1;
@@ -24,7 +38,7 @@ export type NoteRevision = {
     source_path?: string;
     content_hash?: string;
   };
-  note_type: 'fact' | 'decision' | 'project_summary' | 'person' | 'daily' | 'episode' | 'curated';
+  note_type: NoteType;
   title: string;
   scope: { project_slug?: string; git_root?: string; git_remote?: string; global?: boolean };
   provenance: {

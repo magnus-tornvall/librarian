@@ -30,6 +30,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ulid } from 'ulid';
@@ -92,22 +93,48 @@ function tryRun(command: string, args: string[], cwd: string): string | undefine
   }
 }
 
+/** The persisted machine-id file the collector owns (src/paths.ts MACHINE_ID_PATH). We
+ *  recompute rather than import it (§4 boundary) and resolve lazily so it honors the
+ *  current home directory. `librarian machine-id` writes this on first run, so reading it
+ *  directly lets the hook skip spawning the CLI on every event. */
+function machineIdPath(): string {
+  return path.join(os.homedir(), '.librarian', 'machine-id');
+}
+
+function readIdFile(file: string): string | undefined {
+  try {
+    if (!fs.existsSync(file)) {
+      return undefined;
+    }
+    const id = fs.readFileSync(file, 'utf8').trim();
+    return id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Resolve the machine id the way the spec mandates (§10.1, §11): a generated, persisted
- * id — never the hostname. Prefer `MACHINE_ID_PATH` when it is set and the file exists
- * (the collector's own path constant); otherwise ask the CLI (`librarian machine-id`),
- * which generates-and-persists on first call. If both fail (librarian not on PATH — a
- * misconfiguration the README calls out), fall back to a random UUID so an event still
- * carries a non-empty machine_id and the pipeline does not wedge; a warning is logged so
- * the operator can fix PATH.
+ * id — never the hostname. Prefer `MACHINE_ID_PATH` when set; then the persisted file the
+ * collector already owns (the common case — reading it avoids a subprocess per event);
+ * only if neither exists, ask the CLI (`librarian machine-id`), which generates-and-
+ * persists on first call. If all fail (librarian not on PATH — a misconfiguration the
+ * README calls out), fall back to a random UUID so an event still carries a non-empty
+ * machine_id and the pipeline does not wedge; a warning is logged so the operator can fix
+ * PATH.
  */
 function resolveMachineId(): string {
   const fromEnv = process.env.MACHINE_ID_PATH;
-  if (fromEnv && fs.existsSync(fromEnv)) {
-    const id = fs.readFileSync(fromEnv, 'utf8').trim();
-    if (id.length > 0) {
+  if (fromEnv) {
+    const id = readIdFile(fromEnv);
+    if (id) {
       return id;
     }
+  }
+
+  const persisted = readIdFile(machineIdPath());
+  if (persisted) {
+    return persisted;
   }
 
   const fromCli = tryRun(librarian.command, [...librarian.args, 'machine-id'], process.cwd());

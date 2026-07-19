@@ -1,7 +1,7 @@
 import { makeInjectionId, writeInjectionTrace, type InjectionTrace } from '../diagnostics/injectionTrace.ts';
 import { loadConfig } from '../config.ts';
 import { indexedThrough, openIndexRead, sessionStartNotes, stateNotes } from '../index/database.ts';
-import type { NoteRevision } from '../note.ts';
+import { projectSummaryId, type NoteRevision } from '../note.ts';
 import { scoringConfigSnapshot, type ScoringConfig } from './scoring.ts';
 import { recallWithTrace } from './query.ts';
 import { queryEmbedding, type QueryEmbedding } from './embedding.ts';
@@ -102,7 +102,7 @@ function sessionStartEntries(notes: NoteRevision[], projectSlug: string | undefi
   if (projectSlug === undefined && !global) {
     return [];
   }
-  const summaryId = projectSlug === undefined ? undefined : `project:${projectSlug}:summary`;
+  const summaryId = projectSlug === undefined ? undefined : projectSummaryId(projectSlug);
   const summary = summaryId === undefined ? [] : notes.filter((note) => note.note_id === summaryId).slice(-1);
   const curated = notes.filter((note) => note.note_type === 'curated' && inScope(note, projectSlug, global));
   return [...summary, ...curated]
