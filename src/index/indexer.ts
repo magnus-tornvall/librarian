@@ -139,15 +139,17 @@ export async function embedIndexedNotes(db: Database.Database, provider: Embeddi
       // The provider call yields between reading the row and writing the vector; a
       // concurrent index pass may have replaced or removed the revision meanwhile.
       // Re-check inside one transaction so a stale vector is never persisted.
-      let persisted = false;
+      let progressed = false;
       db.transaction(() => {
         const current = db.prepare('SELECT revision_id FROM notes_fts WHERE note_id = ?').get(row.note_id) as { revision_id: string } | undefined;
-        if (current?.revision_id !== row.revision_id) return;
-        if (db.prepare('SELECT 1 FROM note_vectors WHERE note_id = ?').get(row.note_id) !== undefined) return;
+        if (current?.revision_id !== row.revision_id) return; // the note moved on — not our row anymore
+        // A concurrent pass may already have embedded this row; the vector exists,
+        // so count it as progress (never a failure) — the all-failed proxy stays honest.
+        if (db.prepare('SELECT 1 FROM note_vectors WHERE note_id = ?').get(row.note_id) !== undefined) { progressed = true; return; }
         db.prepare('INSERT INTO note_vectors (note_id, embedding) VALUES (?, ?)').run(row.note_id, JSON.stringify(vector));
-        persisted = true;
+        progressed = true;
       })();
-      if (persisted) embedded += 1;
+      if (progressed) embedded += 1;
     } catch (error) {
       // A retry will never fix a systemic error — surface it. A transient row
       // failure is counted and left for the next pass; no separate retry store.

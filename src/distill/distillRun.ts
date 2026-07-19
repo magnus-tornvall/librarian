@@ -339,7 +339,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
   }
   try {
     const result = await runDistillPass(options);
-    await updateIndex(options.indexDir, options.dataDir, options.configPath);
+    await updateIndex(options.indexDir, options.dataDir, options.configPath, { failLoudOnTotalFailure: true });
     return result;
   } finally {
     lock.release();

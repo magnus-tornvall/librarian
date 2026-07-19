@@ -39,10 +39,25 @@ const provider = (embed: (input: string) => Promise<number[]>): EmbeddingProvide
 /** A local OpenAI/Ollama-compatible endpoint whose /v1/embeddings always 500s;
  *  /api/tags still resolves the model so failure lands on the embed call, not model(). */
 function embedAlways500(): http.Server {
+  return embedFailsWhen(() => true);
+}
+
+/** As above, but only 500s embed requests whose input satisfies `shouldFail`; the
+ *  rest return a valid vector — models a partial (some-rows-fail) batch. */
+function embedFailsWhen(shouldFail: (input: string) => boolean): http.Server {
   return http.createServer((request, response) => {
     response.setHeader('content-type', 'application/json');
-    if (request.url === '/api/tags') response.end(JSON.stringify({ models: [{ name: model.name, digest: model.digest }] }));
-    else response.writeHead(500).end(JSON.stringify({ error: 'embeddings unavailable' }));
+    if (request.url === '/api/tags') {
+      response.end(JSON.stringify({ models: [{ name: model.name, digest: model.digest }] }));
+      return;
+    }
+    let body = '';
+    request.on('data', (chunk) => { body += chunk; });
+    request.on('end', () => {
+      const input = String((JSON.parse(body || '{}') as { input?: unknown }).input ?? '');
+      if (shouldFail(input)) response.writeHead(500).end(JSON.stringify({ error: 'embeddings unavailable' }));
+      else response.end(JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }));
+    });
   });
 }
 
@@ -131,14 +146,14 @@ test('isSystemicIndexError classifies unrecoverable failures loud and transient 
   assert.equal(isSystemicIndexError(undefined), false);
 });
 
-test('updateIndex fails loud (SystemicIndexError) when every embedding fails, leaving vectors unchanged', async () => {
+test('updateIndex fails loud (SystemicIndexError) when a batch reconcile has every embedding fail', async () => {
   const { dataDir, indexDir, configPath } = dirs();
   appendNote(dataDir, note('fact:allfail'));
   const server = embedAlways500();
   const port = await listen(server);
   fs.writeFileSync(configPath, JSON.stringify({ embedding: { endpoint: `http://127.0.0.1:${port}`, model: model.name, timeoutMs: 500 } }));
   try {
-    await assert.rejects(updateIndex(indexDir, dataDir, configPath), (error: unknown) => {
+    await assert.rejects(updateIndex(indexDir, dataDir, configPath, { failLoudOnTotalFailure: true }), (error: unknown) => {
       assert.ok(error instanceof SystemicIndexError, `expected SystemicIndexError, got ${String(error)}`);
       assert.match((error as Error).message, /all 1 note/);
       return true;
@@ -152,6 +167,59 @@ test('updateIndex fails loud (SystemicIndexError) when every embedding fails, le
     }
   } finally {
     await close(server);
+  }
+});
+
+test('updateIndex stays fail-soft for a single-record mutation: an all-failed lone row warns, never throws', async () => {
+  // The default (no failLoudOnTotalFailure) is the CLI note-mutation contract:
+  // a one-off transient embed failure must not turn a durable append into a hard
+  // error — the note still ships and the next drain retries the embed.
+  const { dataDir, indexDir, configPath } = dirs();
+  appendNote(dataDir, note('fact:mutation'));
+  const server = embedAlways500();
+  const port = await listen(server);
+  fs.writeFileSync(configPath, JSON.stringify({ embedding: { endpoint: `http://127.0.0.1:${port}`, model: model.name, timeoutMs: 500 } }));
+  const warnings: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+  (process.stderr as unknown as { write: (chunk: unknown) => boolean }).write = (chunk) => { warnings.push(String(chunk)); return true; };
+  try {
+    await updateIndex(indexDir, dataDir, configPath); // default lenient — must NOT throw
+  } finally {
+    (process.stderr as unknown as { write: typeof original }).write = original;
+    await close(server);
+  }
+  assert.ok(warnings.some((w) => /1 of 1 note\(s\) failed to embed/.test(w)), `expected a retry warning, got: ${warnings.join('')}`);
+  const db = openIndexWrite(indexDir);
+  try {
+    assert.deepEqual(embeddingCoverage(db, true), { embedded: 0, total: 1, state: 'partial' });
+  } finally {
+    db.close();
+  }
+});
+
+test('updateIndex warns and exits soft on a partial batch: some rows embed, some fail, no throw', async () => {
+  const { dataDir, indexDir, configPath } = dirs();
+  appendNote(dataDir, note('fact:ok'));
+  appendNote(dataDir, note('fact:bad'));
+  const server = embedFailsWhen((input) => input.includes('bad'));
+  const port = await listen(server);
+  fs.writeFileSync(configPath, JSON.stringify({ embedding: { endpoint: `http://127.0.0.1:${port}`, model: model.name, timeoutMs: 500 } }));
+  const warnings: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+  (process.stderr as unknown as { write: (chunk: unknown) => boolean }).write = (chunk) => { warnings.push(String(chunk)); return true; };
+  try {
+    // Even the strict batch flag must not abort when at least one row embedded.
+    await updateIndex(indexDir, dataDir, configPath, { failLoudOnTotalFailure: true });
+  } finally {
+    (process.stderr as unknown as { write: typeof original }).write = original;
+    await close(server);
+  }
+  assert.ok(warnings.some((w) => /1 of 2 note\(s\) failed to embed/.test(w)), `expected a partial-failure warning, got: ${warnings.join('')}`);
+  const db = openIndexWrite(indexDir);
+  try {
+    assert.deepEqual(embeddingCoverage(db, true), { embedded: 1, total: 2, state: 'partial' }, 'the healthy row embedded; the failed row waits for the next pass');
+  } finally {
+    db.close();
   }
 });
 

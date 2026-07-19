@@ -53,20 +53,29 @@ export async function embedIndex(db: Database.Database, configPath?: string): Pr
 
 /**
  * Reconcile the index with the note log: replay pending records, embed new rows.
- * Systemic failures (wrong-Node ABI, a model/dimension change, a wholly-failed
- * embed batch) abort loudly. A genuinely recoverable stale index — the provider
+ * Intrinsic systemic failures (wrong-Node ABI, a model/dimension change, an empty
+ * vector) always abort loudly. A genuinely recoverable stale index — the provider
  * is momentarily down, or the index write hit a transient snag — degrades to a
  * stderr warning, because the note log is already durable (#137).
+ *
+ * `failLoudOnTotalFailure` adds the batch proxy: when *every* pending row fails,
+ * that is a near-free signal of a systemic outage/misconfiguration, so the batch
+ * reconcile (drain/distill) aborts. The single-record CLI mutations leave it off
+ * — a one-off transient failure on their lone row must not turn a durable append
+ * into a hard error; the note still prints and the next drain retries the embed.
  */
-export async function updateIndex(indexDir: string | undefined, dataDir: string, configPath?: string): Promise<void> {
+export async function updateIndex(
+  indexDir: string | undefined,
+  dataDir: string,
+  configPath?: string,
+  { failLoudOnTotalFailure = false }: { failLoudOnTotalFailure?: boolean } = {},
+): Promise<void> {
   try {
     const db = openIndexWrite(indexDir);
     try {
       indexNotes(db, dataDir);
       const { embedded, failed } = await embedIndex(db, configPath);
-      if (failed > 0 && embedded === 0) {
-        // Every row failed — a near-free proxy for a systemic provider outage or
-        // misconfiguration, not a scatter of transient hiccups.
+      if (failLoudOnTotalFailure && failed > 0 && embedded === 0) {
         throw new SystemicIndexError(`embedding failed for all ${failed} note(s); the provider is unreachable or misconfigured`);
       }
       if (failed > 0) {
