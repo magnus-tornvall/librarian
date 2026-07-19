@@ -1,20 +1,10 @@
 import { ulid } from 'ulid';
 import type { InferenceProvider } from './provider.ts';
 import { renderEventsForDistill } from '../render/distillPrompt.ts';
-import { latestRecordPerNoteId, type NoteRecord, type NoteRevision } from '../note.ts';
+import { latestRecordPerNoteId, projectSummaryId, NOTE_TYPES, type NoteRecord, type NoteRevision } from '../note.ts';
 import { projectSlugFromGitRoot } from '../projectSlug.ts';
 
 export type { NoteRevision };
-
-const NOTE_TYPES: ReadonlyArray<NoteRevision['note_type']> = [
-  'fact',
-  'decision',
-  'project_summary',
-  'person',
-  'daily',
-  'episode',
-  'curated',
-];
 
 type LlmNoteJudgment = {
   note_type?: string;
@@ -114,7 +104,9 @@ export async function distill(
   const gitRoot = typeof resource.git_root === 'string' ? resource.git_root : undefined;
   const gitRemote = typeof resource.git_remote === 'string' ? resource.git_remote : undefined;
   const projectSlug = projectSlugFromGitRoot(gitRoot);
-  const deterministic = noteType === 'project_summary' && projectSlug !== undefined;
+  const summaryId = noteType === 'project_summary' && projectSlug !== undefined
+    ? projectSummaryId(projectSlug)
+    : undefined;
   const links = Array.isArray(judgment.links)
     ? judgment.links.filter((link): link is NoteRevision['links'][number] => {
         if (typeof link !== 'object' || link === null) return false;
@@ -127,8 +119,8 @@ export async function distill(
     : [];
   const firstEventId = events[0]?.event_id as string;
   const lastEventId = events.at(-1)?.event_id as string;
-  const noteId = deterministic ? `project:${projectSlug}:summary` : `${noteType}:${ulid()}`;
-  const previousRevision = deterministic
+  const noteId = summaryId ?? `${noteType}:${ulid()}`;
+  const previousRevision = summaryId !== undefined
     ? latestRecordPerNoteId(existingRecords).find(
         (record): record is NoteRevision => record.kind === 'note_revision' && record.note_id === noteId,
       )
@@ -141,8 +133,8 @@ export async function distill(
     revision_id: ulid(),
     ...(previousRevision ? { previous_revision_id: previousRevision.revision_id } : {}),
     created_at: new Date().toISOString(),
-    identity: deterministic
-      ? { mode: 'deterministic', key: `project:${projectSlug}:summary` }
+    identity: summaryId !== undefined
+      ? { mode: 'deterministic', key: summaryId }
       : { mode: 'episodic' },
     source: { origin, distiller: 'llm', ...(provider.model ? { model: provider.model } : {}) },
     note_type: noteType,
