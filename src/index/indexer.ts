@@ -81,15 +81,50 @@ function createVectorTable(db: Database.Database, dimensions: number): void {
   db.prepare("INSERT INTO index_metadata (key, value) VALUES ('embedding_dimensions', ?)").run(String(dimensions));
 }
 
-/** Embed active FTS rows that have no vector. Individual provider failures leave rows for the next pass. */
-export async function embedIndexedNotes(db: Database.Database, provider: EmbeddingProvider, model: EmbeddingModel, nowIso = new Date().toISOString()): Promise<void> {
-  assertEmbeddingIndexModel(db, model);
-  setEmbeddingIndexModel(db, model);
-  // Match recall's active-row rule (invalid_at open interval), so a note recall can
-  // still ship never sits unembeddable; future-valid rows embed ahead of need.
-  const rows = db.prepare(vectorTableExists(db)
+/**
+ * An index/embed failure a retry will never fix — it must abort the run loudly
+ * (non-zero exit) rather than be reported as success over an empty index (#137).
+ * Transient per-row failures (a timeout, one bad response) are the opposite:
+ * counted and retried on the next pass, never thrown.
+ */
+export class SystemicIndexError extends Error {}
+
+/**
+ * Systemic markers: wrong-Node native ABI (`ERR_DLOPEN_FAILED`), a changed
+ * embedding model or vector dimension, an empty vector, or an already-classified
+ * `SystemicIndexError` (e.g. a wholly-failed batch). Everything else — HTTP
+ * errors, timeouts, connect refusals — is transient at the row level.
+ */
+export function isSystemicIndexError(error: unknown): boolean {
+  if (error instanceof SystemicIndexError) return true;
+  if (error !== null && typeof error === 'object' && (error as { code?: unknown }).code === 'ERR_DLOPEN_FAILED') return true;
+  if (!(error instanceof Error)) return false;
+  return error.message.startsWith('embedding model changed from ')
+    || error.message.includes('changed vector dimensions')
+    || error.message === 'embedding provider returned an empty vector';
+}
+
+/** Active FTS rows (invalid_at open interval) that still lack a vector — the embed backlog. */
+function pendingVectorRows(db: Database.Database, nowIso = new Date().toISOString()): Array<{ note_id: string; revision_id: string; search_text: string }> {
+  // Match recall's active-row rule so a note recall can still ship never sits
+  // unembeddable; future-valid rows embed ahead of need.
+  return db.prepare(vectorTableExists(db)
     ? `SELECT note_id, revision_id, search_text FROM notes_fts WHERE (invalid_at IS NULL OR invalid_at > ?) AND note_id NOT IN (SELECT note_id FROM note_vectors)`
     : 'SELECT note_id, revision_id, search_text FROM notes_fts WHERE invalid_at IS NULL OR invalid_at > ?').all(nowIso) as Array<{ note_id: string; revision_id: string; search_text: string }>;
+}
+
+/**
+ * Embed active FTS rows that have no vector. Returns per-pass counts: `embedded`
+ * rows now carry a vector; `failed` rows hit a transient provider failure and
+ * stay for the next pass. A systemic error (dimension/empty/model/ABI) is
+ * rethrown, not counted — a retry would never clear it (#137).
+ */
+export async function embedIndexedNotes(db: Database.Database, provider: EmbeddingProvider, model: EmbeddingModel, nowIso = new Date().toISOString()): Promise<{ embedded: number; failed: number }> {
+  assertEmbeddingIndexModel(db, model);
+  setEmbeddingIndexModel(db, model);
+  const rows = pendingVectorRows(db, nowIso);
+  let embedded = 0;
+  let failed = 0;
   for (const row of rows) {
     try {
       const vector = await provider.embed(row.search_text);
@@ -99,16 +134,23 @@ export async function embedIndexedNotes(db: Database.Database, provider: Embeddi
       // The provider call yields between reading the row and writing the vector; a
       // concurrent index pass may have replaced or removed the revision meanwhile.
       // Re-check inside one transaction so a stale vector is never persisted.
+      let persisted = false;
       db.transaction(() => {
         const current = db.prepare('SELECT revision_id FROM notes_fts WHERE note_id = ?').get(row.note_id) as { revision_id: string } | undefined;
         if (current?.revision_id !== row.revision_id) return;
         if (db.prepare('SELECT 1 FROM note_vectors WHERE note_id = ?').get(row.note_id) !== undefined) return;
         db.prepare('INSERT INTO note_vectors (note_id, embedding) VALUES (?, ?)').run(row.note_id, JSON.stringify(vector));
+        persisted = true;
       })();
-    } catch {
-      // ponytail: retry failed embeddings on the next index pass; no separate retry store is needed.
+      if (persisted) embedded += 1;
+    } catch (error) {
+      // A retry will never fix a systemic error — surface it. A transient row
+      // failure is counted and left for the next pass; no separate retry store.
+      if (isSystemicIndexError(error)) throw error;
+      failed += 1;
     }
   }
+  return { embedded, failed };
 }
 
 function applyRecord(db: Database.Database, record: NoteRecord): boolean {

@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { loadConfig } from '../config.ts';
-import { assertEmbeddingIndexModel, setEmbeddingIndexModel } from '../index/database.ts';
-import { embedIndexedNotes } from '../index/indexer.ts';
+import { assertEmbeddingIndexModel, openIndexWrite, setEmbeddingIndexModel } from '../index/database.ts';
+import { embedIndexedNotes, indexNotes, isSystemicIndexError, SystemicIndexError } from '../index/indexer.ts';
 import { classifyEmbeddingError, makeOpenAiEmbeddingProvider, type EmbeddingModel } from '../embedding/provider.ts';
 
 export type QueryEmbedding = {
@@ -37,14 +37,46 @@ export async function stampEmbeddingIndex(db: Database.Database, configPath?: st
   return 'ok';
 }
 
-/** Index-time embeddings are fail-soft: an unavailable provider leaves FTS recall intact. */
-export async function embedIndex(db: Database.Database, configPath?: string): Promise<void> {
+/**
+ * Index-time embeddings are fail-soft: an unavailable provider leaves FTS recall
+ * intact. Returns per-pass counts; systemic errors (model/dimension/empty/ABI)
+ * propagate so the caller can fail loud (#137). An unreachable provider (a failed
+ * `model()` fetch) still propagates as a plain error — recoverable, so the caller
+ * downgrades it to a warning rather than aborting.
+ */
+export async function embedIndex(db: Database.Database, configPath?: string): Promise<{ embedded: number; failed: number }> {
   const config = loadConfig(configPath);
-  if (!config.embedding) return;
+  if (!config.embedding) return { embedded: 0, failed: 0 };
   const provider = makeOpenAiEmbeddingProvider(config.embedding);
+  return embedIndexedNotes(db, provider, await provider.model());
+}
+
+/**
+ * Reconcile the index with the note log: replay pending records, embed new rows.
+ * Systemic failures (wrong-Node ABI, a model/dimension change, a wholly-failed
+ * embed batch) abort loudly. A genuinely recoverable stale index — the provider
+ * is momentarily down, or the index write hit a transient snag — degrades to a
+ * stderr warning, because the note log is already durable (#137).
+ */
+export async function updateIndex(indexDir: string | undefined, dataDir: string, configPath?: string): Promise<void> {
   try {
-    await embedIndexedNotes(db, provider, await provider.model());
+    const db = openIndexWrite(indexDir);
+    try {
+      indexNotes(db, dataDir);
+      const { embedded, failed } = await embedIndex(db, configPath);
+      if (failed > 0 && embedded === 0) {
+        // Every row failed — a near-free proxy for a systemic provider outage or
+        // misconfiguration, not a scatter of transient hiccups.
+        throw new SystemicIndexError(`embedding failed for all ${failed} note(s); the provider is unreachable or misconfigured`);
+      }
+      if (failed > 0) {
+        process.stderr.write(`librarian: ${failed} of ${embedded + failed} note(s) failed to embed; retrying on the next pass\n`);
+      }
+    } finally {
+      db.close();
+    }
   } catch (error) {
-    if (isEmbeddingModelMismatch(error)) throw error;
+    if (isSystemicIndexError(error)) throw error;
+    process.stderr.write(`librarian: note is durable but the index is stale; run librarian drain: ${(error as Error).message}\n`);
   }
 }

@@ -5,9 +5,7 @@ import { distill } from './llmDistiller.ts';
 import { verifyNote, type VerifyVerdict } from './verifyNote.ts';
 import { findNearDuplicate } from './noveltyGate.ts';
 import { appendNote, readAllNotes } from '../log/noteLog.ts';
-import { openIndexWrite } from '../index/database.ts';
-import { indexNotes } from '../index/indexer.ts';
-import { embedIndex, isEmbeddingModelMismatch } from '../recall/embedding.ts';
+import { updateIndex } from '../recall/embedding.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
 import { acquireLock } from '../log/lock.ts';
@@ -341,18 +339,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
   }
   try {
     const result = await runDistillPass(options);
-    try {
-      const db = openIndexWrite(options.indexDir);
-      try {
-        indexNotes(db, options.dataDir);
-        await embedIndex(db, options.configPath);
-      } finally {
-        db.close();
-      }
-    } catch (err) {
-      if (isEmbeddingModelMismatch(err)) throw err;
-      process.stderr.write(`librarian: note is durable but the index is stale; run librarian drain: ${(err as Error).message}\n`);
-    }
+    await updateIndex(options.indexDir, options.dataDir, options.configPath);
     return result;
   } finally {
     lock.release();
