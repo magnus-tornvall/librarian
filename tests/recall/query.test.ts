@@ -160,7 +160,34 @@ test('recall traces and why-not identify an expired episode without removing it'
   assert.equal(result.gate, 'ttl_expired');
 });
 
-// --- Scope enforcement (§6 "require project match or explicit global scope") ---
+test('recall trace names flag, supersession, and intrinsic expiry as distinct cut_reasons (#106)', () => {
+  const db = new Database(':memory:');
+  migrate(db);
+  const insert = db.prepare(
+    'INSERT INTO notes_fts (note_id, revision_id, origin, note_type, created_at, valid_at, invalid_at, superseded_by, invalidation_kind, project_slug, is_global, search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  const closedAt = '2026-07-04T00:00:00.000Z';
+  insert.run('flagged-note', 'r', 'opencode', 'fact', NOW, NOW, closedAt, null, 'flag', 'alpha', 0, 'narwhal routing');
+  insert.run('superseded-note', 'r', 'opencode', 'fact', NOW, NOW, closedAt, 'fact:replacement', 'supersession', 'alpha', 0, 'narwhal routing');
+  insert.run('expired-note', 'r', 'opencode', 'fact', NOW, NOW, closedAt, null, 'intrinsic', 'alpha', 0, 'narwhal routing');
+  for (let i = 0; i < 5; i += 1) {
+    insert.run(`decoy-${i}`, `r-${i}`, 'opencode', 'fact', NOW, NOW, null, null, null, 'alpha', 0, `unrelated filler ${i}`);
+  }
+
+  const traced = recallWithTrace(db, 'narwhal', { projectSlug: 'alpha' }, undefined, NOW);
+  assert.deepEqual(traced.results, [], 'all three closed notes are excluded from recall');
+  const reasonOf = (id: string) => traced.candidates.find((row) => row.note_id === id)?.cut_reason;
+  assert.equal(reasonOf('flagged-note'), 'flagged');
+  assert.equal(reasonOf('superseded-note'), 'superseded');
+  assert.equal(reasonOf('expired-note'), 'expired');
+
+  // The same distinction surfaces in why-not.
+  assert.equal((whyNot(db, 'narwhal', 'flagged-note', { projectSlug: 'alpha' }, undefined, NOW) as { gate: string }).gate, 'flagged');
+  assert.equal((whyNot(db, 'narwhal', 'superseded-note', { projectSlug: 'alpha' }, undefined, NOW) as { gate: string }).gate, 'superseded');
+  assert.equal((whyNot(db, 'narwhal', 'expired-note', { projectSlug: 'alpha' }, undefined, NOW) as { gate: string }).gate, 'expired');
+});
+
+
 // Scope now lives in notes_fts (project_slug / is_global), so recall filters on it
 // in SQL. These tests pin that gate directly, independent of the fixture runner.
 

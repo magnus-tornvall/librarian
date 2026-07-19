@@ -35,7 +35,7 @@ export type InjectionTrace = {
     post_weight_score: number;
     bm25_rank?: number;
     knn_rank?: number;
-    cut_reason?: 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'ttl_expired';
+    cut_reason?: 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'flagged' | 'expired' | 'ttl_expired';
   }>;
   shipped_note_ids: string[];
   indexed_through: string;

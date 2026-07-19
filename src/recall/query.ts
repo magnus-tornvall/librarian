@@ -78,7 +78,7 @@ export type RecallTraceCandidate = ScoredCandidate & {
   score: number;
   bm25_rank?: number;
   knn_rank?: number;
-  cut_reason?: 'below_floor' | 'budget' | 'superseded' | 'ttl_expired';
+  cut_reason?: 'below_floor' | 'budget' | 'superseded' | 'flagged' | 'expired' | 'ttl_expired';
 };
 
 export type WhyNotResult =
@@ -220,6 +220,7 @@ export function recallWithTrace(
       is_project_match: opts.projectSlug !== undefined && row.project_slug === opts.projectSlug,
       valid_at: row.valid_at ?? row.created_at,
       invalid_at: row.invalid_at,
+      invalidation_kind: row.invalidation_kind,
     };
   });
 
@@ -258,9 +259,13 @@ export function recallWithTrace(
   const shippedIds = new Set(shipped.map((candidate) => candidate.note_id));
   const budgetCutIds = new Set(aboveFloor.slice(limit).map((candidate) => candidate.note_id));
   const traceCandidates: RecallTraceCandidate[] = scored.map((candidate) => {
-    const { valid_at: _validAt, invalid_at: _invalidAt, bm25_magnitude: _bm25Magnitude, ...traceCandidate } = candidate;
+    const { valid_at: _validAt, invalid_at: _invalidAt, invalidation_kind: _invalidationKind, bm25_magnitude: _bm25Magnitude, ...traceCandidate } = candidate;
     if (candidate.invalid_at !== null && candidate.invalid_at <= nowIso) {
-      return { ...traceCandidate, cut_reason: 'superseded' };
+      // Name the close honestly (#106): a flag, a supersession, or the revision's own expiry.
+      const cut_reason = candidate.invalidation_kind === 'flag' ? 'flagged'
+        : candidate.invalidation_kind === 'intrinsic' ? 'expired'
+        : 'superseded';
+      return { ...traceCandidate, cut_reason };
     }
     if (isTtlExpired(candidate, config, nowIso)) {
       return { ...traceCandidate, cut_reason: 'ttl_expired' };
