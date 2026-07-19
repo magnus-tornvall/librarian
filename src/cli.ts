@@ -223,7 +223,9 @@ export async function flagNoteRecord(
   if (!findLatestNote(dataDir, noteId)) throw new Error(`unknown note_id: ${noteId}`);
   const record = buildFlagRecord(noteId, reason, source);
   appendNote(dataDir, record);
-  await syncIndex(dataDir, indexDir, configPath);
+  // A single-record mutation: reconcile leniently so a transient embed blip on
+  // the reindexed row does not turn a durable flag into a hard error.
+  await updateIndex(indexDir, dataDir, configPath);
   return record;
 }
 
