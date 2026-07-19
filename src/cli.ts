@@ -11,7 +11,6 @@ import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { importCuratedNote } from './distill/humanDistiller.ts';
 import { loadConfig } from './config.ts';
-import { indexNotes } from './index/indexer.ts';
 import { embeddingCoverage, embeddingIndexModel, indexedThrough, openIndexRead, openIndexWrite, stateNotes } from './index/database.ts';
 import { makeOpenAiEmbeddingProvider } from './embedding/provider.ts';
 import { runDistill } from './distill/distillRun.ts';
@@ -23,7 +22,7 @@ import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, INDEX_DIR, MACHINE_ID_PATH } fr
 import { scoringConfigSnapshot, type ScoringConfig } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
-import { embedIndex, isEmbeddingModelMismatch, queryEmbedding, type QueryEmbedding } from './recall/embedding.ts';
+import { queryEmbedding, updateIndex, type QueryEmbedding } from './recall/embedding.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -156,7 +155,7 @@ async function noteImportCurated(argv: string[]): Promise<void> {
   if (!vault) throw new Error('note import-curated requires --vault <dir>');
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const note = importCuratedNote(vault, file, dataDir);
-  await syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR, flags.get('config'));
+  await updateIndex(flags.get('index-dir') ?? INDEX_DIR, dataDir, flags.get('config'));
   process.stdout.write(JSON.stringify(note) + '\n');
 }
 
@@ -177,7 +176,7 @@ async function noteTombstone(argv: string[]): Promise<void> {
     created_at: new Date().toISOString(), source: { kind: 'cli' },
   };
   appendNote(dataDir, tombstone);
-  await syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR, flags.get('config'));
+  await updateIndex(flags.get('index-dir') ?? INDEX_DIR, dataDir, flags.get('config'));
   process.stdout.write(JSON.stringify(tombstone) + '\n');
 }
 
@@ -195,7 +194,7 @@ async function supersede(argv: string[]): Promise<void> {
     revision_id: ulid(), created_at: new Date().toISOString(), reason: flags.get('reason'), source: { kind: 'cli' },
   };
   appendNote(dataDir, record);
-  await syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR, flags.get('config'));
+  await updateIndex(flags.get('index-dir') ?? INDEX_DIR, dataDir, flags.get('config'));
   process.stdout.write(JSON.stringify(record) + '\n');
 }
 
@@ -822,13 +821,14 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const indexDir = flags.get('index-dir') ?? INDEX_DIR;
   const provider = resolveProvider(flags, flags.get('config'));
 
+  // runDistill already replayed the note log and embedded (failing loud on a
+  // systemic error) — reading coverage here is a signal-only lens, not a second
+  // index pass that would re-run the work just to print a count.
   const distilled = await runDistill({ dataDir, diagnosticsDir, provider, indexDir, configPath: flags.get('config') });
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
   const index = openIndexWrite(indexDir);
   let coverage: ReturnType<typeof embeddingCoverage>;
   try {
-    indexNotes(index, dataDir);
-    await embedIndex(index, flags.get('config'));
     coverage = embeddingCoverage(index, loadConfig(flags.get('config')).embedding !== undefined);
   } finally {
     index.close();
@@ -837,8 +837,8 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const distillWork = distilled.distilled + distilled.duplicates + distilled.skipped + distilled.noops + distilled.quarantined + distilled.rejected;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
   if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
-    // Coverage is live index state, not a work counter — embedIndex ran above regardless
-    // of pending sessions, so print it even when there is nothing to distill or export.
+    // Coverage is live index state, not a work counter — runDistill embedded above
+    // regardless of pending sessions, so print it even with nothing to distill or export.
     process.stdout.write(`Nothing pending; index embedding coverage: ${coverage!.embedded}/${coverage!.total} (${coverage!.state})\n`);
     return;
   }
@@ -951,21 +951,6 @@ function writePullTrace(options: RecallOptions, candidates: RecallTraceCandidate
     config_snapshot: scoringConfigSnapshot(scoring),
   };
   writeInjectionTrace(options.diagnosticsDir, trace);
-}
-
-async function syncIndex(dataDir: string, indexDir: string, configPath?: string): Promise<void> {
-  try {
-    const db = openIndexWrite(indexDir);
-    try {
-      indexNotes(db, dataDir);
-      await embedIndex(db, configPath);
-    } finally {
-      db.close();
-    }
-  } catch (err) {
-    if (isEmbeddingModelMismatch(err)) throw err;
-    process.stderr.write(`librarian: note is durable but the index is stale; run librarian drain: ${(err as Error).message}\n`);
-  }
 }
 
 export async function runRecall(options: RecallOptions): Promise<RecallPayload> {
