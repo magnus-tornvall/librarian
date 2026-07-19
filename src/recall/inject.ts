@@ -134,6 +134,7 @@ export async function buildInjection(options: InjectionOptions): Promise<string 
       { projectSlug: options.projectSlug, global: options.global, limit: PUSH_CAP },
       scoring,
       ts,
+      embedding.vector,
     );
     const notesById = new Map(stateNotes(db, results.map((result) => result.note_id)).map((note) => [note.note_id, note]));
     const entries = results.flatMap((result) => {
