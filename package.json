@@ -11,8 +11,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --test \"tests/**/*.test.ts\"",
-    "qualify": "node --test tests/distill/providerQualification.test.ts",
+    "test": "node --import ./tests/setup-home.ts --test \"tests/**/*.test.ts\"",
+    "qualify": "node --import ./tests/setup-home.ts --test tests/distill/providerQualification.test.ts",
     "lint": "eslint src"
   },
   "devDependencies": {
