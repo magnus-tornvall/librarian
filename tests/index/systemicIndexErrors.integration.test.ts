@@ -141,6 +141,7 @@ test('isSystemicIndexError classifies unrecoverable failures loud and transient 
   assert.equal(isSystemicIndexError(new Error('embedding model changed from a@1 to b@2; delete the index directory')), true);
   assert.equal(isSystemicIndexError(new Error('embedding provider changed vector dimensions from 2 to 3')), true);
   assert.equal(isSystemicIndexError(new Error('embedding provider returned an empty vector')), true);
+  assert.equal(isSystemicIndexError(new Error('embedding endpoint did not return a digest for qwen3-embedding:0.6b')), true, 'a model the endpoint does not serve is a permanent misconfig');
   assert.equal(isSystemicIndexError(new Error('embedding endpoint returned HTTP 503')), false, 'a single bad response is transient');
   assert.equal(isSystemicIndexError(new Error('fetch failed')), false, 'a connect error is transient at the row level');
   assert.equal(isSystemicIndexError(undefined), false);
@@ -220,6 +221,31 @@ test('updateIndex warns and exits soft on a partial batch: some rows embed, some
     assert.deepEqual(embeddingCoverage(db, true), { embedded: 1, total: 2, state: 'partial' }, 'the healthy row embedded; the failed row waits for the next pass');
   } finally {
     db.close();
+  }
+});
+
+test('a configured model the endpoint does not serve is systemic and fails loud even on the lenient mutation path', async () => {
+  const { dataDir, indexDir, configPath } = dirs();
+  appendNote(dataDir, note('fact:wrongmodel'));
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    // /api/tags lists a different model, so model() cannot resolve a digest for
+    // the configured one — a permanent misconfiguration, not a transient blip.
+    if (request.url === '/api/tags') response.end(JSON.stringify({ models: [{ name: 'some-other-model', digest: 'sha256:other' }] }));
+    else response.end(JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }));
+  });
+  const port = await listen(server);
+  fs.writeFileSync(configPath, JSON.stringify({ embedding: { endpoint: `http://127.0.0.1:${port}`, model: model.name, timeoutMs: 500 } }));
+  try {
+    // Default (lenient) mutation path still aborts — a retry will never fix it,
+    // so we surface it rather than silently ship a permanently empty vector index.
+    await assert.rejects(updateIndex(indexDir, dataDir, configPath), (error: unknown) => {
+      assert.ok(error instanceof Error, `expected an Error, got ${String(error)}`);
+      assert.match((error as Error).message, /did not return a digest for/);
+      return true;
+    });
+  } finally {
+    await close(server);
   }
 });
 

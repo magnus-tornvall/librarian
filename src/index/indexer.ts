@@ -96,9 +96,11 @@ export class SystemicIndexError extends Error {}
 
 /**
  * Systemic markers: wrong-Node native ABI (`ERR_DLOPEN_FAILED`), a changed
- * embedding model or vector dimension, an empty vector, or an already-classified
- * `SystemicIndexError` (e.g. a wholly-failed batch). Everything else — HTTP
- * errors, timeouts, connect refusals — is transient at the row level.
+ * embedding model or vector dimension, an empty vector, a configured model the
+ * endpoint does not serve (a permanent misconfiguration — no digest for it), or
+ * an already-classified `SystemicIndexError` (e.g. a wholly-failed batch).
+ * Everything else — HTTP errors, timeouts, connect refusals — is transient: a
+ * reachable-but-flaky or momentarily-down provider recovers on the next pass.
  */
 export function isSystemicIndexError(error: unknown): boolean {
   if (error instanceof SystemicIndexError) return true;
@@ -106,6 +108,7 @@ export function isSystemicIndexError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return error.message.startsWith('embedding model changed from ')
     || error.message.includes('changed vector dimensions')
+    || error.message.includes('did not return a digest for')
     || error.message === 'embedding provider returned an empty vector';
 }
 
