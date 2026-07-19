@@ -40,7 +40,8 @@ const USAGE = `usage:
                                            process everything pending: distill, then export to a vault
   librarian recall <query> --project <slug> [--index-dir <dir>] [--global] [--origin <origin>] [--limit N] [--json]
                                            search the recall index for pull-path results
-  librarian why <injection_id> [--json]    explain a diagnostics injection trace
+  librarian why (<injection_id> | --last [--session <id>]) [--json]
+                                           explain a diagnostics injection trace (--last: newest push trace)
   librarian why-not <query> <note_id> --project <slug> [--index-dir <dir>] [--global]
                                             explain why a note did not ship for a query
   librarian why-summary [--session <id>] [--diagnostics-dir <dir>] [--json]
@@ -227,7 +228,7 @@ export type RecallPayload = { results: RecallResult[]; message?: string };
 
 export type NoteShowPayload = { note: NoteStateRecord; provenance_events: Array<Record<string, unknown>> | null };
 
-type WhyOptions = { injectionId: string; json: boolean; diagnosticsDir: string };
+type WhyOptions = { injectionId?: string; last?: boolean; sessionId?: string; json: boolean; diagnosticsDir: string };
 type WhySummaryOptions = { session?: string; json: boolean; diagnosticsDir: string };
 type WhyNotOptions = { query: string; noteId: string; projectSlug?: string; global: boolean; dataDir: string; indexDir: string };
 
@@ -453,18 +454,27 @@ function parseRecallArgs(argv: string[]): RecallOptions {
 }
 
 function parseWhyArgs(argv: string[]): WhyOptions {
-  const [injectionId, ...rest] = argv;
-  if (!injectionId || injectionId.startsWith('--')) {
-    throw new Error('why requires <injection_id>');
+  const [first, ...rest] = argv;
+  const options: WhyOptions = { json: false, diagnosticsDir: DIAGNOSTICS_DIR };
+  const args = first === undefined || first.startsWith('--') ? argv : rest;
+  if (args === rest) {
+    options.injectionId = first;
   }
-
-  const options: WhyOptions = { injectionId, json: false, diagnosticsDir: DIAGNOSTICS_DIR };
-  for (let i = 0; i < rest.length; i += 1) {
-    const arg = rest[i];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
     if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--last') {
+      options.last = true;
+    } else if (arg === '--session') {
+      const value = args[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --session requires a value');
+      }
+      options.sessionId = value;
+      i += 1;
     } else if (arg === '--diagnostics-dir') {
-      const value = rest[i + 1];
+      const value = args[i + 1];
       if (value === undefined) {
         throw new Error('flag --diagnostics-dir requires a value');
       }
@@ -473,6 +483,15 @@ function parseWhyArgs(argv: string[]): WhyOptions {
     } else {
       throw new Error(`unexpected argument: ${arg}`);
     }
+  }
+  if (options.injectionId !== undefined && options.last) {
+    throw new Error('why: <injection_id> and --last are mutually exclusive');
+  }
+  if (options.injectionId === undefined && !options.last) {
+    throw new Error('why requires <injection_id> or --last');
+  }
+  if (options.sessionId !== undefined && !options.last) {
+    throw new Error('why: --session requires --last');
   }
   return options;
 }
@@ -818,7 +837,9 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const distillWork = distilled.distilled + distilled.duplicates + distilled.skipped + distilled.noops + distilled.quarantined + distilled.rejected;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
   if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
-    process.stdout.write('Nothing pending\n');
+    // Coverage is live index state, not a work counter — embedIndex ran above regardless
+    // of pending sessions, so print it even when there is nothing to distill or export.
+    process.stdout.write(`Nothing pending; index embedding coverage: ${coverage!.embedded}/${coverage!.total} (${coverage!.state})\n`);
     return;
   }
 
@@ -1026,9 +1047,27 @@ function formatTrace(trace: InjectionTrace): string {
 }
 
 function whyCommand(options: WhyOptions): void {
-  const trace = readInjectionTraces(options.diagnosticsDir).find((row) => row.injection_id === options.injectionId);
-  if (trace === undefined) {
-    throw new Error(`trace not found — diagnostics may have been deleted: ${options.injectionId}`);
+  const traces = readInjectionTraces(options.diagnosticsDir);
+  let trace: InjectionTrace | undefined;
+  if (options.last) {
+    // Newest = max-ULID injection_id over push traces (ULIDs are minted at operation
+    // time and ms-sortable; ts ordering is unreliable). --session filters first.
+    let push = traces.filter((row) => row.path === 'push');
+    if (push.length === 0) {
+      throw new Error('why --last: no push traces found');
+    }
+    if (options.sessionId !== undefined) {
+      push = push.filter((row) => row.session_id === options.sessionId);
+      if (push.length === 0) {
+        throw new Error(`why --last: no push traces for session ${options.sessionId}`);
+      }
+    }
+    trace = push.reduce((max, row) => (row.injection_id > max.injection_id ? row : max));
+  } else {
+    trace = traces.find((row) => row.injection_id === options.injectionId);
+    if (trace === undefined) {
+      throw new Error(`trace not found — diagnostics may have been deleted: ${options.injectionId}`);
+    }
   }
   process.stdout.write(options.json ? JSON.stringify(trace) + '\n' : formatTrace(trace));
 }
