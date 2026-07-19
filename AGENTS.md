@@ -1,6 +1,6 @@
 # Librarian — agent guide
 
-Node ≥22.18, TypeScript, ESM. Single-source agent instructions; `CLAUDE.md` just imports this file (`@AGENTS.md`).
+Node per `.nvmrc` (the authoritative pin — run `nvm use`; `package.json` `engines` is only a floor). TypeScript, ESM.
 
 ## Commands
 
@@ -13,6 +13,9 @@ npm run qualify    # provider qualification suite only
 
 Run one file: `node --test tests/<path>.test.ts`.
 
+`better-sqlite3` is a native module compiled for the `.nvmrc` node. `ERR_DLOPEN_FAILED` /
+`NODE_MODULE_VERSION` from `npm test` means you're on the wrong node — run `nvm use`.
+
 The bar is green **build + test + lint**. No formatter — don't add Prettier. The
 linter (`eslint.config.js`) carries only type-aware rules tsc can't see —
 `no-floating-promises` chief among them (a dropped `await` in the pipeline
@@ -21,7 +24,7 @@ silently loses a note). Widen it deliberately, not by reaching for the
 
 ## Testing
 
-**Iron law: write integration tests. No unit tests for backend code.**
+**Iron law: write integration tests.**
 Black-box/integration only, through each pipeline stage's input/output contract
 (§14 of the spec). `node --test`, TypeScript, plain-file fixtures, no mocking
 framework. If there is no test setup, stop and ask before proceeding.
