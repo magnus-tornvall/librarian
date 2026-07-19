@@ -44,6 +44,8 @@ const USAGE = `usage:
                                            explain a diagnostics injection trace (--last: newest push trace)
   librarian why-not <query> <note_id> --project <slug> [--index-dir <dir>] [--global]
                                             explain why a note did not ship for a query
+  librarian why-summary [--session <id>] [--diagnostics-dir <dir>] [--json]
+                                            replay a session's push-path injection traces in order
   librarian stats [--index-dir <dir>] [--config <file>] [--json]
                                             report admission, usage, cut reasons, and index embedding coverage
   librarian doctor [--index-dir <dir>] [--config <file>] [--json]
@@ -227,6 +229,7 @@ export type RecallPayload = { results: RecallResult[]; message?: string };
 export type NoteShowPayload = { note: NoteStateRecord; provenance_events: Array<Record<string, unknown>> | null };
 
 type WhyOptions = { injectionId?: string; last?: boolean; sessionId?: string; json: boolean; diagnosticsDir: string };
+type WhySummaryOptions = { session?: string; json: boolean; diagnosticsDir: string };
 type WhyNotOptions = { query: string; noteId: string; projectSlug?: string; global: boolean; dataDir: string; indexDir: string };
 
 function statsCommand(argv: string[]): void {
@@ -489,6 +492,33 @@ function parseWhyArgs(argv: string[]): WhyOptions {
   }
   if (options.sessionId !== undefined && !options.last) {
     throw new Error('why: --session requires --last');
+  }
+  return options;
+}
+
+function parseWhySummaryArgs(argv: string[]): WhySummaryOptions {
+  const options: WhySummaryOptions = { json: false, diagnosticsDir: DIAGNOSTICS_DIR };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--json') {
+      options.json = true;
+    } else if (arg === '--session') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --session requires a value');
+      }
+      options.session = value;
+      i += 1;
+    } else if (arg === '--diagnostics-dir') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --diagnostics-dir requires a value');
+      }
+      options.diagnosticsDir = value;
+      i += 1;
+    } else {
+      throw new Error(`unexpected argument: ${arg}`);
+    }
   }
   return options;
 }
@@ -1042,6 +1072,35 @@ function whyCommand(options: WhyOptions): void {
   process.stdout.write(options.json ? JSON.stringify(trace) + '\n' : formatTrace(trace));
 }
 
+/**
+ * Collect a session's PUSH traces in ULID order for a replay. With no `session`
+ * given, self-resolve to the newest session — the `session_id` of the max-ULID
+ * push trace (issue #125). Pull/MCP traces are out of scope (no session_id).
+ */
+export function whySummaryTraces(
+  diagnosticsDir: string,
+  session?: string,
+): { session: string; traces: InjectionTrace[] } {
+  const push = readInjectionTraces(diagnosticsDir)
+    .filter((t) => t.path === 'push' && t.session_id !== undefined)
+    .sort((a, b) => a.injection_id.localeCompare(b.injection_id));
+  const resolved = session ?? push[push.length - 1]?.session_id;
+  if (resolved === undefined) {
+    throw new Error('no push traces with a session_id found');
+  }
+  return { session: resolved, traces: push.filter((t) => t.session_id === resolved) };
+}
+
+function whySummaryCommand(options: WhySummaryOptions): void {
+  const { session, traces } = whySummaryTraces(options.diagnosticsDir, options.session);
+  if (options.json) {
+    process.stdout.write(JSON.stringify({ session, injections: traces.length, traces }) + '\n');
+    return;
+  }
+  const header = `Session ${session} · ${traces.length} injection${traces.length === 1 ? '' : 's'}\n`;
+  process.stdout.write(header + traces.map(formatTrace).join('\n'));
+}
+
 function formatWhyNot(result: WhyNotResult): string {
   if (!result.matched) {
     return `${result.note_id}: not matched by BM25 at all\n`;
@@ -1100,6 +1159,9 @@ async function main(argv: string[]): Promise<void> {
       break;
     case 'why':
       whyCommand(parseWhyArgs(rest));
+      break;
+    case 'why-summary':
+      whySummaryCommand(parseWhySummaryArgs(rest));
       break;
     case 'why-not':
       await whyNotCommand(parseWhyNotArgs(rest));
