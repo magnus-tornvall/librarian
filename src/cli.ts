@@ -788,7 +788,9 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   const distillWork = distilled.distilled + distilled.duplicates + distilled.skipped + distilled.noops + distilled.quarantined + distilled.rejected;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
   if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
-    process.stdout.write('Nothing pending\n');
+    // Coverage is live index state, not a work counter — embedIndex ran above regardless
+    // of pending sessions, so print it even when there is nothing to distill or export.
+    process.stdout.write(`Nothing pending; index embedding coverage: ${coverage!.embedded}/${coverage!.total} (${coverage!.state})\n`);
     return;
   }
 
