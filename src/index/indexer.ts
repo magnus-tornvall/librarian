@@ -115,13 +115,16 @@ function applyRecord(db: Database.Database, record: NoteRecord): boolean {
   const current = db.prepare('SELECT record_created_at, superseded_at FROM note_state WHERE note_id = ?').get(record.note_id) as
     | { record_created_at: string; superseded_at: string | null }
     | undefined;
-  if (record.kind === 'note_supersession') {
+  // note_flag is a validity-close with no replacement (#106): same invalidation path as
+  // supersession, superseded_by stays null. Sharing the branch keeps the earliest-close rule.
+  if (record.kind === 'note_supersession' || record.kind === 'note_flag') {
+    const supersededBy = record.kind === 'note_supersession' ? record.superseded_by : null;
     if (!current || current.superseded_at === null || record.created_at < current.superseded_at) {
       if (current) {
-        db.prepare('UPDATE note_state SET superseded_at = ?, superseded_by = ? WHERE note_id = ?').run(record.created_at, record.superseded_by, record.note_id);
+        db.prepare('UPDATE note_state SET superseded_at = ?, superseded_by = ? WHERE note_id = ?').run(record.created_at, supersededBy, record.note_id);
       } else {
         db.prepare('INSERT INTO note_state (note_id, record_json, record_kind, record_created_at, superseded_at, superseded_by) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(record.note_id, '{}', 'note_supersession', '', record.created_at, record.superseded_by);
+          .run(record.note_id, '{}', record.kind, '', record.created_at, supersededBy);
       }
       return current ? updateFts(db, record.note_id) : false;
     }

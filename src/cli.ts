@@ -18,7 +18,7 @@ import { runDistill } from './distill/distillRun.ts';
 import { runExport } from './export/exportRun.ts';
 import { readAll } from './log/ndjson.ts';
 import { appendNote, readAllNotes } from './log/noteLog.ts';
-import { latestRecordPerNoteId, type NoteRecord, type NoteRevision, type NoteStateRecord, type NoteSupersession, type NoteTombstone } from './note.ts';
+import { buildFlagRecord, latestRecordPerNoteId, type NoteFlag, type NoteRecord, type NoteRevision, type NoteStateRecord, type NoteSupersession, type NoteTombstone } from './note.ts';
 import { CONFIG_PATH, DATA_DIR, DIAGNOSTICS_DIR, INDEX_DIR, MACHINE_ID_PATH } from './paths.ts';
 import { scoringConfigSnapshot, type ScoringConfig } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
@@ -60,6 +60,8 @@ const USAGE = `usage:
                                                tombstone the latest note revision
   librarian supersede <old_note_id> <new_note_id> [--data-dir <dir>] [--index-dir <dir>] [--reason <text>]
                                                append an annotation invalidating an old note for recall
+  librarian flag <note_id> --reason <text> [--data-dir <dir>] [--index-dir <dir>]
+                                               flag a note as wrong (validity-close, no replacement) so recall excludes it
   librarian mcp [--data-dir <dir>] [--index-dir <dir>] [--diagnostics-dir <dir>]
                                            start the MCP stdio server
   librarian machine-id [--path <file>]     print the persisted machine id
@@ -197,6 +199,33 @@ async function supersede(argv: string[]): Promise<void> {
   appendNote(dataDir, record);
   await syncIndex(dataDir, flags.get('index-dir') ?? INDEX_DIR, flags.get('config'));
   process.stdout.write(JSON.stringify(record) + '\n');
+}
+
+async function flagNote(argv: string[]): Promise<void> {
+  const [noteId, ...rest] = argv;
+  if (!noteId || noteId.startsWith('--')) throw new Error('flag requires <note_id>');
+  const flags = parseFlags(rest);
+  const reason = flags.get('reason');
+  if (!reason) throw new Error('flag requires --reason <text>');
+  const dataDir = flags.get('data-dir') ?? DATA_DIR;
+  const record = await flagNoteRecord(dataDir, flags.get('index-dir') ?? INDEX_DIR, noteId, reason, { kind: 'cli' }, flags.get('config'));
+  process.stdout.write(JSON.stringify(record) + '\n');
+}
+
+/** Append a validity-close-only flag and run indexer catch-up (#106). Shared by CLI and MCP. */
+export async function flagNoteRecord(
+  dataDir: string,
+  indexDir: string,
+  noteId: string,
+  reason: string,
+  source: { kind: 'human' | 'cli' },
+  configPath?: string,
+): Promise<NoteFlag> {
+  if (!findLatestNote(dataDir, noteId)) throw new Error(`unknown note_id: ${noteId}`);
+  const record = buildFlagRecord(noteId, reason, source);
+  appendNote(dataDir, record);
+  await syncIndex(dataDir, indexDir, configPath);
+  return record;
 }
 
 export type RecallOptions = {
@@ -1174,6 +1203,9 @@ async function main(argv: string[]): Promise<void> {
       break;
     case 'supersede':
       await supersede(rest);
+      break;
+    case 'flag':
+      await flagNote(rest);
       break;
     case 'inject':
       await injectCommand(parseInjectArgs(rest));

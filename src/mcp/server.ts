@@ -6,7 +6,7 @@ import {
   type CallToolResult,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { getNoteShowPayload, runRecall, type RecallOptions } from '../cli.ts';
+import { flagNoteRecord, getNoteShowPayload, runRecall, type RecallOptions } from '../cli.ts';
 import { openIndexRead, stateNotes } from '../index/database.ts';
 import { INDEX_DIR } from '../paths.ts';
 
@@ -72,6 +72,22 @@ const GET_NOTES_TOOL: Tool = {
     required: ['note_ids'],
   },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+};
+
+const FLAG_NOTE_TOOL: Tool = {
+  name: 'flag_note',
+  title: 'Flag Librarian Note As Wrong',
+  description:
+    `Flag a specific note as wrong so recall excludes it. Flagging is logical and append-only: it records a new invalidation about the note, never mutates or deletes it, and a human can supersede back. Reason is mandatory — it is the audit trail. ${AUTHORITY_FRAMING}`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      note_id: { type: 'string', description: 'Required Librarian note_id to flag.' },
+      reason: { type: 'string', description: 'Required reason this note is wrong (audit trail).' },
+    },
+    required: ['note_id', 'reason'],
+  },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 };
 
 function objectArgs(value: unknown): Record<string, unknown> {
@@ -189,8 +205,15 @@ function getNotes(options: McpServerOptions, args: Record<string, unknown>): Cal
   }
 }
 
-export function createMcpServer(options: McpServerOptions): Server {
-  const server = new Server(
+async function flagNote(options: McpServerOptions, args: Record<string, unknown>): Promise<CallToolResult> {
+  const noteId = stringArg(args, 'note_id', true) ?? '';
+  const reason = stringArg(args, 'reason', true) ?? '';
+  // MCP-mediated flags are the human acting through the agent (spec §12.12).
+  const record = await flagNoteRecord(options.dataDir, options.indexDir ?? INDEX_DIR, noteId, reason, { kind: 'human' });
+  return jsonResult(record);
+}
+
+export function createMcpServer(options: McpServerOptions): Server {  const server = new Server(
     { name: 'librarian', version: '0.0.0' },
     {
       capabilities: { tools: {} },
@@ -198,7 +221,7 @@ export function createMcpServer(options: McpServerOptions): Server {
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [SEARCH_TOOL, GET_NOTES_TOOL, GET_NOTE_TOOL] }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [SEARCH_TOOL, GET_NOTES_TOOL, GET_NOTE_TOOL, FLAG_NOTE_TOOL] }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
@@ -210,6 +233,8 @@ export function createMcpServer(options: McpServerOptions): Server {
           return getNotes(options, args);
         case 'get_note':
           return getNote(options, args);
+        case 'flag_note':
+          return await flagNote(options, args);
         default:
           return toolError(`unknown tool: ${request.params.name}`);
       }

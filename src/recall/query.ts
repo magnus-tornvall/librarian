@@ -87,7 +87,7 @@ export type WhyNotResult =
       rank: number;
       raw_score: number;
       post_weight_score: number;
-      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'not_yet_valid' | 'ttl_expired';
+      gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'flagged' | 'not_yet_valid' | 'ttl_expired';
       superseded_by?: string;
     }
   | { matched: false; note_id: string; gate: 'not_matched_by_bm25' };
@@ -355,9 +355,10 @@ export function whyNot(
     !isTtlExpired(row, config, nowIso),
   );
   const rank = active.findIndex((row) => row.note_id === noteId) + 1;
-  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'not_yet_valid' | 'ttl_expired';
+  let gate: 'shipped' | 'below_floor' | 'budget' | 'scope_mismatch' | 'superseded' | 'flagged' | 'not_yet_valid' | 'ttl_expired';
   if (target.invalid_at !== null && target.invalid_at <= nowIso) {
-    gate = 'superseded';
+    // Validity closed with no replacement ⇒ flagged (#106); with a replacement ⇒ superseded.
+    gate = target.superseded_by !== null ? 'superseded' : 'flagged';
   } else if (target.valid_at !== null && target.valid_at > nowIso) {
     gate = 'not_yet_valid';
   } else if (isTtlExpired(target, config, nowIso)) {

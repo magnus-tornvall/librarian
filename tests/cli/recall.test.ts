@@ -254,3 +254,57 @@ test('supersede appends an annotation, excludes only the stale fact, and why-not
   assert.match(unknown.stderr, /unknown note_id: fact:missing/);
   assert.equal(fs.statSync(logPath).size, beforeUnknown, 'unknown IDs must not append a record');
 });
+
+test('flag closes a note validity, excludes it from recall, why-not names the flag gate, and note show still replays', () => {
+  const root = tempDir('cli-flag-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
+  const target = note(70, {
+    note_id: 'fact:wrong-anchovy', revision_id: 'anchovy-rev', title: 'Wrong anchovy fact',
+    body: { summary: 'Anchovy uses the mistaken harbor protocol.' },
+  });
+  appendNote(dataDir, target);
+  for (let i = 0; i < 4; i += 1) appendNote(dataDir, note(80 + i, { body: { summary: `Unrelated decoy ${i}.` } }));
+  bootstrapIndex(dataDir, indexDir);
+
+  const beforeFlag = runCli(['recall', 'anchovy', '--project', 'alpha', '--json', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir], indexDir);
+  assert.equal(beforeFlag.status, 0, `recall should exit 0; stderr: ${beforeFlag.stderr}`);
+  assert.ok((JSON.parse(beforeFlag.stdout) as Array<{ note_id: string }>).some((r) => r.note_id === target.note_id), 'note ships before flag');
+
+  const logPath = path.join(dataDir, 'notes', `${new Date().toISOString().slice(0, 7)}.ndjson`);
+
+  // Reason is mandatory.
+  const noReason = runCli(['flag', target.note_id, '--data-dir', dataDir], indexDir);
+  assert.notEqual(noReason.status, 0);
+  assert.match(noReason.stderr, /flag requires --reason/);
+
+  const beforeLength = fs.statSync(logPath).size;
+  const flagged = runCli(['flag', target.note_id, '--reason', 'anchovy protocol was hallucinated', '--data-dir', dataDir], indexDir);
+  assert.equal(flagged.status, 0, `flag should exit 0; stderr: ${flagged.stderr}`);
+  const record = JSON.parse(flagged.stdout) as Record<string, unknown>;
+  assert.equal(record.kind, 'note_flag');
+  assert.equal(record.reason, 'anchovy protocol was hallucinated');
+  assert.deepEqual(record.source, { kind: 'cli' });
+  assert.ok(fs.statSync(logPath).size > beforeLength, 'flag must append without mutating prior log bytes');
+
+  const recalled = runCli(['recall', 'anchovy', '--project', 'alpha', '--json', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir], indexDir);
+  assert.equal(recalled.status, 0, `recall should exit 0; stderr: ${recalled.stderr}`);
+  const ids = (JSON.parse(recalled.stdout) as Array<{ note_id: string }>).map((r) => r.note_id);
+  assert.ok(!ids.includes(target.note_id), 'flagged note is gone from recall');
+
+  const whyNot = runCli(['why-not', 'anchovy', target.note_id, '--project', 'alpha', '--data-dir', dataDir], indexDir);
+  assert.equal(whyNot.status, 0, `why-not should exit 0; stderr: ${whyNot.stderr}`);
+  assert.match(whyNot.stdout, /Gate: flagged/);
+  assert.doesNotMatch(whyNot.stdout, /Superseded By/);
+
+  const shown = runCli(['note', 'show', target.note_id, '--json', '--data-dir', dataDir]);
+  assert.equal(shown.status, 0, `note show should retain the revision; stderr: ${shown.stderr}`);
+  assert.equal((JSON.parse(shown.stdout) as { note: NoteRevision }).note.revision_id, target.revision_id);
+
+  const beforeUnknown = fs.statSync(logPath).size;
+  const unknown = runCli(['flag', 'fact:missing', '--reason', 'nope', '--data-dir', dataDir], indexDir);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /unknown note_id: fact:missing/);
+  assert.equal(fs.statSync(logPath).size, beforeUnknown, 'unknown IDs must not append a record');
+});
