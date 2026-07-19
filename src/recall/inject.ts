@@ -4,7 +4,7 @@ import { indexedThrough, openIndexRead, sessionStartNotes, stateNotes } from '..
 import type { NoteRevision } from '../note.ts';
 import { scoringConfigSnapshot, type ScoringConfig } from './scoring.ts';
 import { recallWithTrace } from './query.ts';
-import { queryEmbedding } from './embedding.ts';
+import { queryEmbedding, type QueryEmbedding } from './embedding.ts';
 
 const PUSH_CAP = 5;
 const PUSH_TOKEN_BUDGET = 600;
@@ -75,7 +75,7 @@ function writePushTrace(
   candidates: InjectionTrace['candidates'],
   shippedIds: string[],
   scoring: ScoringConfig,
-  embedding: InjectionTrace['embedding'],
+  embedding: QueryEmbedding,
 ): void {
   const trace: InjectionTrace = {
     record_class: 'diagnostic',
@@ -86,7 +86,10 @@ function writePushTrace(
     candidates,
     shipped_note_ids: shippedIds,
     indexed_through: indexed,
-    embedding,
+    embedding: embedding.status,
+    // Push is now hybrid: record the digest recall fused against so `why-not` can
+    // replay the KNN reach against the recorded model, matching the pull path (§6).
+    ...(embedding.model ? { embedding_digest: embedding.model.digest } : {}),
     config_snapshot: scoringConfigSnapshot(scoring),
   };
   writeInjectionTrace(options.diagnosticsDir, trace);
@@ -124,7 +127,7 @@ export async function buildInjection(options: InjectionOptions): Promise<string 
       raw_score: 0,
       post_weight_score: 0,
     }));
-    writePushTrace(options, injectionId, ts, indexed, candidates, shippedIds, scoring, embedding.status);
+    writePushTrace(options, injectionId, ts, indexed, candidates, shippedIds, scoring, embedding);
     return shipped.length === 0 ? undefined : renderBlock(injectionId, indexed, shipped);
   }
 
@@ -134,6 +137,7 @@ export async function buildInjection(options: InjectionOptions): Promise<string 
       { projectSlug: options.projectSlug, global: options.global, limit: PUSH_CAP },
       scoring,
       ts,
+      embedding.vector,
     );
     const notesById = new Map(stateNotes(db, results.map((result) => result.note_id)).map((note) => [note.note_id, note]));
     const entries = results.flatMap((result) => {
@@ -146,9 +150,13 @@ export async function buildInjection(options: InjectionOptions): Promise<string 
       note_id: candidate.note_id,
       raw_score: candidate.raw_bm25,
       post_weight_score: candidate.score,
+      // Per-channel ranks so `why` can explain a KNN-only cross-language reach on the
+      // push path, not just report a fused score (mirrors the pull trace, §6).
+      bm25_rank: candidate.bm25_rank,
+      knn_rank: candidate.knn_rank,
       cut_reason: shippedIds.has(candidate.note_id) ? undefined : (candidate.cut_reason ?? 'budget'),
     }));
-    writePushTrace(options, injectionId, ts, indexed, traceCandidates, [...shippedIds], scoring, embedding.status);
+    writePushTrace(options, injectionId, ts, indexed, traceCandidates, [...shippedIds], scoring, embedding);
     return shipped.length === 0 ? undefined : renderBlock(injectionId, indexed, shipped);
   } finally {
     db.close();
