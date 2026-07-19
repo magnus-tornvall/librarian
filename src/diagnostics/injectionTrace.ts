@@ -25,6 +25,8 @@ export type InjectionTrace = {
   record_class: 'diagnostic';
   injection_id: string;
   path?: 'pull' | 'push';
+  session_id?: string;
+  trigger?: 'prompt' | 'session_start';
   ts: string;
   query: string;
   candidates: Array<{

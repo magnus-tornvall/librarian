@@ -47,7 +47,7 @@ const USAGE = `usage:
                                             report admission, usage, cut reasons, and index embedding coverage
   librarian doctor [--index-dir <dir>] [--config <file>] [--json]
                                             report embedding endpoint and index readiness
-  librarian inject --project <slug> [--index-dir <dir>] [--global] [--session-start]
+  librarian inject --project <slug> [--index-dir <dir>] [--global] [--session-start] [--session <id>]
                                            read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
                                               print a note, optionally with source provenance
@@ -98,6 +98,13 @@ function parseInjectArgs(argv: string[]): InjectionOptions {
       options.global = true;
     } else if (arg === '--session-start') {
       options.sessionStart = true;
+    } else if (arg === '--session') {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new Error('flag --session requires a value');
+      }
+      options.sessionId = value;
+      i += 1;
     } else if (arg === '--project') {
       const value = argv[i + 1];
       if (value === undefined) {
