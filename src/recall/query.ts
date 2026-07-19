@@ -8,11 +8,15 @@ const RESULT_CAP = 5;
 const RRF_K = 60;
 // How many neighbours the KNN channel fetches. Wider than RESULT_CAP so hybrid can
 // SURFACE a cross-language note BM25 never matched, then let fusion + floor decide.
+// ponytail: k=50 is an unscoped nearest-neighbour fetch — scope is applied after,
+// so in a corpus with 50+ out-of-scope near neighbours an in-scope note past rank
+// 50 goes unseen by the KNN channel. Move to a scope-filtered KNN if multi-project
+// corpora grow that dense; at note scale this ceiling never bites.
 const KNN_FETCH = 50;
 // Per-channel KNN floor (§6: "apply per-channel floors before fusion"). vec0
-// returns squared-L2 distance; on unit-norm embeddings that is 2·(1−cosine), so
-// this cutoff ≈ cosine ≥ 0.6. A neighbour beyond it is a distractor and never
-// enters fusion — this is what keeps hybrid from resurrecting below-floor notes.
+// returns plain L2 distance; on unit-norm embeddings that is √(2·(1−cosine)), so
+// this cutoff of 0.8 ≈ cosine ≥ 0.68. A neighbour beyond it is a distractor and
+// never enters fusion — this is what keeps hybrid from resurrecting below-floor notes.
 const KNN_DISTANCE_FLOOR = 0.8;
 
 type FtsRow = {
@@ -37,7 +41,7 @@ export type RecallOptions = { projectSlug?: string; global?: boolean; origin?: s
 // fused-score floor" made concrete, and it is what the negative fixture validates.
 const RRF_SCORE_SCALE = RRF_K + 1;
 
-export type ChannelRanks = { bm25?: number; knn?: number };
+type ChannelRanks = { bm25?: number; knn?: number };
 
 function rrfScore(ranks: ChannelRanks): number {
   const parts = [ranks.bm25, ranks.knn].filter((rank): rank is number => rank !== undefined);
@@ -238,6 +242,13 @@ export function recallWithTrace(
   // Per-channel floor before fusion (§6): a note survives if its BM25 magnitude
   // clears the relevance floor OR it is a within-distance KNN hit. Fusion never
   // rescues a note that fails both — the "no resurrected distractor" rule.
+  // ponytail: the BM25 channel now floors on RAW magnitude, where pre-hybrid recall
+  // floored on the post-weight score. A note whose raw BM25 clears the floor but
+  // whose weighted score would not (e.g. email×daily×decay) now ships where it was
+  // once cut. Accepted: relevanceFloor is a placeholder slated for fixture tuning
+  // (see scoring.ts), and per-channel-before-fusion is the spec's chosen shape.
+  // Tighten to weightedCandidateScore({raw_bm25: bm25_magnitude}) if a fixture shows
+  // the widening matters.
   const aboveFloor = active.filter((candidate) =>
     (candidate.bm25_magnitude >= config.relevanceFloor && candidate.bm25_magnitude > 0) || candidate.knn_rank !== undefined,
   );
