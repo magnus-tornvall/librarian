@@ -43,6 +43,8 @@ const USAGE = `usage:
   librarian why <injection_id> [--json]    explain a diagnostics injection trace
   librarian why-not <query> <note_id> --project <slug> [--index-dir <dir>] [--global]
                                             explain why a note did not ship for a query
+  librarian why-summary [--session <id>] [--diagnostics-dir <dir>] [--json]
+                                            replay a session's push-path injection traces in order
   librarian stats [--index-dir <dir>] [--config <file>] [--json]
                                             report admission, usage, cut reasons, and index embedding coverage
   librarian doctor [--index-dir <dir>] [--config <file>] [--json]
