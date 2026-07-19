@@ -854,6 +854,12 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   // systemic error) — reading coverage here is a signal-only lens, not a second
   // index pass that would re-run the work just to print a count.
   const distilled = await runDistill({ dataDir, diagnosticsDir, provider, indexDir, configPath: flags.get('config') });
+  if (distilled.status === 'lock-held') {
+    // Another distiller holds the lock, so runDistill skipped its index pass —
+    // reconcile here so drain stays the manual recovery tool (§4), failing loud
+    // on a systemic embed failure like every other batch reconcile.
+    await updateIndex(indexDir, dataDir, flags.get('config'), { failLoudOnTotalFailure: true });
+  }
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
   const index = openIndexWrite(indexDir);
   let coverage: ReturnType<typeof embeddingCoverage>;
