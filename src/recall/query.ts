@@ -3,8 +3,9 @@ import { DEFAULT_SCORING_CONFIG, weightedCandidateScore, type ScoredCandidate, t
 
 const RESULT_CAP = 5;
 
-// RRF constant (SuperBrain precedent): dampens the top ranks so no single channel
-// dominates fusion. 60 is the field-standard value.
+// RRF constant. Score = Σ 1/(k+rank); a larger k flattens the curve so neither
+// channel dominates fusion. k=60 is the value from Cormack et al. (SIGIR 2009) and
+// the field-standard default (Elasticsearch/OpenSearch ship 60).
 const RRF_K = 60;
 // How many neighbours the KNN channel fetches. Wider than RESULT_CAP so hybrid can
 // SURFACE a cross-language note BM25 never matched, then let fusion + floor decide.
