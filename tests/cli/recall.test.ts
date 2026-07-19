@@ -177,6 +177,35 @@ test('recall CLI returns hydrated JSON, enforces filters/caps, fail-closes witho
   );
 });
 
+test('pull trace ts is recall wall-clock, indexed_through is the watermark, and the segment is the recall month (not .ndjson)', () => {
+  const root = tempDir('cli-recall-ts-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
+  seedRecallCorpus(dataDir);
+  bootstrapIndex(dataDir, indexDir);
+
+  const before = new Date();
+  const recalled = runCli(['recall', 'platypus', '--project', 'alpha', '--json', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir], indexDir);
+  assert.equal(recalled.status, 0, `recall should exit 0; stderr: ${recalled.stderr}`);
+  const after = new Date();
+
+  const trace = readTraces(diagnosticsDir).find((t) => t.path === 'pull' && t.query === 'platypus');
+  assert.ok(trace, 'recall must write a pull trace');
+
+  const tsMs = new Date(trace.ts).getTime();
+  assert.ok(tsMs >= before.getTime() && tsMs <= after.getTime(), `trace.ts must be recall wall-clock, got ${trace.ts}`);
+
+  // Watermark, computed over the indexed notes, is a created_at ISO string — distinct from wall-clock now.
+  assert.ok((trace.indexed_through as string).length > 0, 'indexed_through must carry the watermark');
+  assert.notEqual(trace.indexed_through, trace.ts, 'watermark must not equal the wall-clock ts');
+
+  // Segment files under the recall month, never a bare `.ndjson` from an empty watermark.
+  const segments = fs.readdirSync(path.join(diagnosticsDir, 'injections'));
+  assert.ok(!segments.includes('.ndjson'), 'no bare .ndjson segment');
+  assert.ok(segments.includes(`${trace.ts.slice(0, 7)}.ndjson`), `trace must land in the recall-month segment; saw ${segments.join(', ')}`);
+});
+
 test('supersede appends an annotation, excludes only the stale fact, and why-not names the gate', () => {
   const root = tempDir('cli-supersede-');
   const dataDir = path.join(root, 'data');
