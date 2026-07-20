@@ -12,7 +12,7 @@ import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { importCuratedNote } from './distill/humanDistiller.ts';
 import { loadConfig } from './config.ts';
 import { embeddingCoverage, embeddingIndexModel, indexedThrough, openIndexRead, openIndexWrite, stateNotes } from './index/database.ts';
-import { makeOpenAiEmbeddingProvider } from './embedding/provider.ts';
+import { classifyEmbeddingError, makeOpenAiEmbeddingProvider } from './embedding/provider.ts';
 import { runDistill } from './distill/distillRun.ts';
 import { runExport } from './export/exportRun.ts';
 import { readAll } from './log/ndjson.ts';
@@ -300,11 +300,13 @@ function statsCommand(argv: string[]): void {
 
 export type DoctorReport = {
   embedding: {
-    state: 'unconfigured' | 'unreachable' | 'unpinned' | 'mismatch' | 'ok';
+    state: 'unconfigured' | 'unreachable' | 'timeout' | 'unpinned' | 'mismatch' | 'ok';
     model?: string;
     digest?: string;
     index_model?: string;
     index_digest?: string;
+    dims?: number;
+    latency_ms?: number;
     error?: string;
   };
   coverage: { embedded: number; total: number };
@@ -333,16 +335,21 @@ export async function doctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PAT
     return { embedding: { state: 'unconfigured', ...(model ? { index_model: model.name, index_digest: model.digest } : {}) }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
   }
   try {
-    const resolved = await makeOpenAiEmbeddingProvider(config.embedding).model();
+    const provider = makeOpenAiEmbeddingProvider(config.embedding);
+    const resolved = await provider.model();
+    const startedAt = performance.now();
+    const vector = await provider.embed('ping');
+    const probe = { dims: vector.length, latency_ms: Math.round(performance.now() - startedAt) };
     if (!model) {
-      return { embedding: { state: 'unpinned', model: resolved.name, digest: resolved.digest }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+      return { embedding: { state: 'unpinned', model: resolved.name, digest: resolved.digest, ...probe }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
     }
-    if (model && (model.name !== resolved.name || model.digest !== resolved.digest)) {
-      return { embedding: { state: 'mismatch', model: resolved.name, digest: resolved.digest, index_model: model.name, index_digest: model.digest }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+    if (model.name !== resolved.name || model.digest !== resolved.digest) {
+      return { embedding: { state: 'mismatch', model: resolved.name, digest: resolved.digest, index_model: model.name, index_digest: model.digest, ...probe }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
     }
-    return { embedding: { state: 'ok', model: resolved.name, digest: resolved.digest, ...(model ? { index_model: model.name, index_digest: model.digest } : {}) }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+    return { embedding: { state: 'ok', model: resolved.name, digest: resolved.digest, index_model: model.name, index_digest: model.digest, ...probe }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
   } catch (error) {
-    return { embedding: { state: 'unreachable', model: config.embedding.model, error: error instanceof Error ? error.message : String(error) }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
+    const state = classifyEmbeddingError(error) === 'timeout' ? 'timeout' : 'unreachable';
+    return { embedding: { state, model: config.embedding.model, error: error instanceof Error ? error.message : String(error) }, coverage, indexed_through: indexed, ...(indexError ? { index_error: indexError } : {}) };
   }
 }
 
@@ -370,6 +377,7 @@ async function doctorCommand(argv: string[]): Promise<void> {
     `Embedding: ${embedding.state}`,
     ...(embedding.model ? [`Configured model: ${embedding.model}${embedding.digest ? `@${embedding.digest}` : ''}`] : []),
     ...(embedding.index_model ? [`Index model: ${embedding.index_model}@${embedding.index_digest}`] : []),
+    ...(embedding.dims !== undefined ? [`Probe: ${embedding.dims} dims in ${embedding.latency_ms}ms`] : []),
     ...(embedding.error ? [`Detail: ${embedding.error}`] : []),
     ...(report.index_error ? [`Index: ${report.index_error}`] : []),
     `Coverage: ${report.coverage.embedded}/${report.coverage.total}`,
