@@ -11,7 +11,10 @@ npm run lint       # eslint src — type-aware correctness only
 npm run qualify    # provider qualification suite only
 ```
 
-Run one file: `node --test tests/<path>.test.ts`.
+Run one file: `node --import ./tests/setup-home.ts --test tests/<path>.test.ts`.
+The `--import` points HOME at a throwaway dir so the spawned CLI resolves into
+isolated storage instead of the developer's real `~/.librarian` — drop it and the
+run reads (and wipes) the real index. `npm test`/`npm run qualify` include it.
 
 `better-sqlite3` is a native module compiled for the `.nvmrc` node. `ERR_DLOPEN_FAILED` /
 `NODE_MODULE_VERSION` from `npm test` means you're on the wrong node — run `nvm use`.

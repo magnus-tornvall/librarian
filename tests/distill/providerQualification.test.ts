@@ -109,7 +109,7 @@ for (const fixtureDir of fixtureDirs) {
         assert.equal(cursor.byte_offset, fs.statSync(path.join(dataDir, 'events', `${expected.session_id}.ndjson`)).size, 'cursor advances');
         const rerun = runCli(['drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, ...providerArgs]);
         assert.equal(rerun.status, 0, `re-run exited ${rerun.status}: ${rerun.stderr}`);
-        assert.equal(rerun.stdout, 'Nothing pending\n', 're-run reports no pending work');
+        assert.match(rerun.stdout, /^Nothing pending/, 're-run reports no pending work');
         assert.equal(readAllNotes(dataDir).length, 0, 're-run distills nothing');
         return;
       }

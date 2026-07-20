@@ -34,13 +34,18 @@ function index(dataDir: string, indexDir: string): void {
   try { indexNotes(db, dataDir); } finally { db.close(); }
 }
 
-async function fakeEndpoint(): Promise<{ endpoint: string; setMode(mode: 'ok' | 'error' | 'timeout'): void; close(): Promise<void> }> {
-  let mode: 'ok' | 'error' | 'timeout' = 'ok';
+async function fakeEndpoint(): Promise<{ endpoint: string; setMode(mode: 'ok' | 'error' | 'timeout' | 'slow-embed'): void; close(): Promise<void> }> {
+  let mode: 'ok' | 'error' | 'timeout' | 'slow-embed' = 'ok';
   const server = http.createServer((request, response) => {
     if (mode === 'timeout') return;
     if (mode === 'error') { response.writeHead(500).end('down'); return; }
     if (request.url === '/api/tags') { response.setHeader('content-type', 'application/json').end(JSON.stringify({ models: [{ name: 'qwen3-embedding:0.6b', digest: 'sha256:fixture' }] })); return; }
-    if (request.url === '/v1/embeddings') { response.setHeader('content-type', 'application/json').end(JSON.stringify({ data: [{ embedding: [0.25, 0.75] }] })); return; }
+    if (request.url === '/v1/embeddings') {
+      const send = () => response.setHeader('content-type', 'application/json').end(JSON.stringify({ data: [{ embedding: [0.25, 0.75] }] }));
+      if (mode === 'slow-embed') { setTimeout(send, 100); return; }
+      send();
+      return;
+    }
     response.writeHead(404).end();
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -114,6 +119,36 @@ test('recall is BM25-only when disabled or endpoint fails, and traces the embedd
     const timedOut = await runRecall(options);
     assert.deepEqual(timedOut.results.map((row) => row.note_id), ['fact:embedding']);
     assert.equal(readInjectionTraces(diagnosticsDir).at(-1)?.embedding, 'timeout');
+  } finally {
+    await endpoint.close();
+  }
+});
+
+test('doctor probes a real embed: reports dims + latency when ok, timeout when the embed exceeds timeoutMs', async () => {
+  const temp = root();
+  const dataDir = path.join(temp, 'data');
+  const indexDir = path.join(temp, 'index');
+  const configPath = path.join(temp, 'config.json');
+  appendNote(dataDir, note());
+  index(dataDir, indexDir);
+
+  const endpoint = await fakeEndpoint();
+  try {
+    // Digest pinned so model() makes no call — the probe alone exercises the embed path.
+    config(configPath, endpoint.endpoint, 2000, 'sha256:fixture');
+    const db = openIndexWrite(indexDir);
+    try { setEmbeddingIndexModel(db, { name: 'qwen3-embedding:0.6b', digest: 'sha256:fixture' }); } finally { db.close(); }
+
+    const ok = await doctorReport(indexDir, configPath);
+    assert.equal(ok.embedding.state, 'ok');
+    assert.equal(ok.embedding.dims, 2);
+    assert.equal(typeof ok.embedding.latency_ms, 'number');
+
+    // Real embed latency (~100ms) exceeds a 10ms timeout → timeout, not ok. Regression for #138.
+    endpoint.setMode('slow-embed');
+    config(configPath, endpoint.endpoint, 10, 'sha256:fixture');
+    const timedOut = await doctorReport(indexDir, configPath);
+    assert.equal(timedOut.embedding.state, 'timeout');
   } finally {
     await endpoint.close();
   }
