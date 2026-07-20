@@ -17,7 +17,7 @@ export function isEmbeddingModelMismatch(error: unknown): boolean {
 export async function queryEmbedding(db: Database.Database, query: string, configPath?: string): Promise<QueryEmbedding> {
   const config = loadConfig(configPath);
   if (!config.embedding || query.length === 0) return { status: 'disabled' };
-  const provider = makeOpenAiEmbeddingProvider(config.embedding);
+  const provider = makeOpenAiEmbeddingProvider(config.embedding, config.embedding.recallTimeoutMs);
   try {
     const [model, vector] = await Promise.all([provider.model(), provider.embed(query)]);
     assertEmbeddingIndexModel(db, model);
