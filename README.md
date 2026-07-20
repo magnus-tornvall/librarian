@@ -32,11 +32,16 @@ Add this to `~/.librarian/config.json` (alongside any existing settings):
 {
   "embedding": {
     "endpoint": "http://127.0.0.1:11434",
-    "model": "qwen3-embedding:0.6b",
-    "timeoutMs": 400
+    "model": "qwen3-embedding:0.6b"
   }
 }
 ```
+
+Two optional timeouts tune the embedding budgets independently. `timeoutMs`
+(default `10000`) bounds the background index/drain path, which must tolerate a
+cold model load (~1.5s after Ollama's `keep_alive` expiry). `recallTimeoutMs`
+(default `400`) bounds the latency-critical recall path, where a slow embed
+degrades to BM25-only rather than hanging the query.
 
 Any OpenAI-compatible endpoint can be used for `/v1/embeddings`. Ollama users
 can omit `digest`, which Librarian resolves from Ollama's model list. Other
