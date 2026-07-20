@@ -12,6 +12,7 @@ export type LibrarianConfig = {
     model: string;
     digest?: string;
     timeoutMs: number;
+    recallTimeoutMs: number;
   };
   scoring: ScoringConfig;
 };
@@ -61,6 +62,14 @@ function scoringConfig(value: unknown, configPath: string): ScoringConfig {
   };
 }
 
+function positiveTimeout(value: unknown, fallback: number, key: string, configPath: string): number {
+  const timeout = value ?? fallback;
+  if (typeof timeout !== 'number' || !Number.isFinite(timeout) || timeout <= 0) {
+    invalid(key, configPath, 'a positive finite number');
+  }
+  return timeout;
+}
+
 function embeddingConfig(value: unknown, configPath: string): LibrarianConfig['embedding'] {
   if (value === undefined) return undefined;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -76,11 +85,11 @@ function embeddingConfig(value: unknown, configPath: string): LibrarianConfig['e
   if (embedding.digest !== undefined && (typeof embedding.digest !== 'string' || embedding.digest.length === 0)) {
     invalid('embedding.digest', configPath, 'a non-empty string');
   }
-  const timeoutMs = embedding.timeoutMs ?? 400;
-  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    invalid('embedding.timeoutMs', configPath, 'a positive finite number');
-  }
-  return { endpoint: embedding.endpoint, model: embedding.model, ...(embedding.digest ? { digest: embedding.digest } : {}), timeoutMs };
+  // Two budgets, two paths: the index/background path (default 10s) tolerates a cold
+  // model load; recall (default 400ms) stays tight fail-soft. See spec decisions register.
+  const timeoutMs = positiveTimeout(embedding.timeoutMs, 10000, 'embedding.timeoutMs', configPath);
+  const recallTimeoutMs = positiveTimeout(embedding.recallTimeoutMs, 400, 'embedding.recallTimeoutMs', configPath);
+  return { endpoint: embedding.endpoint, model: embedding.model, ...(embedding.digest ? { digest: embedding.digest } : {}), timeoutMs, recallTimeoutMs };
 }
 
 export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {

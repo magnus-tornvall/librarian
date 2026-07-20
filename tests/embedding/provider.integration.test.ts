@@ -8,16 +8,16 @@ import { makeFixtureEmbeddingProvider, makeOpenAiEmbeddingProvider } from '../..
 import { loadConfig } from '../../src/config.ts';
 import { appendNote } from '../../src/log/noteLog.ts';
 import { readInjectionTraces } from '../../src/diagnostics/injectionTrace.ts';
-import { embeddingIndexModel, openIndexWrite, setEmbeddingIndexModel } from '../../src/index/database.ts';
+import { embeddingIndexModel, embeddingCoverage, openIndexWrite, setEmbeddingIndexModel } from '../../src/index/database.ts';
 import { indexNotes } from '../../src/index/indexer.ts';
 import { doctorReport, runRecall, type RecallOptions } from '../../src/cli.ts';
-import { stampEmbeddingIndex } from '../../src/recall/embedding.ts';
+import { stampEmbeddingIndex, updateIndex } from '../../src/recall/embedding.ts';
 import type { NoteRevision } from '../../src/note.ts';
 
 function root(): string { return fs.mkdtempSync(path.join(os.tmpdir(), 'embedding-provider-')); }
 
-function config(file: string, endpoint: string, timeoutMs = 100, digest?: string): void {
-  fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint, model: 'qwen3-embedding:0.6b', timeoutMs, ...(digest ? { digest } : {}) } }));
+function config(file: string, endpoint: string, timeoutMs = 100, digest?: string, recallTimeoutMs?: number): void {
+  fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint, model: 'qwen3-embedding:0.6b', timeoutMs, ...(recallTimeoutMs !== undefined ? { recallTimeoutMs } : {}), ...(digest ? { digest } : {}) } }));
 }
 
 function note(): NoteRevision {
@@ -34,7 +34,7 @@ function index(dataDir: string, indexDir: string): void {
   try { indexNotes(db, dataDir); } finally { db.close(); }
 }
 
-async function fakeEndpoint(): Promise<{ endpoint: string; setMode(mode: 'ok' | 'error' | 'timeout' | 'slow-embed'): void; close(): Promise<void> }> {
+async function fakeEndpoint(slowEmbedMs = 100): Promise<{ endpoint: string; setMode(mode: 'ok' | 'error' | 'timeout' | 'slow-embed'): void; close(): Promise<void> }> {
   let mode: 'ok' | 'error' | 'timeout' | 'slow-embed' = 'ok';
   const server = http.createServer((request, response) => {
     if (mode === 'timeout') return;
@@ -42,7 +42,7 @@ async function fakeEndpoint(): Promise<{ endpoint: string; setMode(mode: 'ok' | 
     if (request.url === '/api/tags') { response.setHeader('content-type', 'application/json').end(JSON.stringify({ models: [{ name: 'qwen3-embedding:0.6b', digest: 'sha256:fixture' }] })); return; }
     if (request.url === '/v1/embeddings') {
       const send = () => response.setHeader('content-type', 'application/json').end(JSON.stringify({ data: [{ embedding: [0.25, 0.75] }] }));
-      if (mode === 'slow-embed') { setTimeout(send, 100); return; }
+      if (mode === 'slow-embed') { setTimeout(send, slowEmbedMs); return; }
       send();
       return;
     }
@@ -119,6 +119,46 @@ test('recall is BM25-only when disabled or endpoint fails, and traces the embedd
     const timedOut = await runRecall(options);
     assert.deepEqual(timedOut.results.map((row) => row.note_id), ['fact:embedding']);
     assert.equal(readInjectionTraces(diagnosticsDir).at(-1)?.embedding, 'timeout');
+  } finally {
+    await endpoint.close();
+  }
+});
+
+test('two-budget split: a cold ~1.5s embed indexes to N/N while recall stays tight fail-soft (#139)', async () => {
+  const temp = root();
+  const dataDir = path.join(temp, 'data');
+  const indexDir = path.join(temp, 'index');
+  const diagnosticsDir = path.join(temp, 'diagnostics');
+  const configPath = path.join(temp, 'config.json');
+  const notes = 2;
+  for (let i = 0; i < notes; i += 1) appendNote(dataDir, { ...note(), note_id: `fact:cold-${i}`, revision_id: `cold-${i}`, title: `embedding provider ${i}`, body: { summary: `embedding provider seam note ${i}` } });
+  for (let i = 0; i < 6; i += 1) appendNote(dataDir, { ...note(), note_id: `fact:decoy-${i}`, revision_id: `decoy-${i}`, title: `Irrelevant decoy ${i}`, body: { summary: `irrelevant filler ${i}` } });
+  index(dataDir, indexDir);
+
+  // A single slow endpoint (~1.5s embed) models a cold Ollama model load.
+  const endpoint = await fakeEndpoint(1500);
+  endpoint.setMode('slow-embed');
+  try {
+    // Index path: the higher default budget (10s) tolerates the cold embed → full coverage.
+    // Recall path: an explicit tight budget (200ms) makes the same slow embed degrade, not hang.
+    config(configPath, endpoint.endpoint, 10000, 'sha256:fixture', 200);
+    const db0 = openIndexWrite(indexDir);
+    try { setEmbeddingIndexModel(db0, { name: 'qwen3-embedding:0.6b', digest: 'sha256:fixture' }); } finally { db0.close(); }
+
+    await updateIndex(indexDir, dataDir, configPath);
+    const db = openIndexWrite(indexDir);
+    try {
+      const coverage = embeddingCoverage(db);
+      assert.deepEqual(coverage, { embedded: coverage.total, total: coverage.total, state: 'complete' }, 'index path reaches N/N under the cold embed');
+      assert.ok(coverage.total >= notes);
+    } finally { db.close(); }
+
+    const started = performance.now();
+    const recall = await runRecall({ query: 'embedding provider', projectSlug: 'alpha', global: false, limit: 10, json: true, dataDir, indexDir, diagnosticsDir, configPath });
+    const elapsed = performance.now() - started;
+    assert.equal(readInjectionTraces(diagnosticsDir).at(-1)?.embedding, 'timeout', 'recall degrades under its tight budget');
+    assert.ok(recall.results.length > 0, 'recall still ships BM25-only results');
+    assert.ok(elapsed < 1000, `recall must not hang on the slow embed (took ${Math.round(elapsed)}ms)`);
   } finally {
     await endpoint.close();
   }
