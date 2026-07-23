@@ -9,7 +9,7 @@ import { computeStats, formatStats } from './diagnostics/stats.ts';
 import { makeFixtureProvider, makeScriptedFixtureProvider, type InferenceProvider } from './distill/provider.ts';
 import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
-import { importCuratedNote } from './distill/humanDistiller.ts';
+import { buildHumanRevision, importCuratedNote } from './distill/humanDistiller.ts';
 import { loadConfig } from './config.ts';
 import { embeddingCoverage, embeddingIndexModel, indexedThrough, openIndexRead, openIndexWrite, stateNotes } from './index/database.ts';
 import { classifyEmbeddingError, makeOpenAiEmbeddingProvider } from './embedding/provider.ts';
@@ -53,6 +53,8 @@ const USAGE = `usage:
                                            read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
                                               print a note, optionally with source provenance
+  librarian note edit <note_id> --body <text> [--data-dir <dir>] [--index-dir <dir>]
+                                              append a human revision replacing a note's body
   librarian note import-curated <file> --vault <dir> [--data-dir <dir>] [--index-dir <dir>]
                                               import a curated Markdown note
   librarian note tombstone <note_id> [--data-dir <dir>] [--index-dir <dir>] [--reason <text>]
@@ -161,6 +163,19 @@ async function noteImportCurated(argv: string[]): Promise<void> {
   process.stdout.write(JSON.stringify(note) + '\n');
 }
 
+async function noteEdit(argv: string[]): Promise<void> {
+  const [noteId, ...rest] = argv;
+  if (!noteId || noteId.startsWith('--')) throw new Error('note edit requires <note_id>');
+  const flags = parseFlags(rest);
+  const body = flags.get('body');
+  if (body === undefined) throw new Error('note edit requires --body <text>');
+  const dataDir = flags.get('data-dir') ?? DATA_DIR;
+  // Terminal edit: no mediating channel, so source.agent stays unset — this is what
+  // distinguishes it from MCP revise_note under `note show --with-provenance` (#110).
+  const record = await reviseNoteRecord(dataDir, flags.get('index-dir') ?? INDEX_DIR, noteId, body, undefined, flags.get('config'));
+  process.stdout.write(JSON.stringify(record) + '\n');
+}
+
 async function noteTombstone(argv: string[]): Promise<void> {
   const [noteId, ...rest] = argv;
   if (!noteId || noteId.startsWith('--')) throw new Error('note tombstone requires <note_id>');
@@ -225,6 +240,36 @@ export async function flagNoteRecord(
   appendNote(dataDir, record);
   // A single-record mutation: reconcile leniently so a transient embed blip on
   // the reindexed row does not turn a durable flag into a hard error.
+  await updateIndex(indexDir, dataDir, configPath);
+  return record;
+}
+
+/**
+ * Append a human revision of an existing note and run indexer catch-up (spec §5).
+ * Shared by MCP `revise_note` (#110, `agent` set to the mediating channel) and
+ * terminal `note edit` (#107, `agent` unset). The revision itself never searches —
+ * the caller supplies the explicit `note_id`.
+ */
+export async function reviseNoteRecord(
+  dataDir: string,
+  indexDir: string,
+  noteId: string,
+  body: string,
+  agent?: string,
+  configPath?: string,
+): Promise<NoteRevision> {
+  if (body.trim().length === 0) throw new Error('body must be a non-empty string');
+  const latest = findLatestNote(dataDir, noteId);
+  if (!latest) throw new Error(`unknown note_id: ${noteId}`);
+  if (latest.kind !== 'note_revision') {
+    // ponytail: a tombstone carries no origin/scope/type to inherit; reviving one via
+    // revision is out of v1 scope — un-tombstone with a fresh revision path if ever needed.
+    throw new Error(`cannot revise tombstoned note: ${noteId}`);
+  }
+  const record = buildHumanRevision(latest, body, agent);
+  appendNote(dataDir, record);
+  // Single-record mutation: reconcile leniently (same as flagNoteRecord) so a
+  // transient embed blip on the reindexed row does not fail a durable revision.
   await updateIndex(indexDir, dataDir, configPath);
   return record;
 }
@@ -726,6 +771,7 @@ function formatHumanProvenance(note: NoteRevision): string {
     'Human provenance:',
     `Source path: ${note.source.source_path ?? '(none)'}`,
     `Content hash: ${note.source.content_hash ?? '(none)'}`,
+    `Agent channel: ${note.source.agent ?? '(none)'}`,
     'Human-distilled notes have no event provenance.',
   ].join('\n') + '\n';
 }
@@ -1215,12 +1261,14 @@ async function main(argv: string[]): Promise<void> {
       const [subcommand, ...subRest] = rest;
       if (subcommand === 'show') {
         noteShow(parseNoteShowArgs(subRest));
+      } else if (subcommand === 'edit') {
+        await noteEdit(subRest);
       } else if (subcommand === 'import-curated') {
         await noteImportCurated(subRest);
       } else if (subcommand === 'tombstone') {
         await noteTombstone(subRest);
       } else {
-        throw new Error('expected note subcommand: show, import-curated, or tombstone');
+        throw new Error('expected note subcommand: show, edit, import-curated, or tombstone');
       }
       break;
     }
