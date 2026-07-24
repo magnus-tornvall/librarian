@@ -6,7 +6,7 @@ import {
   type CallToolResult,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { flagNoteRecord, getNoteShowPayload, runRecall, type RecallOptions } from '../cli.ts';
+import { flagNoteRecord, getNoteShowPayload, reviseNoteRecord, runRecall, type RecallOptions } from '../cli.ts';
 import { openIndexRead, stateNotes } from '../index/database.ts';
 import { INDEX_DIR } from '../paths.ts';
 
@@ -88,6 +88,22 @@ const FLAG_NOTE_TOOL: Tool = {
     required: ['note_id', 'reason'],
   },
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+};
+
+const REVISE_NOTE_TOOL: Tool = {
+  name: 'revise_note',
+  title: 'Revise Librarian Note With A Human-Approved Body',
+  description:
+    `Replace a specific note's body with a corrected version. Before calling you MUST display the verbatim proposed body to the user and obtain their explicit approval — the revision is recorded as a human judgment (distiller: human), so the approved text is the source. Revision is append-only: it chains a new revision onto the note (previous_revision_id set), never mutates or deletes prior revisions, and is itself reversible by a further revision or flag_note. Requires an explicit note_id — locate the note via search first, then revise that exact id; this tool never searches. The MCP channel is stamped into source.agent so agent-mediated revisions stay distinguishable from terminal edits under note provenance. ${AUTHORITY_FRAMING}`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      note_id: { type: 'string', description: 'Required Librarian note_id to revise.' },
+      body: { type: 'string', description: 'Required corrected note body, verbatim as approved by the user.' },
+    },
+    required: ['note_id', 'body'],
+  },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 };
 
 function objectArgs(value: unknown): Record<string, unknown> {
@@ -213,6 +229,20 @@ async function flagNote(options: McpServerOptions, args: Record<string, unknown>
   return jsonResult(record);
 }
 
+/**
+ * Append a human revision through the shared #107/#110 path. `agent` is the MCP
+ * client identity (`getClientVersion().name`) where the SDK exposes it — the value
+ * the initializing client sent — falling back to a static `'mcp'` marker. Either way
+ * source.agent is always set, which is what distinguishes an agent-mediated revision
+ * from a terminal `note edit` (which leaves it unset) under note provenance.
+ */
+async function reviseNote(options: McpServerOptions, args: Record<string, unknown>, agent: string): Promise<CallToolResult> {
+  const noteId = stringArg(args, 'note_id', true) ?? '';
+  const body = stringArg(args, 'body', true) ?? '';
+  const record = await reviseNoteRecord(options.dataDir, options.indexDir ?? INDEX_DIR, noteId, body, agent);
+  return jsonResult(record);
+}
+
 export function createMcpServer(options: McpServerOptions): Server {
   const server = new Server(
     { name: 'librarian', version: '0.0.0' },
@@ -222,7 +252,7 @@ export function createMcpServer(options: McpServerOptions): Server {
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [SEARCH_TOOL, GET_NOTES_TOOL, GET_NOTE_TOOL, FLAG_NOTE_TOOL] }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [SEARCH_TOOL, GET_NOTES_TOOL, GET_NOTE_TOOL, FLAG_NOTE_TOOL, REVISE_NOTE_TOOL] }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
@@ -236,6 +266,8 @@ export function createMcpServer(options: McpServerOptions): Server {
           return getNote(options, args);
         case 'flag_note':
           return await flagNote(options, args);
+        case 'revise_note':
+          return await reviseNote(options, args, server.getClientVersion()?.name ?? 'mcp');
         default:
           return toolError(`unknown tool: ${request.params.name}`);
       }

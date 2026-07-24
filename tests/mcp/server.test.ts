@@ -130,7 +130,7 @@ test('MCP stdio tools match recall/note CLI output and keep the note log read-on
     const tools = await client.listTools();
     assert.deepEqual(
       tools.tools.map((tool) => tool.name).sort(),
-      ['flag_note', 'get_note', 'get_notes', 'search'],
+      ['flag_note', 'get_note', 'get_notes', 'revise_note', 'search'],
     );
     assert.match(tools.tools.find((tool) => tool.name === 'search')?.description ?? '', /get_notes/i);
     assert.match(tools.tools.find((tool) => tool.name === 'get_note')?.description ?? '', /with_provenance to true/i);
@@ -238,6 +238,136 @@ test('MCP flag_note appends a validity-close-only record, excludes the note from
     await client.close();
     await transport.close();
   }
+});
+
+test('MCP revise_note appends a human revision, stamps the agent channel, and recall returns the new body', async () => {
+  const root = tempDir('mcp-revise-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const indexDir = path.join(root, 'index');
+  const target = note(1, {
+    note_id: 'fact:mcp-revise-target',
+    source: { origin: 'opencode', distiller: 'llm' },
+    body: { summary: 'The plan assumed the old capital was Kraken City.' },
+  });
+  appendNote(dataDir, target);
+  for (let i = 2; i < 6; i += 1) appendNote(dataDir, note(i, { body: { summary: `Decoy ${i}.` } }));
+  bootstrapIndex(dataDir, indexDir);
+
+  const noteLogPath = path.join(dataDir, 'notes', '2026-07.ndjson');
+  const beforeNoteLog = fs.readFileSync(noteLogPath, 'utf8');
+  const { client, transport } = await connectClient(dataDir, diagnosticsDir, indexDir);
+
+  try {
+    const tools = await client.listTools();
+    const reviseTool = tools.tools.find((tool) => tool.name === 'revise_note');
+    assert.ok(reviseTool, 'revise_note tool must be listed');
+    assert.match(reviseTool?.description ?? '', /explicit approval/i);
+    assert.match(reviseTool?.description ?? '', /never searches/i);
+    assert.equal(reviseTool?.annotations?.destructiveHint, true);
+    assert.equal(reviseTool?.annotations?.idempotentHint, false);
+
+    const revisedBody = 'The corrected capital is Narwhal Bay, effective this revision.';
+    const revised = parseToolJson(
+      await client.callTool({ name: 'revise_note', arguments: { note_id: target.note_id, body: revisedBody } }),
+    );
+    assert.equal(revised.kind, 'note_revision');
+    assert.equal(revised.note_id, target.note_id);
+    assert.equal(revised.previous_revision_id, target.revision_id);
+    // Origin preserved; only the distiller (who judged last) changes, plus the MCP channel stamp.
+    const revisedSource = revised.source as Record<string, unknown>;
+    assert.equal(revisedSource.origin, 'opencode');
+    assert.equal(revisedSource.distiller, 'human');
+    assert.equal(revisedSource.agent, 'librarian-mcp-test');
+    assert.deepEqual((revised.body as Record<string, unknown>).details, revisedBody);
+
+    // Append-only: prior bytes untouched, new revision added.
+    assert.ok(fs.readFileSync(noteLogPath, 'utf8').startsWith(beforeNoteLog), 'revise_note must append, not mutate prior bytes');
+
+    // Revision chain intact under note show, and the human revision is on top.
+    const shown = parseToolJson(
+      await client.callTool({ name: 'get_note', arguments: { note_id: target.note_id, with_provenance: true } }),
+    );
+    const shownNote = shown.note as Record<string, unknown>;
+    assert.equal((shownNote.source as Record<string, unknown>).distiller, 'human');
+    assert.equal((shownNote.source as Record<string, unknown>).agent, 'librarian-mcp-test');
+    assert.equal(shownNote.previous_revision_id, target.revision_id);
+
+    // Recall returns the corrected body, not the stale one.
+    const recalled = parseToolJson(
+      await client.callTool({ name: 'search', arguments: { query: 'Narwhal Bay capital', project_slug: 'alpha', limit: 50 } }),
+    );
+    const hit = (recalled.results as Array<{ note_id: string; summary: string }>).find((r) => r.note_id === target.note_id);
+    assert.ok(hit, 'revised note is recallable');
+    assert.match(hit!.summary, /Narwhal Bay/);
+
+    // Unknown id and empty body both fail loud with no write.
+    const logAfterRevise = fs.readFileSync(noteLogPath, 'utf8');
+    const unknown = await client.callTool({ name: 'revise_note', arguments: { note_id: 'fact:missing', body: 'x' } });
+    assert.equal(unknown.isError, true);
+    assert.match(unknown.content[0]?.type === 'text' ? unknown.content[0].text : '', /unknown note_id: fact:missing/);
+    const empty = await client.callTool({ name: 'revise_note', arguments: { note_id: target.note_id, body: '' } });
+    assert.equal(empty.isError, true);
+    assert.match(empty.content[0]?.type === 'text' ? empty.content[0].text : '', /body must be a non-empty string/);
+    assert.equal(fs.readFileSync(noteLogPath, 'utf8'), logAfterRevise, 'failed revisions must not write to the note log');
+  } finally {
+    await client.close();
+    await transport.close();
+  }
+});
+
+test('terminal note edit revises through the same path but leaves source.agent unset', async () => {
+  const root = tempDir('note-edit-');
+  const dataDir = path.join(root, 'data');
+  const indexDir = path.join(root, 'index');
+  const target = note(1, {
+    note_id: 'fact:note-edit-target',
+    source: { origin: 'claude-code', distiller: 'llm' },
+    body: { summary: 'Original claim to be corrected.' },
+  });
+  appendNote(dataDir, target);
+  bootstrapIndex(dataDir, indexDir);
+
+  const edited = runCli(['note', 'edit', target.note_id, '--body', 'The corrected claim, human-approved.', '--data-dir', dataDir, '--index-dir', indexDir]);
+  assert.equal(edited.status, 0, `note edit should exit 0; stderr: ${edited.stderr}`);
+  const record = JSON.parse(edited.stdout) as NoteRevision;
+  assert.equal(record.kind, 'note_revision');
+  assert.equal(record.source.distiller, 'human');
+  assert.equal(record.source.origin, 'claude-code');
+  assert.equal(record.source.agent, undefined, 'terminal note edit leaves source.agent unset');
+  assert.equal(record.previous_revision_id, target.revision_id);
+
+  // Provenance surfaces the (absent) channel — distinguishable from an MCP revision.
+  const shown = runCli(['note', 'show', target.note_id, '--data-dir', dataDir, '--with-provenance']);
+  assert.equal(shown.status, 0, `note show should exit 0; stderr: ${shown.stderr}`);
+  assert.match(shown.stdout, /Agent channel: \(none\)/);
+
+  // Empty body fails loud.
+  const empty = runCli(['note', 'edit', target.note_id, '--body', '', '--data-dir', dataDir, '--index-dir', indexDir]);
+  assert.notEqual(empty.status, 0, 'empty body must fail');
+  assert.match(empty.stderr, /body must be a non-empty string/);
+});
+
+test('a human revision preserves the prior note validity window (valid_at/invalid_at)', async () => {
+  const root = tempDir('revise-validity-');
+  const dataDir = path.join(root, 'data');
+  const indexDir = path.join(root, 'index');
+  const target = note(1, {
+    note_id: 'fact:validity-target',
+    valid_at: '2026-08-01T00:00:00.000Z',
+    invalid_at: '2026-09-01T00:00:00.000Z',
+    body: { summary: 'Claim with a bounded validity window.' },
+  });
+  appendNote(dataDir, target);
+  bootstrapIndex(dataDir, indexDir);
+
+  const edited = runCli(['note', 'edit', target.note_id, '--body', 'Corrected claim, same window.', '--data-dir', dataDir, '--index-dir', indexDir]);
+  assert.equal(edited.status, 0, `note edit should exit 0; stderr: ${edited.stderr}`);
+  const record = JSON.parse(edited.stdout) as NoteRevision;
+  // The window is intrinsic note state, not body — a content-only revision must carry it forward,
+  // not silently reset it (which would make the note immediately recallable and never expire).
+  assert.equal(record.valid_at, target.valid_at);
+  assert.equal(record.invalid_at, target.invalid_at);
 });
 
 test('MCP get_note surfaces missing provenance logs as tool errors', async () => {

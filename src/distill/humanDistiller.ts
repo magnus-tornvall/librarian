@@ -47,6 +47,44 @@ function deriveSummary(body: string): string {
   return paragraph ?? '';
 }
 
+/**
+ * Build a human revision of an existing note (spec §5 human-revision ruling —
+ * terminal `note edit` #107, MCP `revise_note` #110). Identity follows the
+ * judgment, not the keyboard: `distiller` becomes 'human' and `previous_revision_id`
+ * chains to the prior revision, while origin, note_type, scope, identity, title,
+ * links, and provenance carry over unchanged — latest-wins does the rest. The
+ * approved body is the source, so the prior revision's `source_path`/`content_hash`
+ * (which described other bytes) are intentionally dropped.
+ *
+ * `agent` records the mediating channel — the MCP client identity for `revise_note`,
+ * unset for terminal `note edit`. That is the only structural signal distinguishing
+ * the two channels under `note show --with-provenance` (spec §5: the tool-contract
+ * approval wording is a prior, not a guard).
+ */
+export function buildHumanRevision(prior: NoteRevision, body: string, agent?: string): NoteRevision {
+  return {
+    kind: 'note_revision',
+    schema_version: 1,
+    note_id: prior.note_id,
+    revision_id: ulid(),
+    previous_revision_id: prior.revision_id,
+    created_at: new Date().toISOString(),
+    // A content-only edit inherits the note's declared validity window unchanged — it must
+    // not silently resurrect an expired note or make a not-yet-valid one live. Changing the
+    // window is a deliberate act, not a side effect of correcting the body.
+    ...(prior.valid_at ? { valid_at: prior.valid_at } : {}),
+    ...(prior.invalid_at ? { invalid_at: prior.invalid_at } : {}),
+    identity: prior.identity,
+    source: { origin: prior.source.origin, distiller: 'human', ...(agent ? { agent } : {}) },
+    note_type: prior.note_type,
+    title: prior.title,
+    scope: prior.scope,
+    provenance: prior.provenance,
+    links: prior.links,
+    body: { summary: deriveSummary(body), details: body },
+  };
+}
+
 type NoteIdState = { revision: NoteRevision; tombstoned: boolean };
 
 /** Latest revision per note_id plus whether a tombstone came after it (log append order). */
