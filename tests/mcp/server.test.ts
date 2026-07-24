@@ -348,6 +348,28 @@ test('terminal note edit revises through the same path but leaves source.agent u
   assert.match(empty.stderr, /body must be a non-empty string/);
 });
 
+test('a human revision preserves the prior note validity window (valid_at/invalid_at)', async () => {
+  const root = tempDir('revise-validity-');
+  const dataDir = path.join(root, 'data');
+  const indexDir = path.join(root, 'index');
+  const target = note(1, {
+    note_id: 'fact:validity-target',
+    valid_at: '2026-08-01T00:00:00.000Z',
+    invalid_at: '2026-09-01T00:00:00.000Z',
+    body: { summary: 'Claim with a bounded validity window.' },
+  });
+  appendNote(dataDir, target);
+  bootstrapIndex(dataDir, indexDir);
+
+  const edited = runCli(['note', 'edit', target.note_id, '--body', 'Corrected claim, same window.', '--data-dir', dataDir, '--index-dir', indexDir]);
+  assert.equal(edited.status, 0, `note edit should exit 0; stderr: ${edited.stderr}`);
+  const record = JSON.parse(edited.stdout) as NoteRevision;
+  // The window is intrinsic note state, not body — a content-only revision must carry it forward,
+  // not silently reset it (which would make the note immediately recallable and never expire).
+  assert.equal(record.valid_at, target.valid_at);
+  assert.equal(record.invalid_at, target.invalid_at);
+});
+
 test('MCP get_note surfaces missing provenance logs as tool errors', async () => {
   const root = tempDir('mcp-server-missing-log-');
   const dataDir = path.join(root, 'data');

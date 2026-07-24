@@ -69,6 +69,11 @@ export function buildHumanRevision(prior: NoteRevision, body: string, agent?: st
     revision_id: ulid(),
     previous_revision_id: prior.revision_id,
     created_at: new Date().toISOString(),
+    // A content-only edit inherits the note's declared validity window unchanged — it must
+    // not silently resurrect an expired note or make a not-yet-valid one live. Changing the
+    // window is a deliberate act, not a side effect of correcting the body.
+    ...(prior.valid_at ? { valid_at: prior.valid_at } : {}),
+    ...(prior.invalid_at ? { invalid_at: prior.invalid_at } : {}),
     identity: prior.identity,
     source: { origin: prior.source.origin, distiller: 'human', ...(agent ? { agent } : {}) },
     note_type: prior.note_type,
