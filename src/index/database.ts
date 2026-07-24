@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { load as loadSqliteVec } from 'sqlite-vec';
+import { betterSqliteAddon, sqliteVecExtensionPath } from './nativeAssets.ts';
 import { INDEX_DIR } from '../paths.ts';
 import { INDEX_SCHEMA_VERSION, migrate } from './schema.ts';
 import { projectSummaryId, type NoteRevision } from '../note.ts';
@@ -11,23 +12,64 @@ export function indexDbPath(indexDir = INDEX_DIR): string {
   return path.join(indexDir, 'notes.db');
 }
 
+// Single door to `new Database` so the packaged binary's extracted native addon
+// (#149) is injected everywhere; off the SEA path `nativeBinding` is undefined
+// and better-sqlite3 resolves the addon itself.
+function newDatabase(file: string, options: Database.Options = {}): Database.Database {
+  const addon = betterSqliteAddon();
+  // @types/better-sqlite3 only types `nativeBinding` as a path string, but the
+  // runtime also accepts a preloaded addon object (WiseLibs/better-sqlite3#972),
+  // which is what SEA needs. Cast across the gap.
+  const nativeBinding = addon as unknown as string | undefined;
+  return new Database(file, nativeBinding ? { ...options, nativeBinding } : options);
+}
+
+// Load the sqlite-vec extension. In the packaged binary it lives at an extracted
+// path (sqlite-vec's own package resolution can't see inside the blob); otherwise
+// let the package resolve it.
+function loadVec(db: Database.Database): void {
+  const extensionPath = sqliteVecExtensionPath();
+  if (extensionPath) db.loadExtension(extensionPath);
+  else loadSqliteVec(db);
+}
+
 function configure(db: Database.Database): void {
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
-  loadSqliteVec(db);
+  loadVec(db);
+}
+
+/**
+ * Prove the native stack loads and round-trips a vec0 query — the exact failure
+ * mode (`ERR_DLOPEN_FAILED`, extension won't load) the packaging epic (#149)
+ * hinges on. Uses an in-memory DB so it needs no index. Throws on any failure.
+ */
+export function probeNativeStack(): void {
+  const db = newDatabase(':memory:');
+  try {
+    loadVec(db);
+    db.exec('CREATE VIRTUAL TABLE probe USING vec0(note_id TEXT PRIMARY KEY, embedding float[3])');
+    db.prepare('INSERT INTO probe (note_id, embedding) VALUES (?, ?)').run('probe', JSON.stringify([1, 2, 3]));
+    const rows = db
+      .prepare('SELECT note_id FROM probe WHERE embedding MATCH ? AND k = ? ORDER BY distance')
+      .all(JSON.stringify([1, 2, 3]), 1);
+    if (rows.length !== 1) throw new Error('vec0 query returned no rows');
+  } finally {
+    db.close();
+  }
 }
 
 export function openIndexWrite(indexDir = INDEX_DIR): Database.Database {
   fs.mkdirSync(indexDir, { recursive: true });
   const file = indexDbPath(indexDir);
-  let db = new Database(file);
+  let db = newDatabase(file);
   const version = db.pragma('user_version', { simple: true }) as number;
   if (version !== 0 && version !== INDEX_SCHEMA_VERSION) {
     db.close();
     fs.rmSync(file, { force: true });
     fs.rmSync(`${file}-wal`, { force: true });
     fs.rmSync(`${file}-shm`, { force: true });
-    db = new Database(file);
+    db = newDatabase(file);
   }
   configure(db);
   migrate(db);
@@ -41,9 +83,9 @@ export function openIndexRead(indexDir = INDEX_DIR): Database.Database {
   }
   let db: Database.Database;
   try {
-    db = new Database(file, { readonly: true, fileMustExist: true });
+    db = newDatabase(file, { readonly: true, fileMustExist: true });
     db.pragma('busy_timeout = 5000');
-    loadSqliteVec(db);
+    loadVec(db);
   } catch (err) {
     throw new Error(`cannot open recall index at ${file}; run librarian drain to rebuild it: ${(err as Error).message}`);
   }
