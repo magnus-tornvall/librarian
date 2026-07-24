@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { CACHE_DIR } from '../paths.ts';
 
 /**
  * Native-artifact loading for the packaged single-executable (#149).
@@ -37,24 +37,40 @@ export function isSea(): boolean {
   return seaApi?.isSea() ?? false;
 }
 
-// ponytail: cache dir keyed by binary size+mtime — cheap, and it re-extracts on
-// every rebuild/update. Hash the blob instead only if a collision ever bites.
+// Reject a cache dir another local user could have planted a malicious addon
+// into. Owner-only + not group/world-writable means only we can put files here.
+function assertPrivateDir(dir: string): void {
+  const st = fs.lstatSync(dir);
+  if (!st.isDirectory()) throw new Error(`native cache path is not a directory: ${dir}`);
+  const uid = process.getuid?.();
+  if (uid !== undefined && st.uid !== uid) throw new Error(`native cache dir is not owned by the current user: ${dir}`);
+  if ((st.mode & 0o022) !== 0) throw new Error(`native cache dir is group/world-writable: ${dir}`);
+}
+
+// The extracted `.node`/`.dylib` are native code we then execute, so the cache
+// MUST live somewhere only this user can write — never a shared temp dir. In a
+// world-writable /tmp a local attacker can pre-plant a file at the predictable
+// `<size>-<mtime>` path and we'd load their code (extractAsset trusts an existing
+// file). ~/.librarian/cache is inside the user's home; other users can't write it.
+// ponytail: key by binary size+mtime — cheap, re-extracts on rebuild/update. Hash
+// the blob instead only if a collision ever bites.
 let cacheDir: string | undefined;
 function assetCacheDir(): string {
   if (cacheDir) return cacheDir;
   const stat = fs.statSync(process.execPath);
-  const dir = path.join(os.tmpdir(), `librarian-native-${stat.size}-${Math.round(stat.mtimeMs)}`);
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = path.join(CACHE_DIR, 'native', `${stat.size}-${Math.round(stat.mtimeMs)}`);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  assertPrivateDir(dir);
   cacheDir = dir;
   return dir;
 }
 
 function extractAsset(name: string): string {
+  if (!seaApi) throw new Error('native asset requested outside a SEA binary');
   const dest = path.join(assetCacheDir(), name);
   if (!fs.existsSync(dest)) {
-    if (!seaApi) throw new Error('native asset requested outside a SEA binary');
     // Write to a temp sibling then rename, so a second process racing us never
-    // sees a half-written addon.
+    // sees a half-written addon. The dir is owner-only, so the file is ours.
     const tmp = `${dest}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, Buffer.from(seaApi.getRawAsset(name)), { mode: 0o755 });
     fs.renameSync(tmp, dest);

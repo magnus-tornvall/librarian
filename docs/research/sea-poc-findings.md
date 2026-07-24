@@ -46,10 +46,17 @@ The two native artifacts ship **embedded as SEA assets**, not as sidecars:
 ```
 
 At runtime the binary extracts each asset **once** to a per-binary cache dir
-(`$TMPDIR/librarian-native-<size>-<mtime>/`) and loads it from there. The OS
+(`~/.librarian/cache/native/<size>-<mtime>/`) and loads it from there. The OS
 loader needs a real file path — it cannot map a `.node`/`.dylib` out of the
 in-memory blob — but extraction is invisible and idempotent. Sidecars would have
 worked too, but they forfeit the single-file property below.
+
+The cache lives under the user's home, **never a shared temp dir**: the extracted
+files are native code we then execute, and a world-writable `/tmp` would let a
+local attacker pre-plant a malicious `.node`/`.dylib` at the predictable
+`<size>-<mtime>` path (extraction is skipped when the file already exists). The
+cache dir is created owner-only (`0700`) and its ownership/mode is verified
+before use.
 
 ### 3. ESM→CJS: esbuild-bundle a dedicated CJS entry
 
@@ -92,9 +99,10 @@ Gatekeeper kills a modified-but-still-signed Mach-O, so `scripts/build-sea.sh`:
 Single self-contained file → **update is an atomic file replace.** No
 versioned-dir + symlink/junction swap is required (that was the fallback the spec
 flagged *if* sidecars had been unavoidable). Uninstall is deleting the one binary
-(plus wiring); `~/.librarian` data is preserved per the §14 policy. The stale
-extraction caches in `$TMPDIR` are self-invalidating (keyed by binary size+mtime)
-and disposable — an uninstall may sweep them but need not.
+(plus wiring); `~/.librarian` data is preserved per the §14 policy. The extraction
+caches under `~/.librarian/cache/native` are regenerable and self-invalidating
+(keyed by binary size+mtime) — uninstall may sweep `cache/` but leaving it is
+harmless.
 
 ## How to reproduce
 
