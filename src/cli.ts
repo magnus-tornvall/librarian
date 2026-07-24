@@ -11,7 +11,7 @@ import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { buildHumanRevision, importCuratedNote } from './distill/humanDistiller.ts';
 import { loadConfig } from './config.ts';
-import { embeddingCoverage, embeddingIndexModel, indexedThrough, openIndexRead, openIndexWrite, stateNotes } from './index/database.ts';
+import { embeddingCoverage, embeddingIndexModel, indexedThrough, openIndexRead, openIndexWrite, probeNativeStack, stateNotes } from './index/database.ts';
 import { classifyEmbeddingError, makeOpenAiEmbeddingProvider } from './embedding/provider.ts';
 import { runDistill } from './distill/distillRun.ts';
 import { runExport } from './export/exportRun.ts';
@@ -357,9 +357,21 @@ export type DoctorReport = {
   coverage: { embedded: number; total: number };
   indexed_through: string;
   index_error?: string;
+  native: { ok: boolean; error?: string };
 };
 
 export async function doctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PATH): Promise<DoctorReport> {
+  let native: DoctorReport['native'];
+  try {
+    probeNativeStack();
+    native = { ok: true };
+  } catch (error) {
+    native = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  return { ...(await collectDoctorReport(indexDir, configPath)), native };
+}
+
+async function collectDoctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PATH): Promise<Omit<DoctorReport, 'native'>> {
   const config = loadConfig(configPath);
   let db: ReturnType<typeof openIndexRead> | undefined;
   let coverage = { embedded: 0, total: 0 };
@@ -419,6 +431,7 @@ async function doctorCommand(argv: string[]): Promise<void> {
   }
   const embedding = report.embedding;
   process.stdout.write([
+    `Native stack: ${report.native.ok ? 'ok' : `FAILED — ${report.native.error}`}`,
     `Embedding: ${embedding.state}`,
     ...(embedding.model ? [`Configured model: ${embedding.model}${embedding.digest ? `@${embedding.digest}` : ''}`] : []),
     ...(embedding.index_model ? [`Index model: ${embedding.index_model}@${embedding.index_digest}`] : []),
@@ -1217,7 +1230,7 @@ async function injectCommand(options: InjectionOptions): Promise<void> {
   }
 }
 
-async function main(argv: string[]): Promise<void> {
+export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
 
   switch (command) {
