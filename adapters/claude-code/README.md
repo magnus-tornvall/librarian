@@ -1,33 +1,41 @@
 # Claude Code adapter (`origin: claude-code`)
 
-The Claude Code adapter maps native hook payloads onto the canonical event schema
-([`schema/event.md`](../../schema/event.md)) and pipes them into `librarian collect`. For
-`UserPromptSubmit` and `SessionStart`, the same hook entry also shells out to `librarian
-inject` and returns Claude Code `additionalContext` when the recall seam prints a block. It
-is **dumb by design**: spawn the seam, emit its output, nothing else. No domain logic —
-redaction, validation, salience authority, and push austerity live in the collector,
-distiller, and `librarian inject` (§4, §5, §6).
+The Claude Code integration ships as a **thin Claude Code plugin**
+([`.claude-plugin/plugin.json`](../../.claude-plugin/plugin.json)): the manifest declares
+four `command` hooks and a stdio MCP server, all routed through the single installed
+`librarian` bin. Each hook runs `librarian hook claude-code`, which maps the native hook
+payload onto the canonical event schema ([`schema/event.md`](../../schema/event.md)) and
+pipes it into `librarian collect`. For `UserPromptSubmit` and `SessionStart` it also shells
+out to `librarian inject` and returns Claude Code `additionalContext` when the recall seam
+prints a block. It is **dumb by design**: spawn the seam, emit its output, nothing else. No
+domain logic — redaction, validation, salience authority, and push austerity live in the
+collector, distiller, and `librarian inject` (§4, §5, §6).
 
-This adapter follows the conventions of the merged OpenCode adapter
-([`adapters/opencode/`](../opencode/)) — a pure `map.ts` tested by golden fixtures, a thin
-delivery shell, fixture auto-discovery — and deviates only where Claude Code's hook model
-forces it (see below).
+Unlike the OpenCode adapter ([`adapters/opencode/`](../opencode/)), whose plugin file
+carries logic in its own runtime, the Claude Code plugin bundles **no code** — the manifest
+only names `librarian` subcommands (spec §14 amendment: a thin plugin, not three copies of
+`dist/`). The mapping and I/O therefore live **behind the bin**, in `src/`:
 
 ## Layout
 
-- **`map.ts`** — a *pure* mapping module: native Claude Code hook payload → canonical
-  event(s). No I/O, no process spawning, no clock, no crypto. Everything machine-specific
-  (the `resource` facts, the `event_id` ULID, the `ts`) is **injected** by the caller. This
-  is what the origin-qualification fixtures test, and it is what makes the mapping testable
-  without a Claude Code runtime.
-- **`hook.ts`** — the executable hook entry (the only part that does I/O). Claude Code
-  invokes a `command` hook by writing the event's JSON to the script's **stdin**; `hook.ts`
-  reads it, lowers it onto the mapper's shape, resolves the `resource` facts, stamps
-  `event_id`/`ts`, calls `map()`, and pipes the resulting NDJSON to `librarian collect`.
-  For `UserPromptSubmit` and `SessionStart`, after collect handoff it spawns `librarian
-  inject` and returns the block as `hookSpecificOutput.additionalContext` only when stdout
-  is non-empty.
-- **`settings-snippet.json`** — reference shape for the four generated hooks.
+- **[`src/hook/claudeCodeMap.ts`](../../src/hook/claudeCodeMap.ts)** — a *pure* mapping
+  module: native Claude Code hook payload → canonical event(s). No I/O, no process spawning,
+  no clock, no crypto. Everything machine-specific (the `resource` facts, the `event_id`
+  ULID, the `ts`) is **injected** by the caller. This is what the origin-qualification
+  fixtures test, and what makes the mapping testable without a Claude Code runtime.
+- **[`src/hook/claudeCode.ts`](../../src/hook/claudeCode.ts)** — the I/O shell behind
+  `librarian hook claude-code` (the only part that does I/O). Claude Code invokes a
+  `command` hook by writing the event's JSON to the process's **stdin**; the shell reads it,
+  lowers it onto the mapper's shape, resolves the `resource` facts, stamps `event_id`/`ts`,
+  calls `map()`, and pipes the resulting NDJSON to `librarian collect`. For
+  `UserPromptSubmit` and `SessionStart`, after collect handoff it spawns `librarian inject`
+  and returns the block as `hookSpecificOutput.additionalContext` only when stdout is
+  non-empty.
+- **[`.claude-plugin/plugin.json`](../../.claude-plugin/plugin.json)** — the plugin manifest:
+  the four hooks (`UserPromptSubmit`, `PostToolUse` matcher `*`, `SessionStart`, `Stop`) each
+  running `librarian hook claude-code`, plus `mcpServers.librarian` → `librarian mcp`.
+- **[`.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json)** — so
+  `/plugin marketplace add magnus-tornvall/librarian` resolves this repo as a marketplace.
 
 ## Deviations from the OpenCode adapter
 
@@ -37,52 +45,50 @@ Claude Code's hook model differs from OpenCode's plugin model, so:
   shape. The mapper keys on `hook_event_name` (Claude Code's payload is the public,
   documented interface — a stable contract — unlike OpenCode's drifting hook names).
 - **Each hook is a fresh short-lived process** (Claude Code spawns the `command` per
-  event), so `hook.ts` resolves `resource` per invocation rather than once at plugin init.
+  event), so `librarian hook claude-code` resolves `resource` per invocation rather than
+  once at plugin init.
 - **`SessionStart` fires repeatedly** (startup, resume, `/clear`, compaction) — unlike
   OpenCode's one-shot `session.created`. Every `SessionStart` maps to `action: "start"`;
   the adapter does not editorialize the source (dumb mapping, §4).
 - **Hook-safety is load-bearing.** A `command` hook that fails could break the user's
-  Claude Code session, so `hook.ts` **always exits 0**. It writes stdout only for valid
-  `additionalContext`; inject failures, timeouts, empty recall, malformed payloads, and
-  ignored events emit no stdout. Loud collect failure is re-logged to stderr; inject
-  failure is contained so instrumentation remains unaffected.
+  Claude Code session, so `librarian hook claude-code` **always exits 0**. It writes stdout
+  only for valid `additionalContext`; inject failures, timeouts, empty recall, malformed
+  payloads, and ignored events emit no stdout. Loud collect failure is re-logged to stderr;
+  inject failure is contained so instrumentation remains unaffected.
 
-## Project-local setup
+## Install
 
-Run from this checkout:
+With `librarian` on PATH (install it via [`scripts/install.sh`](../../scripts/install.sh)),
+from inside Claude Code:
 
-```sh
-./scripts/claude-code-setup.sh
+```
+/plugin marketplace add magnus-tornvall/librarian
+/plugin install librarian
 ```
 
-Setup builds the CLI, validates Node, and creates `.claude/settings.local.json` with
-absolute Node and hook paths for `UserPromptSubmit`, `PostToolUse`, `SessionStart`, and
-`Stop`. It refuses to overwrite a differing file; merge the reference
-[`settings-snippet.json`](./settings-snippet.json) manually in that case. Fully restart a
-running Claude Code session after setup.
+That wires the four hooks (`UserPromptSubmit`, `PostToolUse`, `SessionStart`, `Stop`) and the
+stdio MCP server with **no** `settings.json` edit. Fully restart a running Claude Code
+session after install.
 
-The hook uses this checkout's `dist/cli.js` with its current Node runtime, falling back to
-`librarian` on PATH only when the build is absent. No npm link, global Claude settings, or
+The hook resolves the CLI to spawn for `collect`/`inject` in this order: `LIBRARIAN_BIN` (an
+explicit override, used by the tests) → this checkout's built `dist/cli.js` when present →
+bare `librarian` on PATH (the installed-binary case). No npm link, global Claude settings, or
 Librarian config lookup is needed.
 
-Run the authenticated, token-consuming end-to-end check explicitly (it is developer-machine
-tooling and is not part of `npm test` or CI):
+### Dogfooding from a checkout
+
+The authenticated, token-consuming end-to-end check is developer-machine tooling, not part of
+`npm test` or CI. It drives the *installed plugin* through a real `claude -p` session, so the
+plugin must be installed (above) and `librarian` must resolve to this checkout's build (e.g.
+`LIBRARIAN_BIN`, or install a binary built from this checkout):
 
 ```sh
-./scripts/opencode-setup.sh
-./scripts/dogfood-verify.sh
+./scripts/opencode-setup.sh   # only if verifying OpenCode too
+./scripts/dogfood-verify.sh claude-code
 ```
 
-The verifier checks both agents by default, so the existing project-local OpenCode plugin
-must also be set up. Pass `claude-code` or `opencode` to verify only one adapter.
-
-Remove only the generated project settings with:
-
-```sh
-./scripts/claude-code-teardown.sh
-```
-
-Teardown leaves all collected data under `~/.librarian` untouched.
+The verifier checks both agents by default; pass `claude-code` or `opencode` to verify only
+one. Collected data under `~/.librarian` is left untouched.
 
 ## What gets emitted (mapping rules, §10.1)
 
@@ -128,8 +134,8 @@ editorialize the source. To explain why a pushed block appeared, run `librarian 
 
 ## v1 ceiling
 
-`hook.ts` spawns `librarian collect` once per event and, for injection-capable hooks,
-`librarian inject` once per invocation. That is intentional for v1 (correctness over
+`librarian hook claude-code` spawns `librarian collect` once per event and, for
+injection-capable hooks, `librarian inject` once per invocation. That is intentional for v1 (correctness over
 throughput, no long-lived child to supervise; each Claude Code hook is already its own
 short-lived process). The collect ceiling and project-slug heuristic are marked with
 `ponytail:` comments in the source; when throughput bites, the fix is a batching buffer,

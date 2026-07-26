@@ -3,7 +3,7 @@
 Every new integration ships 3–5 golden content-events with expected outcomes (spec §9).
 These are that surface for the Claude Code adapter: each file pairs a **native Claude
 Code hook payload** with the **expected canonical event** the pure mapper
-([`adapters/claude-code/map.ts`](../../adapters/claude-code/map.ts)) must produce. They
+([`src/hook/claudeCodeMap.ts`](../../src/hook/claudeCodeMap.ts)) must produce. They
 are the primary test surface — the mapping is proven here without a Claude Code runtime.
 
 The runner is [`tests/adapters/claudeCode.test.ts`](../../tests/adapters/claudeCode.test.ts).

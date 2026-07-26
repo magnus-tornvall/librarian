@@ -10,8 +10,8 @@ import {
   type MapEnv,
   type NativePayload,
   type PostToolUsePayload,
-} from '../../adapters/claude-code/map.ts';
-import { runHook } from '../../adapters/claude-code/hook.ts';
+} from '../../src/hook/claudeCodeMap.ts';
+import { runHook } from '../../src/hook/claudeCode.ts';
 import { validateEvent } from '../../src/collector/validateEvent.ts';
 import { readAll } from '../../src/log/ndjson.ts';
 import { appendNote } from '../../src/log/noteLog.ts';
@@ -22,7 +22,7 @@ import type { NoteRevision } from '../../src/note.ts';
  *
  * The fixture block contains NO per-case mapping logic. It auto-discovers every
  * fixtures/claude-code/**\/*.json, and for each one asserts that the PURE mapper
- * (adapters/claude-code/map.ts) produces the fixture's expected canonical event on all
+ * (src/hook/claudeCodeMap.ts) produces the fixture's expected canonical event on all
  * stable fields and that the result passes the collector's validateEvent(). Adding a
  * fixture pair means dropping a JSON file under fixtures/claude-code/ — never editing this
  * runner (that is the Definition of Done).
@@ -33,13 +33,15 @@ import type { NoteRevision } from '../../src/note.ts';
  * through the REAL `librarian collect` (spawned, temp data dir) — one proving every event
  * lands on its per-session log, one proving a secret-bearing command lands REDACTED
  * (redaction is the collector's job at the append boundary, §5). Finally, a hook-safety
- * test spawns the real hook.ts with a malformed payload and asserts it exits 0 (never
- * breaks the host session) while writing the error to stderr.
+ * test spawns the real plugin entry (`librarian hook claude-code`) with a malformed payload
+ * and asserts it exits 0 (never breaks the host session) while writing the error to stderr.
  */
 
 const FIXTURE_ROOT = path.join(import.meta.dirname, '..', '..', 'fixtures', 'claude-code');
 const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
-const HOOK = path.join(import.meta.dirname, '..', '..', 'adapters', 'claude-code', 'hook.ts');
+// The plugin entry: the four Claude Code `command` hooks all invoke `librarian hook
+// claude-code`, which drives runClaudeCodeHook() behind the bin.
+const HOOK_ARGS = [CLI, 'hook', 'claude-code'] as const;
 
 // Volatile fields excluded from the stable-field comparison (§9): ULID event_id, the
 // wall-clock ts, and the per-machine machine_id. The runner instead asserts the mapper
@@ -298,7 +300,7 @@ esac
 }
 
 function runHookEntry(payload: unknown, repo: string, bin: string): ReturnType<typeof spawnSync> {
-  return spawnSync('node', [HOOK], {
+  return spawnSync('node', [...HOOK_ARGS], {
     input: JSON.stringify(payload),
     cwd: repo,
     encoding: 'utf8',
@@ -551,13 +553,13 @@ test('claude-code hook-safety (unit): runHook ignores an unrecognized hook event
   assert.equal(delivered.length, 0, 'an unrecognized event must produce no delivered events');
 });
 
-test('claude-code hook-safety (e2e): feeding hook.ts a malformed payload exits 0 and writes the error to stderr', () => {
-  // Spawn the REAL hook entry with garbage on stdin. The load-bearing hook-safety contract
+test('claude-code hook-safety (e2e): feeding `librarian hook claude-code` a malformed payload exits 0 and writes the error to stderr', () => {
+  // Spawn the REAL plugin entry with garbage on stdin. The load-bearing hook-safety contract
   // (§14, Definition of done): the process must exit 0 (never break the host Claude Code
   // session) while surfacing the error on stderr for an operator to find.
-  const result = spawnSync('node', [HOOK], { input: 'not json at all {{{', encoding: 'utf8' });
-  assert.equal(result.status, 0, `hook.ts must exit 0 on a malformed payload; got ${result.status}`);
-  assert.equal(result.stdout, '', 'hook.ts must not write to stdout (Claude Code may treat it as decision/context)');
+  const result = spawnSync('node', [...HOOK_ARGS], { input: 'not json at all {{{', encoding: 'utf8' });
+  assert.equal(result.status, 0, `the hook must exit 0 on a malformed payload; got ${result.status}`);
+  assert.equal(result.stdout, '', 'the hook must not write to stdout (Claude Code may treat it as decision/context)');
   assert.match(
     result.stderr,
     /librarian-claude-code: ignoring malformed hook payload/,
@@ -565,8 +567,8 @@ test('claude-code hook-safety (e2e): feeding hook.ts a malformed payload exits 0
   );
 });
 
-test('claude-code hook-safety (e2e): feeding hook.ts empty stdin exits 0 silently', () => {
-  const result = spawnSync('node', [HOOK], { input: '', encoding: 'utf8' });
-  assert.equal(result.status, 0, 'hook.ts must exit 0 on empty stdin');
-  assert.equal(result.stdout, '', 'hook.ts must not write to stdout');
+test('claude-code hook-safety (e2e): feeding `librarian hook claude-code` empty stdin exits 0 silently', () => {
+  const result = spawnSync('node', [...HOOK_ARGS], { input: '', encoding: 'utf8' });
+  assert.equal(result.status, 0, 'the hook must exit 0 on empty stdin');
+  assert.equal(result.stdout, '', 'the hook must not write to stdout');
 });

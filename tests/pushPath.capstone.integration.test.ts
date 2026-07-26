@@ -26,7 +26,8 @@ import type { InjectionTrace } from '../src/diagnostics/injectionTrace.ts';
  */
 
 const CLI = path.join(import.meta.dirname, '..', 'src', 'cli.ts');
-const HOOK = path.join(import.meta.dirname, '..', 'adapters', 'claude-code', 'hook.ts');
+// The Claude Code plugin entry: the hook `command` invokes `librarian hook claude-code`.
+const HOOK_ARGS = [CLI, 'hook', 'claude-code'] as const;
 const PROJECT_SLUG = 'librarian';
 
 // The judgment the fixture inference provider returns for the eligible session. Content that
@@ -173,7 +174,7 @@ process.exit(r.status ?? 1);
 }
 
 function runHookEntry(payload: unknown, repo: string, bin: string): ReturnType<typeof spawnSync> {
-  return spawnSync('node', [HOOK], {
+  return spawnSync('node', [...HOOK_ARGS], {
     input: JSON.stringify(payload),
     cwd: repo,
     encoding: 'utf8',

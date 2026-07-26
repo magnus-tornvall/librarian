@@ -16,14 +16,13 @@ trace via `librarian why`. No tool call, no `@`-mention — the memory just show
 
 ## Protocol
 
-1. **Register the hook.** Merge
-   [`adapters/claude-code/settings-snippet.json`](../adapters/claude-code/settings-snippet.json)
-   into `~/.claude/settings.json` (global) or `.claude/settings.json`
-   (this repo only), replacing `/ABSOLUTE/PATH/TO/librarian` with your checkout path. The
-   `UserPromptSubmit` and `SessionStart` entries are the injection-capable ones; see
-   [`adapters/claude-code/README.md`](../adapters/claude-code/README.md) for the full
-   registration steps and CLI-resolution order (`LIBRARIAN_BIN` → config `bin` → built
-   `dist/cli.js` → bare `librarian`).
+1. **Install the plugin.** With `librarian` on PATH (see the install script), run
+   `/plugin marketplace add magnus-tornvall/librarian` then `/plugin install librarian` —
+   this wires the four `command` hooks + the stdio MCP server with no `settings.json` edit.
+   The `UserPromptSubmit` and `SessionStart` hooks are the injection-capable ones; see
+   [`adapters/claude-code/README.md`](../adapters/claude-code/README.md) for the manifest
+   shape and the hook's CLI-resolution order (`LIBRARIAN_BIN` → built `dist/cli.js` → bare
+   `librarian` on PATH).
 
 2. **Seed memory (if empty).** The push path only surfaces what has been distilled. Have at
    least one real session about this repo collected and distilled, plus a handful of unrelated

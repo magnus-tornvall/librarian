@@ -25,7 +25,7 @@ import Database from 'better-sqlite3';
 // it is proven only through the spawned CLI boundary. The §4 test at the bottom is
 // the guard that keeps that honest by scanning this file's own source.
 import * as opencodeAdapter from '../adapters/opencode/map.ts';
-import * as claudeCodeAdapter from '../adapters/claude-code/map.ts';
+import * as claudeCodeAdapter from '../src/hook/claudeCodeMap.ts';
 // Downstream pipeline stages, imported from the exact modules the roadmap names.
 import { migrate } from '../src/index/schema.ts'; // FTS5 schema
 import { indexNotes } from '../src/index/indexer.ts'; // indexer

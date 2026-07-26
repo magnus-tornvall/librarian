@@ -1,10 +1,12 @@
 /**
- * Claude Code instrumentation adapter — the executable hook entry (roadmap item 6,
- * spec §4; §12: "Claude Code second"). This is the ONLY part of the adapter that does
- * I/O.
+ * Claude Code instrumentation — the I/O shell behind `librarian hook claude-code` (roadmap
+ * item 6, spec §4; §12: "Claude Code second"; §14 amendment: thin plugin routed through the
+ * installed bin). This is the ONLY part of the Claude Code integration that does I/O; the
+ * mapping is the pure `claudeCodeMap.ts`.
  *
- * Claude Code invokes a `command` hook by spawning this script and writing the event's
- * JSON payload to its stdin (docs.claude.com/en/docs/claude-code/hooks). This entry:
+ * The `.claude-plugin` manifest declares four `command` hooks, each running `librarian hook
+ * claude-code`; Claude Code writes the event's JSON payload to that process's stdin
+ * (docs.claude.com/en/docs/claude-code/hooks). `runClaudeCodeHook()` then:
  *   1. reads the whole stdin payload,
  *   2. lowers it onto the mapper's NativePayload,
  *   3. resolves the machine-specific `resource` facts (machine id, git root/remote/
@@ -24,7 +26,8 @@
  * as decision control / added context; a dumb recorder must stay silent there). Loud
  * failure belongs to `librarian collect`'s own stderr, which we capture and re-log to
  * THIS process's stderr where an operator can find it. `runHook()` is wrapped so that no
- * throw escapes; `main()` hard-guarantees exit 0.
+ * throw escapes `runClaudeCodeHook()`; the `librarian hook claude-code` subcommand
+ * hard-guarantees exit 0.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -34,7 +37,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ulid } from 'ulid';
-import { map, type CanonicalEvent, type Context, type NativePayload, type Resource } from './map.ts';
+import { map, type CanonicalEvent, type Context, type NativePayload, type Resource } from './claudeCodeMap.ts';
 
 // A namespaced tag so operators can grep the host session's hook logs for our lines.
 const LOG_TAG = 'librarian-claude-code';
@@ -42,17 +45,27 @@ const INJECT_TIMEOUT_MS = 8_000;
 
 export type LibrarianCommand = { command: string; args: string[] };
 
-/** Prefer this checkout's built CLI, but preserve the PATH fallback on any resolution failure. */
+/**
+ * Prefer this checkout's built CLI, but preserve the PATH fallback on any resolution failure.
+ *
+ * `cliUrl` is resolved lazily INSIDE the try, not as a default-parameter value: in the SEA
+ * binary the shell runs from an esbuild bundle where `import.meta.url` is not a valid URL
+ * base, so `new URL('../../dist/cli.js', import.meta.url)` throws. A default-param throw
+ * would escape this function's try/catch (defaults evaluate before the body) and break the
+ * exit-0 hook-safety contract — so it must be caught here and fall back to `librarian` on
+ * PATH (the correct answer for the installed binary anyway).
+ */
 export function resolveLibrarianCommand(
   exists: (file: string) => boolean = fs.existsSync,
-  cliUrl: URL = new URL('../../dist/cli.js', import.meta.url),
+  cliUrl?: URL,
   override: string | undefined = process.env.LIBRARIAN_BIN,
+  base: string = import.meta.url,
 ): LibrarianCommand {
   try {
     if (override) {
       return { command: override, args: [] };
     }
-    const cliPath = fileURLToPath(cliUrl);
+    const cliPath = fileURLToPath(cliUrl ?? new URL('../../dist/cli.js', base));
     return exists(cliPath)
       ? { command: process.execPath, args: [cliPath] }
       : { command: 'librarian', args: [] };
@@ -200,7 +213,7 @@ function handOff(event: CanonicalEvent): void {
     return;
   }
   if (result.status !== 0) {
-    logError(`librarian collect rejected an event (exit ${result.status}): ${result.stderr?.trim() ?? ''}`);
+    logError(`librarian collect rejected an event (exit ${result.status}): ${String(result.stderr ?? '').trim()}`);
   }
 }
 
@@ -310,8 +323,8 @@ function contextFor(sessionId: string, cwd: string): Context {
 
 /**
  * Read stdin, map, and hand off. Exposed for the integration tests (they call it with a
- * captured stdin string and a stubbed handoff) — the real entry is `main()` below, which
- * wires stdin/`handOff` and guarantees exit 0.
+ * captured stdin string and a stubbed handoff) — the real entry is `runClaudeCodeHook()`
+ * below, which wires stdin/`handOff`; the CLI subcommand guarantees exit 0.
  *
  * `readStdin` and `deliver` are injected so tests can drive the pure control flow (parse
  * → lower → resolve → map → hand off) without a real stdin or a real `librarian`.
@@ -375,23 +388,17 @@ function readStdinSync(): string {
 }
 
 /**
- * Process entry. Hard-guarantees exit 0 no matter what: a hook must never break the
- * host Claude Code session (§14, Definition of done). Any escaped throw is logged to
- * stderr and swallowed.
+ * The full Claude Code hook run behind `librarian hook claude-code`: read stdin, map, hand
+ * off to `librarian collect`, and for UserPromptSubmit/SessionStart emit the injected
+ * `additionalContext` on stdout. Swallows every error (§14, Definition of done) — never
+ * throws, and never writes to stdout on failure. The CLI subcommand wraps this with the
+ * load-bearing `process.exit(0)` so a hook can never break the host Claude Code session.
  */
-function main(): void {
+export function runClaudeCodeHook(): void {
   try {
     runHook(readStdinSync, handOff);
   } catch (err) {
     const reason = err instanceof Error ? err.stack ?? err.message : String(err);
     logError(`unexpected hook error (swallowed to protect the session): ${reason}`);
   }
-  // Always succeed. This is the load-bearing line of the hook-safety contract.
-  process.exit(0);
-}
-
-// Auto-run only as the hook entry point, so this module can be imported by tests
-// (exercising `runHook`) without executing the process-exiting `main()`.
-if (import.meta.main) {
-  main();
 }
