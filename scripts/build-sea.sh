@@ -11,10 +11,14 @@ mkdir -p "$OUT"
 
 # 1. Typecheck (the real gate) then bundle the ESM CLI → one CJS file. SEA takes a
 #    single CommonJS entry; sea-entry.ts calls main() directly (import.meta.main
-#    doesn't survive the CJS bundle).
+#    doesn't survive the CJS bundle). The version is stamped in at build time so the
+#    installed binary can report it (`librarian --version`); run-from-source keeps
+#    the dev sentinel in src/version.ts.
+VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)"
 npm run build
 node_modules/.bin/esbuild src/sea-entry.ts \
   --bundle --platform=node --format=cjs --target=node24 \
+  --define:__LIBRARIAN_VERSION__="\"$VERSION\"" \
   --outfile="$OUT/librarian.cjs"
 
 # 2. SEA blob from the bundle + the two native artifacts embedded as assets.
@@ -37,4 +41,4 @@ if [[ "$OSTYPE" == darwin* ]]; then
 fi
 
 chmod +x "$OUT/librarian"
-echo "built $OUT/librarian"
+echo "built $OUT/librarian ($VERSION)"

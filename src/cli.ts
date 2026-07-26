@@ -23,6 +23,7 @@ import { scoringConfigSnapshot, type ScoringConfig } from './recall/scoring.ts';
 import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
 import { queryEmbedding, updateIndex, type QueryEmbedding } from './recall/embedding.ts';
+import { VERSION } from './version.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -66,6 +67,7 @@ const USAGE = `usage:
   librarian mcp [--data-dir <dir>] [--index-dir <dir>] [--diagnostics-dir <dir>]
                                            start the MCP stdio server
   librarian machine-id [--path <file>]     print the persisted machine id
+  librarian --version                      print the binary version
 `;
 
 const PULL_RECALL_DEFAULT_LIMIT = 10;
@@ -1234,6 +1236,11 @@ export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
 
   switch (command) {
+    case '--version':
+    case '-v':
+    case 'version':
+      process.stdout.write(`librarian ${VERSION}\n`);
+      break;
     case 'collect':
       collect(parseFlags(rest));
       break;

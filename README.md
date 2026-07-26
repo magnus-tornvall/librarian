@@ -2,6 +2,57 @@
 
 A personal context layer for AI coding agents. Design: `docs/specs/librarian-design-consolidated.md` — the spec is the source of truth; its §12 roadmap is the live plan.
 
+## Install
+
+Librarian ships as a single self-contained executable — no Node required on the
+target machine (spec §14 amendment; npm is dev tooling only). The installer places
+it at a **user-writable** `~/.librarian/bin/librarian` (no sudo) and puts that dir
+on `PATH`. Re-running is safe: it upgrades the binary in place (atomic replace) and
+never duplicates the `PATH` line. Single-platform for now (your OS/arch); Windows
+`.ps1` and cross-platform builds are deferred (spec §15).
+
+There is no public release feed yet, so install from a locally built binary (also
+the CI/verify path):
+
+```sh
+npm run build:binary                                   # → build/sea/librarian
+LIBRARIAN_BINARY=build/sea/librarian sh scripts/install.sh
+```
+
+Once releases are published, the installer will fetch the binary itself:
+
+```sh
+curl -fsSL <release-url>/install.sh | sh   # requires a published release feed
+```
+
+Open a new shell afterward, or run the `export PATH=…` line the installer prints.
+`librarian --version` reports the installed binary's build.
+
+## Build the binary
+
+```sh
+npm run build:binary   # bundle (esbuild ESM→CJS) → SEA blob → single executable
+```
+
+Output: `build/sea/librarian`. The version (`git describe`) is stamped in at build
+time so `librarian --version` reports it. See
+[`docs/research/sea-poc-findings.md`](docs/research/sea-poc-findings.md) for how the
+native deps (`better-sqlite3`, `sqlite-vec`) are embedded and extracted.
+
+## Run from source (dev mode)
+
+You don't need the binary to develop against the pipeline — run the CLI straight
+from the TypeScript build:
+
+```sh
+npm run build          # tsc → dist/cli.js
+node dist/cli.js doctor
+node dist/cli.js --version   # prints 0.0.0-dev (the binary stamps the real version)
+```
+
+This is the resolution path the plugins already use (`LIBRARIAN_BIN` → config
+`bin` → `dist/cli.js`); it is **not** a user install path.
+
 ## Qualifying a provider
 
 `npm run qualify` runs the provider-qualification fixtures offline with canned

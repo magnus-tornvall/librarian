@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:sea": "bash scripts/build-sea.sh",
+    "build:binary": "bash scripts/build-sea.sh",
     "test": "node --import ./tests/setup-home.ts --test \"tests/**/*.test.ts\"",
     "qualify": "node --import ./tests/setup-home.ts --test tests/distill/providerQualification.test.ts",
     "lint": "eslint src"
