@@ -47,14 +47,10 @@ trap - EXIT INT TERM
 echo "librarian: installed $TARGET"
 
 # --- PATH wiring -------------------------------------------------------------
-# If BIN_DIR is already on PATH, nothing to do. Otherwise append one line to the
-# user's shell profile, guarded by a marker so re-running never duplicates it.
-case ":$PATH:" in
-  *":$BIN_DIR:"*)
-    exit 0
-    ;;
-esac
-
+# Persist BIN_DIR on PATH via one profile line, guarded by a marker so re-running
+# never duplicates it. This is independent of the *current* PATH: a fresh login
+# shell must find librarian even if this run happens to already have BIN_DIR
+# exported (e.g. a re-run in the same shell, or CI).
 MARKER="# added by librarian installer"
 LINE="export PATH=\"$BIN_DIR:\$PATH\" $MARKER"
 
@@ -74,4 +70,8 @@ else
   echo "librarian: added $BIN_DIR to PATH in $PROFILE"
 fi
 
-echo "librarian: open a new shell, or run:  export PATH=\"$BIN_DIR:\$PATH\""
+# Only the "use it now" hint depends on the current PATH.
+case ":$PATH:" in
+  *":$BIN_DIR:"*) ;; # already active in this shell
+  *) echo "librarian: open a new shell, or run:  export PATH=\"$BIN_DIR:\$PATH\"" ;;
+esac

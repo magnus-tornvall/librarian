@@ -7,24 +7,25 @@ A personal context layer for AI coding agents. Design: `docs/specs/librarian-des
 Librarian ships as a single self-contained executable — no Node required on the
 target machine (spec §14 amendment; npm is dev tooling only). The installer places
 it at a **user-writable** `~/.librarian/bin/librarian` (no sudo) and puts that dir
-on `PATH`:
+on `PATH`. Re-running is safe: it upgrades the binary in place (atomic replace) and
+never duplicates the `PATH` line. Single-platform for now (your OS/arch); Windows
+`.ps1` and cross-platform builds are deferred (spec §15).
 
-```sh
-curl -fsSL <release-url>/install.sh | sh
-```
-
-Re-running is safe: it upgrades the binary in place (atomic replace) and never
-duplicates the `PATH` line. Open a new shell afterward, or run the `export PATH=…`
-line it prints. Single-platform for now (your OS/arch); Windows `.ps1` and
-cross-platform builds are deferred (spec §15).
-
-To install a locally built binary (no release feed yet) or in CI:
+There is no public release feed yet, so install from a locally built binary (also
+the CI/verify path):
 
 ```sh
 npm run build:binary                                   # → build/sea/librarian
 LIBRARIAN_BINARY=build/sea/librarian sh scripts/install.sh
 ```
 
+Once releases are published, the installer will fetch the binary itself:
+
+```sh
+curl -fsSL <release-url>/install.sh | sh   # requires a published release feed
+```
+
+Open a new shell afterward, or run the `export PATH=…` line the installer prints.
 `librarian --version` reports the installed binary's build.
 
 ## Build the binary
