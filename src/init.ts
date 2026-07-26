@@ -27,7 +27,7 @@ function onPath(name: string): boolean {
   });
 }
 
-async function probeOllama(endpoint: string): Promise<string[] | undefined> {
+export async function probeOllama(endpoint: string): Promise<string[] | undefined> {
   try {
     const response = await fetch(`${endpoint.replace(/\/$/, '')}/api/tags`, { signal: AbortSignal.timeout(500) });
     if (!response.ok) return undefined;
@@ -56,7 +56,7 @@ function surfaceInstructions(agent: string): string {
   return '  OpenCode: install the plugin per adapters/opencode/README.md (#155).';
 }
 
-function readRawConfig(configPath: string): Record<string, unknown> {
+export function readRawConfig(configPath: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as unknown;
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
