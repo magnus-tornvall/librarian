@@ -41,6 +41,19 @@ test('loadConfig rejects malformed scoring values by their keys', () => {
   assert.throws(() => loadConfig(file), /scoring\.relevanceFloor/);
 });
 
+test('loadConfig reads optional vault path and rejects malformed values', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-config-'));
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ vault: '/home/me/notes' }));
+  assert.equal(loadConfig(file).vault, '/home/me/notes');
+  fs.writeFileSync(file, JSON.stringify({ scoring: {} }));
+  assert.equal(loadConfig(file).vault, undefined);
+  fs.writeFileSync(file, JSON.stringify({ vault: '' }));
+  assert.throws(() => loadConfig(file), /vault/);
+  fs.writeFileSync(file, JSON.stringify({ vault: 42 }));
+  assert.throws(() => loadConfig(file), /vault/);
+});
+
 test('loadConfig reads optional embedding settings and rejects malformed values', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-config-'));
   const file = path.join(dir, 'config.json');

@@ -341,6 +341,51 @@ test('drain: a tombstoned note has its generated file removed on the next drain'
   assert.match(second.stdout, /notes removed: 1/, 'the removal is reported in the summary');
 });
 
+function writeConfig(dir: string, config: Record<string, unknown>): string {
+  const configPath = path.join(dir, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  return configPath;
+}
+
+test('drain: a configured vault path is used when --vault is absent', () => {
+  const root = tempDir('cli-drain-config-vault-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const vaultDir = path.join(root, 'configured-vault');
+  const goodFixture = writeFixture(root);
+  const configPath = writeConfig(root, { vault: vaultDir });
+
+  ingest(dataDir, eligibleEvents('sess-a'));
+
+  const result = runCli(
+    ['drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--provider-fixture', goodFixture, '--config', configPath],
+    '',
+  );
+  assert.equal(result.status, 0, `drain should exit 0; stderr: ${result.stderr}`);
+  assert.equal(generatedFiles(vaultDir).length, 1, 'the note must export to the configured vault without --vault');
+  assert.match(result.stdout, /notes exported: 1/);
+});
+
+test('drain: an explicit --vault overrides the configured vault path', () => {
+  const root = tempDir('cli-drain-vault-override-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const configuredVault = path.join(root, 'configured-vault');
+  const flagVault = path.join(root, 'flag-vault');
+  const goodFixture = writeFixture(root);
+  const configPath = writeConfig(root, { vault: configuredVault });
+
+  ingest(dataDir, eligibleEvents('sess-a'));
+
+  const result = runCli(
+    ['drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--provider-fixture', goodFixture, '--config', configPath, '--vault', flagVault],
+    '',
+  );
+  assert.equal(result.status, 0, `drain should exit 0; stderr: ${result.stderr}`);
+  assert.equal(generatedFiles(flagVault).length, 1, '--vault must win: the note lands in the flag vault');
+  assert.equal(generatedFiles(configuredVault).length, 0, 'the configured vault must stay untouched when --vault is given');
+});
+
 test('drain: without --vault, distill happens but no vault is written anywhere', () => {
   const root = tempDir('cli-drain-novault-');
   const dataDir = path.join(root, 'data');

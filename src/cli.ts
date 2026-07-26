@@ -55,8 +55,8 @@ const USAGE = `usage:
                                               print a note, optionally with source provenance
   librarian note edit <note_id> --body <text> [--data-dir <dir>] [--index-dir <dir>]
                                               append a human revision replacing a note's body
-  librarian note import-curated <file> --vault <dir> [--data-dir <dir>] [--index-dir <dir>]
-                                              import a curated Markdown note
+  librarian note import-curated <file> [--vault <dir>] [--data-dir <dir>] [--index-dir <dir>]
+                                              import a curated Markdown note (--vault falls back to config.vault)
   librarian note tombstone <note_id> [--data-dir <dir>] [--index-dir <dir>] [--reason <text>]
                                                tombstone the latest note revision
   librarian supersede <old_note_id> <new_note_id> [--data-dir <dir>] [--index-dir <dir>] [--reason <text>]
@@ -155,7 +155,7 @@ async function noteImportCurated(argv: string[]): Promise<void> {
   const [file, ...rest] = argv;
   if (!file || file.startsWith('--')) throw new Error('note import-curated requires <file>');
   const flags = parseFlags(rest);
-  const vault = flags.get('vault');
+  const vault = flags.get('vault') ?? loadConfig(flags.get('config')).vault;
   if (!vault) throw new Error('note import-curated requires --vault <dir>');
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const note = importCuratedNote(vault, file, dataDir);
@@ -906,7 +906,7 @@ async function distillCommand(flags: Map<string, string>): Promise<void> {
  *      holder is reported on stderr and does NOT abort the drain — the export
  *      step still runs over whatever notes already exist.
  *   2. Export everything pending to `<vault>/generated/**` — skipped entirely
- *      when `--vault` is absent.
+ *      when no vault resolves (neither `--vault` nor `config.vault`).
  *   3. Print a one-line-per-fact summary to stdout. "Nothing pending" prints
  *      exactly that and exits 0 — success, not an error.
  *
@@ -915,7 +915,7 @@ async function distillCommand(flags: Map<string, string>): Promise<void> {
 async function drainCommand(flags: Map<string, string>): Promise<void> {
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const diagnosticsDir = flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR;
-  const vaultDir = flags.get('vault');
+  const vaultDir = flags.get('vault') ?? loadConfig(flags.get('config')).vault;
   const indexDir = flags.get('index-dir') ?? INDEX_DIR;
   const provider = resolveProvider(flags, flags.get('config'));
 
