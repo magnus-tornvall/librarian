@@ -4,6 +4,7 @@
   "disableExperimentalSEAWarning": true,
   "assets": {
     "better_sqlite3.node": "node_modules/better-sqlite3/build/Release/better_sqlite3.node",
-    "vec0.dylib": "node_modules/sqlite-vec-darwin-arm64/vec0.dylib"
+    "vec0.dylib": "node_modules/sqlite-vec-darwin-arm64/vec0.dylib",
+    "opencode-plugin.js": "dist/opencode-plugin.js"
   }
 }

@@ -9,3 +9,5 @@ export const DIAGNOSTICS_DIR = path.join(LIBRARIAN_ROOT, 'diagnostics');
 export const CACHE_DIR = path.join(LIBRARIAN_ROOT, 'cache');
 export const MACHINE_ID_PATH = path.join(LIBRARIAN_ROOT, 'machine-id');
 export const CONFIG_PATH = path.join(LIBRARIAN_ROOT, 'config.json');
+// Where scripts/install.sh places the single-executable (LIBRARIAN_BIN_DIR default).
+export const INSTALLED_BIN = path.join(LIBRARIAN_ROOT, 'bin', 'librarian');

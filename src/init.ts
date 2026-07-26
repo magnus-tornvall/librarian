@@ -56,6 +56,15 @@ function surfaceInstructions(agent: string): string {
   return '  OpenCode: install the plugin per adapters/opencode/README.md (#155).';
 }
 
+/** Install the OpenCode plugin globally and point config `bin` at the installed binary. */
+async function wireOpencode(prompter: Prompter, configPath: string): Promise<void> {
+  const { installOpencodePlugin } = await import('./opencode-install.ts');
+  const { pluginFile, bin } = installOpencodePlugin(configPath);
+  prompter.say(`  OpenCode: installed plugin → ${pluginFile}`);
+  prompter.say(`            config bin → ${bin}`);
+  prompter.say('            Fully quit and relaunch OpenCode (plugins load only at startup).');
+}
+
 export function readRawConfig(configPath: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as unknown;
@@ -119,12 +128,23 @@ export async function runInitWizard(prompter: Prompter, detected: Detected, conf
 
   const vault = await prompter.ask('Vault path (blank to keep current)', currentVault);
 
+  // Write the managed config first, THEN wire hosts — wireOpencode records `bin`
+  // into the same file and must not be clobbered by a later writeConfig.
+  writeConfig(existing, configPath, { provider, model, embedding, vault: vault || undefined });
+
   for (const agent of detected.agents) {
+    if (agent === 'opencode') {
+      if (await prompter.confirm('Install the OpenCode plugin globally now?', true)) {
+        await wireOpencode(prompter, configPath);
+      } else {
+        prompter.say(surfaceInstructions(agent));
+      }
+      continue;
+    }
     if (await prompter.confirm(`Show ${agent} wiring instructions?`, true)) {
       prompter.say(surfaceInstructions(agent));
     }
   }
 
-  writeConfig(existing, configPath, { provider, model, embedding, vault: vault || undefined });
   prompter.say(`\nWrote ${configPath}`);
 }

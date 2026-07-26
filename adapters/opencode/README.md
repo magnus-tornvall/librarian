@@ -25,17 +25,36 @@ distiller (§4, §5).
 
 ## Install
 
-The fastest path for a per-project smoke test is the repo scripts (they build the CLI,
-record its absolute path in `~/.librarian/config.json`, and symlink this plugin into the
-repo-root `.opencode/plugins/`):
+**The supported path is `librarian init`.** The wizard's OpenCode step bundles this
+adapter into a single self-contained plugin file, writes it to the **global** plugin dir
+`~/.config/opencode/plugins/librarian.ts`, and records the installed binary in
+`~/.librarian/config.json` `bin` so the plugin can spawn `librarian collect` without
+relying on `$PATH`:
+
+```sh
+librarian init      # detects OpenCode → offers to install the plugin globally
+```
+
+The bundle is import-free (`map.ts`, `inject.ts`, and `ulid` are all inlined by
+`scripts/build-opencode-plugin.sh` → `dist/opencode-plugin.js`, which is embedded in the
+packaged binary as a SEA asset). One file, no `package.json`, no `bun install`, no sibling
+files — OpenCode loads flat files directly and treats each as its own plugin, so bundling
+is what makes a clean global install possible. `src/opencode-install.ts` performs the
+write; there is no manual copy step.
+
+### Repo-local dev smoke test (source iteration only)
+
+When you are editing the adapter *sources* and want OpenCode to load them live (no rebuild
+per edit), the repo scripts symlink `plugin.ts` into the repo-root `.opencode/plugins/` and
+point config `bin` at the built `dist/cli.js`:
 
 ```sh
 ./scripts/opencode-setup.sh      # build + write config bin/runtime + symlink plugin into .opencode/plugins/
 ./scripts/opencode-teardown.sh   # remove the symlink + drop the config bin/runtime
 ```
 
-See the top-level [`README.md`](../../README.md#opencode-plugin-local-smoke-test) for
-what they do. To install by hand instead:
+These are dev-only (a symlink into the repo, not a real install). For everyone else, use
+`librarian init`. To wire it by hand instead:
 
 1. **Make the `librarian` CLI locatable.** The plugin shells out to `librarian collect`
    (delivery) and `librarian machine-id` (machine id). Build the CLI (`npm run build` at
