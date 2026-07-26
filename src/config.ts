@@ -14,6 +14,8 @@ export type LibrarianConfig = {
     timeoutMs: number;
     recallTimeoutMs: number;
   };
+  // Persisted home for exported notes; the fallback when a command's --vault is absent.
+  vault?: string;
   scoring: ScoringConfig;
 };
 
@@ -70,6 +72,14 @@ function positiveTimeout(value: unknown, fallback: number, key: string, configPa
   return timeout;
 }
 
+function vaultConfig(value: unknown, configPath: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) {
+    invalid('vault', configPath, 'a non-empty string');
+  }
+  return value;
+}
+
 function embeddingConfig(value: unknown, configPath: string): LibrarianConfig['embedding'] {
   if (value === undefined) return undefined;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -117,5 +127,5 @@ export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {
     throw new Error(`invalid inference.model in ${configPath}: expected a string`);
   }
   const model = (inference.model as string | undefined) ?? (provider === 'opencode' ? 'opencode/big-pickle' : undefined);
-  return { inference: { provider, model }, embedding: embeddingConfig(root.embedding, configPath), scoring: scoringConfig(root.scoring, configPath) };
+  return { inference: { provider, model }, embedding: embeddingConfig(root.embedding, configPath), vault: vaultConfig(root.vault, configPath), scoring: scoringConfig(root.scoring, configPath) };
 }

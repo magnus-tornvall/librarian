@@ -155,7 +155,7 @@ async function noteImportCurated(argv: string[]): Promise<void> {
   const [file, ...rest] = argv;
   if (!file || file.startsWith('--')) throw new Error('note import-curated requires <file>');
   const flags = parseFlags(rest);
-  const vault = flags.get('vault');
+  const vault = flags.get('vault') ?? loadConfig(flags.get('config')).vault;
   if (!vault) throw new Error('note import-curated requires --vault <dir>');
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const note = importCuratedNote(vault, file, dataDir);
@@ -915,7 +915,7 @@ async function distillCommand(flags: Map<string, string>): Promise<void> {
 async function drainCommand(flags: Map<string, string>): Promise<void> {
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const diagnosticsDir = flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR;
-  const vaultDir = flags.get('vault');
+  const vaultDir = flags.get('vault') ?? loadConfig(flags.get('config')).vault;
   const indexDir = flags.get('index-dir') ?? INDEX_DIR;
   const provider = resolveProvider(flags, flags.get('config'));
 
