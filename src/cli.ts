@@ -33,6 +33,8 @@ import { VERSION } from './version.ts';
  */
 
 const USAGE = `usage:
+  librarian init [--config <file>] [--index-dir <dir>]
+                                           guided setup: detect env, choose provider/embedding/vault/surfaces, write config, verify with doctor
   librarian collect [--data-dir <dir>]     read canonical-event NDJSON on stdin
   librarian distill [--data-dir <dir>] [--index-dir <dir>] [--diagnostics-dir <dir>] [--provider <claude|opencode>] [--model <provider/model>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
@@ -431,8 +433,12 @@ async function doctorCommand(argv: string[]): Promise<void> {
     process.stdout.write(JSON.stringify(report) + '\n');
     return;
   }
+  process.stdout.write(renderDoctorText(report) + '\n');
+}
+
+function renderDoctorText(report: DoctorReport): string {
   const embedding = report.embedding;
-  process.stdout.write([
+  return [
     `Native stack: ${report.native.ok ? 'ok' : `FAILED — ${report.native.error}`}`,
     `Embedding: ${embedding.state}`,
     ...(embedding.model ? [`Configured model: ${embedding.model}${embedding.digest ? `@${embedding.digest}` : ''}`] : []),
@@ -442,7 +448,32 @@ async function doctorCommand(argv: string[]): Promise<void> {
     ...(report.index_error ? [`Index: ${report.index_error}`] : []),
     `Coverage: ${report.coverage.embedded}/${report.coverage.total}`,
     `Indexed through: ${report.indexed_through || '(none)'}`,
-  ].join('\n') + '\n');
+  ].join('\n');
+}
+
+async function initCommand(argv: string[]): Promise<void> {
+  let configPath = CONFIG_PATH;
+  let indexDir = INDEX_DIR;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--config' || arg === '--index-dir') {
+      const value = argv[++i];
+      if (value === undefined) throw new Error(`flag ${arg} requires a value`);
+      if (arg === '--config') configPath = value;
+      else indexDir = value;
+    } else throw new Error(`unexpected argument: ${arg}`);
+  }
+  const { detectEnvironment, runInitWizard } = await import('./init.ts');
+  const { stdioPrompter } = await import('./prompt.ts');
+  const prompter = stdioPrompter();
+  try {
+    await runInitWizard(prompter, await detectEnvironment(), configPath);
+  } finally {
+    prompter.close();
+  }
+  const report = await doctorReport(indexDir, configPath);
+  process.stdout.write(`\nVerifying with doctor:\n${renderDoctorText(report)}\n`);
+  process.stdout.write(report.native.ok ? '\n✓ Setup complete.\n' : '\n✗ Native stack check failed — see above.\n');
 }
 
 function parseNoteShowArgs(argv: string[]): NoteShowOptions {
@@ -1267,6 +1298,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case 'doctor':
       await doctorCommand(rest);
+      break;
+    case 'init':
+      await initCommand(rest);
       break;
     case 'supersede':
       await supersede(rest);
