@@ -35,6 +35,7 @@ import { VERSION } from './version.ts';
 const USAGE = `usage:
   librarian init [--config <file>] [--index-dir <dir>]
                                            guided setup: detect env, choose provider/embedding/vault/surfaces, write config, verify with doctor
+  librarian config [--config <file>]       curated menu to edit one setting (provider/embedding/vault); scoring/unknown keys preserved
   librarian collect [--data-dir <dir>]     read canonical-event NDJSON on stdin
   librarian distill [--data-dir <dir>] [--index-dir <dir>] [--diagnostics-dir <dir>] [--provider <claude|opencode>] [--model <provider/model>] [--provider-fixture <file>]
                                            distill pending event deltas into notes
@@ -484,6 +485,26 @@ async function initCommand(argv: string[]): Promise<void> {
     process.stdout.write('\n✓ Setup complete.\n');
   } else {
     process.stdout.write(`\n⚠ Config written, but doctor is not fully green (embedding: ${report.embedding.state}). Fix the endpoint and re-run \`librarian doctor\`.\n`);
+  }
+}
+
+async function configCommand(argv: string[]): Promise<void> {
+  let configPath = CONFIG_PATH;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--config') {
+      const value = argv[++i];
+      if (value === undefined) throw new Error('flag --config requires a value');
+      configPath = value;
+    } else throw new Error(`unexpected argument: ${arg}`);
+  }
+  const { runConfigMenu } = await import('./config-menu.ts');
+  const { stdioPrompter } = await import('./prompt.ts');
+  const prompter = stdioPrompter();
+  try {
+    await runConfigMenu(prompter, configPath);
+  } finally {
+    prompter.close();
   }
 }
 
@@ -1312,6 +1333,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case 'init':
       await initCommand(rest);
+      break;
+    case 'config':
+      await configCommand(rest);
       break;
     case 'supersede':
       await supersede(rest);
