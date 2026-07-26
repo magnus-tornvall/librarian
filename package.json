@@ -11,6 +11,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:sea": "bash scripts/build-sea.sh",
     "test": "node --import ./tests/setup-home.ts --test \"tests/**/*.test.ts\"",
     "qualify": "node --import ./tests/setup-home.ts --test tests/distill/providerQualification.test.ts",
     "lint": "eslint src"
@@ -18,7 +19,9 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.0",
+    "esbuild": "^0.28.1",
     "eslint": "^10.7.0",
+    "postject": "^1.0.0-alpha.6",
     "typescript": "^5",
     "typescript-eslint": "^8.64.0"
   },
