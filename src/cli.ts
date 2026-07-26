@@ -55,8 +55,8 @@ const USAGE = `usage:
                                               print a note, optionally with source provenance
   librarian note edit <note_id> --body <text> [--data-dir <dir>] [--index-dir <dir>]
                                               append a human revision replacing a note's body
-  librarian note import-curated <file> --vault <dir> [--data-dir <dir>] [--index-dir <dir>]
-                                              import a curated Markdown note
+  librarian note import-curated <file> [--vault <dir>] [--data-dir <dir>] [--index-dir <dir>]
+                                              import a curated Markdown note (--vault falls back to config.vault)
   librarian note tombstone <note_id> [--data-dir <dir>] [--index-dir <dir>] [--reason <text>]
                                                tombstone the latest note revision
   librarian supersede <old_note_id> <new_note_id> [--data-dir <dir>] [--index-dir <dir>] [--reason <text>]
@@ -906,7 +906,7 @@ async function distillCommand(flags: Map<string, string>): Promise<void> {
  *      holder is reported on stderr and does NOT abort the drain — the export
  *      step still runs over whatever notes already exist.
  *   2. Export everything pending to `<vault>/generated/**` — skipped entirely
- *      when `--vault` is absent.
+ *      when no vault resolves (neither `--vault` nor `config.vault`).
  *   3. Print a one-line-per-fact summary to stdout. "Nothing pending" prints
  *      exactly that and exits 0 — success, not an error.
  *
