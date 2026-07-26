@@ -40,7 +40,10 @@ async function editEmbedding(prompter: Prompter, existing: Record<string, unknow
   const currentEmbedding = existing.embedding !== null && typeof existing.embedding === 'object' && !Array.isArray(existing.embedding)
     ? existing.embedding as Record<string, unknown>
     : undefined;
-  const currentDefault = currentEmbedding ? 'ollama-local' : 'off';
+  // Default the picklist to the *current* mode so Enter-through is a no-op editor
+  // (file-over-app): a custom endpoint must not collapse into ollama-local and get
+  // silently overwritten with the local endpoint/model.
+  const currentDefault = !currentEmbedding ? 'off' : currentEmbedding.endpoint === endpoint ? 'ollama-local' : CUSTOM;
 
   const choice = await prompter.select(
     `Embedding (Ollama ${models ? `reachable, ${models.length} models` : 'not detected'})`,

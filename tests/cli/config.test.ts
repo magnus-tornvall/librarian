@@ -53,3 +53,22 @@ test('config custom embedding endpoint path writes endpoint + model', () => {
   const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   assert.deepEqual(raw.scoring, { relevanceFloor: 0.1 });
 });
+
+test('config re-edit of a custom embedding with blank answers is a no-op (endpoint/model preserved)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-config-'));
+  const configPath = path.join(root, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    inference: { provider: 'claude' },
+    embedding: { endpoint: 'http://custom:9999', model: 'custom-model', timeoutMs: 123, recallTimeoutMs: 456 },
+    scoring: { relevanceFloor: 0.2 },
+  }));
+
+  // section=embedding, then accept the default choice (custom, since the endpoint
+  // is not the local Ollama one) and Enter through endpoint + model.
+  const result = runConfig(configPath, 'embedding\n\n\n\n');
+  assert.equal(result.status, 0, result.stderr);
+
+  const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.deepEqual(raw.embedding, { endpoint: 'http://custom:9999', model: 'custom-model', timeoutMs: 123, recallTimeoutMs: 456 });
+  assert.deepEqual(raw.scoring, { relevanceFloor: 0.2 });
+});
