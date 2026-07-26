@@ -50,6 +50,26 @@ test('init detection is fail-soft: absent agents and Ollama degrade, never throw
   const config = loadConfig(configPath);
   assert.equal(config.inference.provider, 'claude');
   assert.deepEqual(config.embedding, { endpoint: 'http://127.0.0.1:1', model: 'manual-embed', timeoutMs: 10000, recallTimeoutMs: 400 });
+  // A configured-but-unreachable endpoint must warn, not falsely claim green.
+  assert.match(result.stdout, /Embedding: unreachable/);
+  assert.match(result.stdout, /⚠ Config written/);
+  assert.doesNotMatch(result.stdout, /Setup complete/);
+});
+
+test('init re-run keeps existing provider and vault when answers are blank', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-init-'));
+  const configPath = path.join(root, 'config.json');
+  const indexDir = path.join(root, 'index');
+  const vault = path.join(root, 'vault');
+  // First run: provider=claude (no model prompt), embedding=off, vault=<path>.
+  assert.equal(runInit(configPath, indexDir, `claude\noff\n${vault}\n`).status, 0);
+  // Re-run with every answer blank must edit in place, not revert to detection.
+  const result = runInit(configPath, indexDir, '\n\n\n');
+
+  assert.equal(result.status, 0, result.stderr);
+  const config = loadConfig(configPath);
+  assert.equal(config.inference.provider, 'claude');
+  assert.equal(config.vault, vault);
 });
 
 test('init round-trip preserves unmanaged config keys (scoring)', () => {

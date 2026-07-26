@@ -473,7 +473,18 @@ async function initCommand(argv: string[]): Promise<void> {
   }
   const report = await doctorReport(indexDir, configPath);
   process.stdout.write(`\nVerifying with doctor:\n${renderDoctorText(report)}\n`);
-  process.stdout.write(report.native.ok ? '\n✓ Setup complete.\n' : '\n✗ Native stack check failed — see above.\n');
+  // Green = native stack ok AND embedding either configured-and-reachable or
+  // deliberately off (BM25-only). A configured-but-unreachable endpoint is a
+  // warning, not "complete" — don't overclaim what doctor just printed. A missing
+  // index is expected on a fresh install (drain builds it), so it isn't a failure.
+  const embeddingGreen = report.embedding.state === 'ok' || report.embedding.state === 'unconfigured';
+  if (!report.native.ok) {
+    process.stdout.write('\n✗ Native stack check failed — see above.\n');
+  } else if (embeddingGreen) {
+    process.stdout.write('\n✓ Setup complete.\n');
+  } else {
+    process.stdout.write(`\n⚠ Config written, but doctor is not fully green (embedding: ${report.embedding.state}). Fix the endpoint and re-run \`librarian doctor\`.\n`);
+  }
 }
 
 function parseNoteShowArgs(argv: string[]): NoteShowOptions {

@@ -10,8 +10,6 @@ import type { Prompter } from './prompt.ts';
  * author it (Claude Code hook JSON is the plugin manifest, #154).
  */
 export type Detected = {
-  node: string;
-  nvmrc?: string;
   agents: string[]; // subset of ['claude', 'opencode'] found on PATH
   ollamaEndpoint: string;
   ollamaModels?: string[]; // undefined = endpoint unreachable
@@ -40,19 +38,11 @@ async function probeOllama(endpoint: string): Promise<string[] | undefined> {
   }
 }
 
-export async function detectEnvironment(cwd = process.cwd()): Promise<Detected> {
-  let nvmrc: string | undefined;
-  try {
-    nvmrc = fs.readFileSync(path.join(cwd, '.nvmrc'), 'utf8').trim() || undefined;
-  } catch {
-    nvmrc = undefined;
-  }
+export async function detectEnvironment(): Promise<Detected> {
   // ponytail: LIBRARIAN_OLLAMA_URL is a test seam so detection is deterministic
   // regardless of whether the host happens to run Ollama; default is the real port.
   const ollamaEndpoint = process.env.LIBRARIAN_OLLAMA_URL ?? 'http://127.0.0.1:11434';
   return {
-    node: process.version,
-    nvmrc,
     agents: ['claude', 'opencode'].filter(onPath),
     ollamaEndpoint,
     ollamaModels: await probeOllama(ollamaEndpoint),
@@ -86,8 +76,8 @@ type WizardResult = {
  * Merge managed keys (inference, embedding, vault) over the existing config,
  * preserving every unmanaged key (e.g. `scoring`) so a re-run never drops them.
  */
-function writeConfig(configPath: string, result: WizardResult): Record<string, unknown> {
-  const next = readRawConfig(configPath);
+function writeConfig(existing: Record<string, unknown>, configPath: string, result: WizardResult): Record<string, unknown> {
+  const next = existing;
   next.inference = { provider: result.provider, ...(result.model ? { model: result.model } : {}) };
   if (result.embedding) next.embedding = result.embedding;
   else delete next.embedding;
@@ -98,14 +88,22 @@ function writeConfig(configPath: string, result: WizardResult): Record<string, u
 }
 
 export async function runInitWizard(prompter: Prompter, detected: Detected, configPath: string): Promise<void> {
+  // Existing config drives the defaults so a re-run edits in place (file-over-app:
+  // the wizard is an editor) — blank keeps the shown current value.
+  const existing = readRawConfig(configPath);
+  const currentInference = existing.inference !== null && typeof existing.inference === 'object' ? existing.inference as Record<string, unknown> : {};
+  const currentProvider = currentInference.provider === 'claude' || currentInference.provider === 'opencode' ? currentInference.provider : undefined;
+  const currentModel = typeof currentInference.model === 'string' ? currentInference.model : undefined;
+  const currentVault = typeof existing.vault === 'string' ? existing.vault : '';
+
   prompter.say('Detected environment:');
-  prompter.say(`  node ${detected.node}${detected.nvmrc ? ` (.nvmrc pins ${detected.nvmrc})` : ''}`);
   prompter.say(`  agent CLIs on PATH: ${detected.agents.length ? detected.agents.join(', ') : 'none'}`);
   prompter.say(`  Ollama: ${detected.ollamaModels ? `reachable (${detected.ollamaModels.length} models)` : 'not detected'}`);
   prompter.say('');
 
-  const provider = await prompter.select('Inference provider', ['claude', 'opencode'] as const, detected.agents[0] === 'claude' ? 'claude' : 'opencode');
-  const model = provider === 'opencode' ? await prompter.ask('OpenCode model', 'opencode/big-pickle') : undefined;
+  const providerDefault = currentProvider ?? (detected.agents[0] === 'claude' ? 'claude' : 'opencode');
+  const provider = await prompter.select('Inference provider', ['claude', 'opencode'] as const, providerDefault);
+  const model = provider === 'opencode' ? await prompter.ask('OpenCode model', currentModel ?? 'opencode/big-pickle') : undefined;
 
   const embeddingChoice = await prompter.select('Embedding', ['off', 'ollama-local', 'custom'] as const, detected.ollamaModels ? 'ollama-local' : 'off');
   let embedding: WizardResult['embedding'];
@@ -119,7 +117,7 @@ export async function runInitWizard(prompter: Prompter, detected: Detected, conf
     if (endpoint && embeddingModel) embedding = { endpoint, model: embeddingModel };
   }
 
-  const vault = await prompter.ask('Vault path (blank to skip)');
+  const vault = await prompter.ask('Vault path (blank to keep current)', currentVault);
 
   for (const agent of detected.agents) {
     if (await prompter.confirm(`Show ${agent} wiring instructions?`, true)) {
@@ -127,6 +125,6 @@ export async function runInitWizard(prompter: Prompter, detected: Detected, conf
     }
   }
 
-  writeConfig(configPath, { provider, model, embedding, vault: vault || undefined });
+  writeConfig(existing, configPath, { provider, model, embedding, vault: vault || undefined });
   prompter.say(`\nWrote ${configPath}`);
 }
