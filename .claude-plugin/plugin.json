@@ -1,7 +1,6 @@
 {
   "name": "librarian",
   "description": "Persistent cross-session memory for Claude Code: instruments your session and injects relevant recall at the top of each prompt.",
-  "version": "0.1.0",
   "author": { "name": "Magnus Törnvall" },
   "repository": "https://github.com/magnus-tornvall/librarian",
   "hooks": {
