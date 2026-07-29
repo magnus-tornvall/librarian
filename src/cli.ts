@@ -69,6 +69,7 @@ const USAGE = `usage:
                                                flag a note as wrong (validity-close, no replacement) so recall excludes it
   librarian mcp [--data-dir <dir>] [--index-dir <dir>] [--diagnostics-dir <dir>]
                                            start the MCP stdio server
+  librarian hook claude-code               read a Claude Code hook payload on stdin, collect it, and inject on UserPromptSubmit/SessionStart (the plugin entry)
   librarian machine-id [--path <file>]     print the persisted machine id
   librarian --version                      print the binary version
 `;
@@ -1369,6 +1370,35 @@ export async function main(argv: string[]): Promise<void> {
         diagnosticsDir: flags.get('diagnostics-dir') ?? DIAGNOSTICS_DIR,
         indexDir: flags.get('index-dir') ?? INDEX_DIR,
       });
+      break;
+    }
+    case 'hook': {
+      // The Claude Code plugin's four `command` hooks all invoke `librarian hook
+      // claude-code`; this is the I/O shell (§14 amendment: thin plugin behind the bin).
+      //
+      // Two contracts, and they differ deliberately:
+      //  - RUNTIME (a real payload, whatever goes wrong inside): exit 0, silent on stdout.
+      //    The shell swallows every internal error, so instrumentation can never break the
+      //    host session. That is the load-bearing `process.exit(0)` below.
+      //  - MISCONFIGURATION (a bad agent name — only reachable by hand-wiring a hook
+      //    command, never from the shipped manifest): exit 2, loud on stderr. A usage error
+      //    should not fail silently and leave the operator wondering why nothing collects.
+      //
+      // Exit 2 is NOT harmless here: Claude Code treats a non-zero UserPromptSubmit hook as
+      // *blocking* (verified — the prompt is erased and the stderr shown instead), so this
+      // branch would break every prompt in the session. That is acceptable only because it
+      // needs a hand-written typo to reach. The shipped manifest appends `|| true` to each
+      // hook command so the host can never see a non-zero exit — which also covers the case
+      // this file cannot fix retroactively: a `librarian` on PATH that predates the `hook`
+      // subcommand at all, falling through to the `default:` usage exit below.
+      const [agent] = rest;
+      if (agent !== 'claude-code') {
+        process.stderr.write('librarian: expected hook subcommand: claude-code\n');
+        process.exit(2);
+      }
+      const { runClaudeCodeHook } = await import('./hook/claudeCode.ts');
+      runClaudeCodeHook();
+      process.exit(0);
       break;
     }
     case 'machine-id':

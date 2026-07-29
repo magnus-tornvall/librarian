@@ -1,0 +1,12 @@
+{
+  "name": "librarian",
+  "owner": { "name": "Magnus Törnvall" },
+  "description": "Librarian — persistent cross-session memory for Claude Code.",
+  "plugins": [
+    {
+      "name": "librarian",
+      "source": ".",
+      "description": "Instruments the session and injects relevant recall via hooks + a stdio MCP server, all routed through the installed `librarian` bin."
+    }
+  ]
+}

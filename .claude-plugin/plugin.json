@@ -1,0 +1,43 @@
+{
+  "name": "librarian",
+  "description": "Persistent cross-session memory for Claude Code: instruments your session and injects relevant recall at the top of each prompt.",
+  "author": { "name": "Magnus Törnvall" },
+  "repository": "https://github.com/magnus-tornvall/librarian",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "librarian": {
+      "command": "librarian",
+      "args": ["mcp"]
+    }
+  }
+}

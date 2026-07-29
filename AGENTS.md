@@ -34,8 +34,8 @@ framework. If there is no test setup, stop and ask before proceeding.
 
 ## Layout
 
-- `src/` — pipeline stages (`collector`, `distill`, `embedding`, `recall`, `render`, `export`, `index`, `mcp`) + CLI entry `cli.ts`
-- `adapters/` — vendor-agnostic integration points
+- `src/` — pipeline stages (`collector`, `distill`, `embedding`, `recall`, `render`, `export`, `index`, `mcp`) + CLI entry `cli.ts`. `src/hook/` is the Claude Code plugin's I/O shell (behind `librarian hook claude-code`) + its pure mapper.
+- `adapters/` — vendor-agnostic integration points. Claude Code ships as a thin plugin (`.claude-plugin/`) routed through the bin; its `adapters/claude-code/` is docs + fixtures only.
 - `schema/`, `fixtures/` — plain-file test inputs
 - `docs/specs/librarian-design-consolidated.md` — the spec (see below)
 
