@@ -70,6 +70,7 @@ const USAGE = `usage:
   librarian mcp [--data-dir <dir>] [--index-dir <dir>] [--diagnostics-dir <dir>]
                                            start the MCP stdio server
   librarian hook claude-code               read a Claude Code hook payload on stdin, collect it, and inject on UserPromptSubmit/SessionStart (the plugin entry)
+  librarian hook opencode                  read an OpenCode hook envelope on stdin, collect it, and print the injection blocks the plugin splices (the plugin entry)
   librarian machine-id [--path <file>]     print the persisted machine id
   librarian --version                      print the binary version
 `;
@@ -1391,14 +1392,23 @@ export async function main(argv: string[]): Promise<void> {
       // hook command so the host can never see a non-zero exit — which also covers the case
       // this file cannot fix retroactively: a `librarian` on PATH that predates the `hook`
       // subcommand at all, falling through to the `default:` usage exit below.
+      //
+      // `opencode` is the same shell for a host with different physics: OpenCode loads JS
+      // in-process, so its plugin pipes the raw native payload here and reads the injection
+      // blocks back off stdout (there is no `additionalContext` channel to write into).
       const [agent] = rest;
-      if (agent !== 'claude-code') {
-        process.stderr.write('librarian: expected hook subcommand: claude-code\n');
-        process.exit(2);
+      if (agent === 'claude-code') {
+        const { runClaudeCodeHook } = await import('./hook/claudeCode.ts');
+        runClaudeCodeHook();
+        process.exit(0);
       }
-      const { runClaudeCodeHook } = await import('./hook/claudeCode.ts');
-      runClaudeCodeHook();
-      process.exit(0);
+      if (agent === 'opencode') {
+        const { runOpenCodeHook } = await import('./hook/opencode.ts');
+        runOpenCodeHook();
+        process.exit(0);
+      }
+      process.stderr.write('librarian: expected hook subcommand: claude-code or opencode\n');
+      process.exit(2);
       break;
     }
     case 'machine-id':

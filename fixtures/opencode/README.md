@@ -3,7 +3,7 @@
 Every new integration ships 3–5 golden content-events with expected outcomes (spec §9).
 These are that surface for the OpenCode adapter: each file pairs a **native OpenCode
 payload** with the **expected canonical event** the pure mapper
-([`adapters/opencode/map.ts`](../../adapters/opencode/map.ts)) must produce. They are the
+([`src/hook/opencodeMap.ts`](../../src/hook/opencodeMap.ts)) must produce. They are the
 primary test surface — the mapping is proven here without an OpenCode runtime.
 
 The runner is [`tests/adapters/opencode.test.ts`](../../tests/adapters/opencode.test.ts).

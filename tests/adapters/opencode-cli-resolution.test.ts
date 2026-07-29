@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveLibrarianArgv, resolveMachineId } from '../../adapters/opencode/plugin.ts';
+import { resolveLibrarianArgv } from '../../adapters/opencode/plugin.ts';
 import { readAll } from '../../src/log/ndjson.ts';
 
 /**
@@ -60,19 +60,6 @@ function homeWithConfig(config: unknown): string {
   fs.writeFileSync(path.join(home, '.librarian', 'config.json'), JSON.stringify(config, null, 2) + '\n');
   return home;
 }
-
-/** Point HOME at a fresh temp dir and write ~/.librarian/machine-id with the given id.
- *  Returns the temp HOME. Mirrors the file the real `librarian machine-id` persists. */
-function homeWithMachineId(id: string): string {
-  const home = tempDir('opencode-mid-home-');
-  fs.mkdirSync(path.join(home, '.librarian'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.librarian', 'machine-id'), id + '\n');
-  return home;
-}
-
-/** A LIBRARIAN_BIN guaranteed to fail to spawn, so any resolved machine id must have come
- *  from a file rung, never the CLI. */
-const UNRUNNABLE_BIN = '/nonexistent/librarian-cli-that-cannot-run';
 
 test('resolution: a .js bin is paired with the resolved JS runtime (LIBRARIAN_RUNTIME wins)', () => {
   // Pin the runtime explicitly so this does not silently depend on the test runner being
@@ -248,61 +235,4 @@ test('runtime: the resolved [runtime, dist/cli.js] argv actually delivers an eve
   const persisted = readAll(logFilePath) as Array<Record<string, unknown>>;
   assert.equal(persisted.length, 1, 'exactly one event should be appended');
   assert.equal(persisted[0].event_id, event.event_id, 'the delivered event must round-trip');
-});
-
-/**
- * Machine-id resolution (§10.1, §11) — the "could not resolve machine id" regression.
- *
- * The plugin used to reach the persisted machine id ONLY through the MACHINE_ID_PATH env
- * var; with that unset (OpenCode's normal environment) it fell straight to spawning the
- * CLI, which is exactly the fragile PATH/spawn seam we are trying to avoid. So even with a
- * perfectly good `~/.librarian/machine-id` on disk, a launch that could not locate/run the
- * CLI surfaced a scary "could not resolve machine id" error. The fix: read the default
- * persisted file directly. These tests pin that behavior by making the CLI un-runnable —
- * so a correct id proves it came from the file, not a subprocess.
- */
-
-test('machine-id: the persisted ~/.librarian/machine-id is read directly, without spawning the CLI', () => {
-  const home = homeWithMachineId('01J8X7QK3VZ9R4M2N6P0S5T7WX');
-  const id = withEnv({ HOME: home, MACHINE_ID_PATH: null, LIBRARIAN_BIN: UNRUNNABLE_BIN }, () =>
-    resolveMachineId(),
-  );
-  assert.equal(
-    id,
-    '01J8X7QK3VZ9R4M2N6P0S5T7WX',
-    'the id must come from the persisted file even when the CLI cannot run',
-  );
-});
-
-test('machine-id: MACHINE_ID_PATH env, when set to a non-empty file, wins over the default path', () => {
-  // Default path holds one id; the env override points at a different file with another.
-  const home = homeWithMachineId('01DEFAULTDEFAULTDEFAULTDEF');
-  const overridePath = path.join(tempDir('opencode-mid-override-'), 'mid');
-  fs.writeFileSync(overridePath, '01OVERRIDEOVERRIDEOVERRIDE\n');
-  const id = withEnv({ HOME: home, MACHINE_ID_PATH: overridePath, LIBRARIAN_BIN: UNRUNNABLE_BIN }, () =>
-    resolveMachineId(),
-  );
-  assert.equal(id, '01OVERRIDEOVERRIDEOVERRIDE', 'the env override path must take precedence');
-});
-
-test('machine-id: an empty MACHINE_ID_PATH file falls through to the default persisted path', () => {
-  const home = homeWithMachineId('01FALLBACKTOTHEDEFAULTFILE');
-  const blankPath = path.join(tempDir('opencode-mid-blank-'), 'mid');
-  fs.writeFileSync(blankPath, '   \n'); // whitespace only — treated as absent
-  const id = withEnv({ HOME: home, MACHINE_ID_PATH: blankPath, LIBRARIAN_BIN: UNRUNNABLE_BIN }, () =>
-    resolveMachineId(),
-  );
-  assert.equal(id, '01FALLBACKTOTHEDEFAULTFILE', 'a blank override file must not shadow the default');
-});
-
-test('machine-id: no persisted file and an un-runnable CLI yields a non-empty ephemeral id, never a throw', () => {
-  // Empty HOME (no machine-id file), env unset, CLI cannot run: the last rung is a UUID.
-  const home = tempDir('opencode-mid-empty-');
-  let id: string | undefined;
-  assert.doesNotThrow(() => {
-    id = withEnv({ HOME: home, MACHINE_ID_PATH: null, LIBRARIAN_BIN: UNRUNNABLE_BIN }, () =>
-      resolveMachineId(),
-    );
-  }, 'resolution must never throw — it must degrade to an ephemeral id');
-  assert.ok(id && id.length > 0, 'the fallback id must be non-empty so events still carry a machine_id');
 });
