@@ -201,8 +201,11 @@ function buildResource(cwd: string): Resource {
  *
  * ponytail (v1 ceiling): each Claude Code hook is already its own short-lived process,
  * and this spawns `librarian collect` once per event within it. That is fine for v1 —
- * correctness over throughput, and it keeps the hook stateless. A collector rejection
- * (fail-loud, §9) is surfaced to THIS process's
+ * correctness over throughput, and it keeps the hook stateless. The ceiling is set by the
+ * manifest's `PostToolUse` matcher `*`: two processes per tool call (the hook, then
+ * `collect`), so a tool-heavy turn pays that per tool. When it bites, the fix is a single
+ * long-lived `collect` child or a batching buffer flushed on idle — not more logic here.
+ * A collector rejection (fail-loud, §9) is surfaced to THIS process's
  * stderr but never rethrown — instrumentation must not break the session (hook-safety).
  */
 function handOff(event: CanonicalEvent): void {

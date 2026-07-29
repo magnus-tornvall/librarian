@@ -56,6 +56,16 @@ Claude Code's hook model differs from OpenCode's plugin model, so:
   payloads, and ignored events emit no stdout. Loud collect failure is re-logged to stderr;
   inject failure is contained so instrumentation remains unaffected.
 
+  The manifest additionally appends **`|| true`** to each hook command. That is not
+  belt-and-braces — Claude Code treats a non-zero `UserPromptSubmit` hook as *blocking*
+  (the prompt is erased and the hook's stderr shown in its place), and the command is a
+  bare-PATH `librarian`, so it may be a build that predates the `hook` subcommand and exits
+  2 printing usage. Nothing in this repo can fix a binary already on a user's PATH, so the
+  guard is the only place the contract holds by construction. The exit code inside the bin
+  is deliberately *not* uniform: a runtime failure exits 0 (silent, never breaks a session),
+  while a bad agent name — reachable only by hand-writing a hook command, never from this
+  manifest — exits 2 loudly rather than collecting nothing in silence.
+
 ## Install
 
 With `librarian` on PATH (install it via [`scripts/install.sh`](../../scripts/install.sh)),
@@ -70,17 +80,26 @@ That wires the four hooks (`UserPromptSubmit`, `PostToolUse`, `SessionStart`, `S
 stdio MCP server with **no** `settings.json` edit. Fully restart a running Claude Code
 session after install.
 
-The hook resolves the CLI to spawn for `collect`/`inject` in this order: `LIBRARIAN_BIN` (an
-explicit override, used by the tests) → this checkout's built `dist/cli.js` when present →
-bare `librarian` on PATH (the installed-binary case). No npm link, global Claude settings, or
-Librarian config lookup is needed.
+Once spawned, the hook resolves the CLI for its own `collect`/`inject` children in this
+order: `LIBRARIAN_BIN` (an explicit override, used by the tests) → this checkout's built
+`dist/cli.js` when present → bare `librarian` on PATH (the installed-binary case).
+
+That order applies only *inside* the hook. The manifest itself can only name a bare
+`librarian` — a declarative JSON manifest has no way to express a resolution order — so
+**whatever `librarian` is first on PATH is what the plugin runs.** A dev `npm link` shim
+(`~/.nvm/.../bin/librarian` → a checkout's `dist/cli.js`) shadows the installed
+`~/.librarian/bin/librarian` on a typical dev PATH, and if that checkout predates the `hook`
+subcommand the plugin collects nothing. Symptom: `claude` works normally (the `|| true`
+guard) but no events appear under `~/.librarian/data/events`. Check with
+`command -v librarian` and confirm `echo '{}' | librarian hook claude-code; echo $?` is 0,
+not 2.
 
 ### Dogfooding from a checkout
 
 The authenticated, token-consuming end-to-end check is developer-machine tooling, not part of
-`npm test` or CI. It drives the *installed plugin* through a real `claude -p` session, so the
-plugin must be installed (above) and `librarian` must resolve to this checkout's build (e.g.
-`LIBRARIAN_BIN`, or install a binary built from this checkout):
+`npm test` or CI. It drives the plugin through a real `claude -p` session, so `librarian`
+must resolve to this checkout's build (e.g. `LIBRARIAN_BIN`, or install a binary built from
+this checkout):
 
 ```sh
 ./scripts/opencode-setup.sh   # only if verifying OpenCode too
@@ -89,6 +108,18 @@ plugin must be installed (above) and `librarian` must resolve to this checkout's
 
 The verifier checks both agents by default; pass `claude-code` or `opencode` to verify only
 one. Collected data under `~/.librarian` is left untouched.
+
+There is no `claude-code-setup.sh`; the plugin replaced it. To exercise a checkout's manifest
+without installing it, Claude Code loads a plugin for one session from a directory:
+
+```sh
+claude --plugin-dir "$PWD" -p 'hello'
+```
+
+That is also how to verify the plugin *is* the sole wiring — a leftover
+`.claude/settings.local.json` from the retired setup script would instrument the session too,
+and `dogfood-verify.sh` is agnostic to which one did the work, so a PASS with both present
+proves nothing about the plugin. Remove the legacy hooks first.
 
 ## What gets emitted (mapping rules, §10.1)
 
@@ -137,7 +168,9 @@ editorialize the source. To explain why a pushed block appeared, run `librarian 
 `librarian hook claude-code` spawns `librarian collect` once per event and, for
 injection-capable hooks, `librarian inject` once per invocation. That is intentional for v1 (correctness over
 throughput, no long-lived child to supervise; each Claude Code hook is already its own
-short-lived process). The collect ceiling and project-slug heuristic are marked with
+short-lived process). The throughput ceiling is set by the `PostToolUse` matcher `*`: two
+processes per tool call (the hook, then `collect`), paid on every tool call of every turn.
+The collect ceiling and project-slug heuristic are marked with
 `ponytail:` comments in the source; when throughput bites, the fix is a batching buffer,
 not more logic in the hook.
 

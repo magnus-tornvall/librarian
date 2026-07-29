@@ -7,7 +7,7 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "librarian hook claude-code", "timeout": 10 }
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
         ]
       }
     ],
@@ -15,21 +15,21 @@
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "librarian hook claude-code", "timeout": 10 }
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
         ]
       }
     ],
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "librarian hook claude-code", "timeout": 10 }
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "librarian hook claude-code", "timeout": 10 }
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
         ]
       }
     ]

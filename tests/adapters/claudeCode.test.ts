@@ -572,3 +572,69 @@ test('claude-code hook-safety (e2e): feeding `librarian hook claude-code` empty 
   assert.equal(result.status, 0, 'the hook must exit 0 on empty stdin');
   assert.equal(result.stdout, '', 'the hook must not write to stdout');
 });
+
+// ---------------------------------------------------------------------------
+// The plugin manifest is the artifact this integration now ships (spec §14 amendment:
+// thin plugin, no bundled code), and it is declarative — nothing else in the suite would
+// notice if an event name, the matcher, or the MCP entry drifted. `claude plugin validate`
+// checks the schema; these assertions pin the contract librarian depends on.
+// ---------------------------------------------------------------------------
+
+const PLUGIN_MANIFEST = path.join(import.meta.dirname, '..', '..', '.claude-plugin', 'plugin.json');
+
+interface HookCommand { type: string; command: string; timeout?: number }
+interface HookMatcher { matcher?: string; hooks: HookCommand[] }
+
+function pluginManifest(): { hooks: Record<string, HookMatcher[]>; mcpServers: Record<string, { command: string; args: string[] }> } {
+  return JSON.parse(fs.readFileSync(PLUGIN_MANIFEST, 'utf8'));
+}
+
+test('plugin manifest declares exactly the four instrumented hook events, PostToolUse matched on *', () => {
+  const { hooks } = pluginManifest();
+  assert.deepEqual(
+    Object.keys(hooks).sort(),
+    ['PostToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit'],
+    'the four events the mapper handles must be the four the manifest declares',
+  );
+  // `*` is what makes instrumentation see every tool call; a narrower matcher would
+  // silently drop tool events for tools not named in it.
+  assert.equal(hooks.PostToolUse[0].matcher, '*');
+  for (const [event, matchers] of Object.entries(hooks)) {
+    for (const entry of matchers) {
+      for (const hook of entry.hooks) {
+        assert.equal(hook.type, 'command', `${event} must use a command hook (thin plugin: no bundled code)`);
+      }
+    }
+  }
+});
+
+test('plugin manifest routes every hook through `librarian hook claude-code` guarded so the host never sees a non-zero exit', () => {
+  const { hooks } = pluginManifest();
+  const commands = Object.values(hooks).flatMap((matchers) => matchers.flatMap((m) => m.hooks.map((h) => h.command)));
+  assert.equal(commands.length, 4);
+  for (const command of commands) {
+    // Bare `librarian` on PATH — the installed bin, not a path into this checkout (§14).
+    assert.equal(command, 'librarian hook claude-code || true', 'unexpected hook command');
+  }
+});
+
+test('the `|| true` guard makes even a librarian predating the `hook` subcommand exit 0', () => {
+  // Regression for the upgrade hazard: Claude Code treats a non-zero UserPromptSubmit hook
+  // as BLOCKING (the prompt is erased). A `librarian` older than this subcommand prints
+  // usage and exits 2, which without the guard blocks every prompt in the session — and no
+  // change to this repo can fix a binary a user already installed. The guard is what makes
+  // the exit-0 contract hold by construction, so prove it holds for a failing command.
+  const { hooks } = pluginManifest();
+  const command = hooks.UserPromptSubmit[0].hooks[0].command;
+  // Stand in for the old bin with a subshell that exits 2 the way it does (`exit 2` bare
+  // would be a builtin and leave the shell before `||` could apply).
+  const guarded = command.replace('librarian hook claude-code', '(exit 2)');
+  const result = spawnSync('sh', ['-c', guarded], { encoding: 'utf8' });
+  assert.equal(result.status, 0, 'the guarded hook command must exit 0 even when the bin fails');
+});
+
+test('plugin manifest registers the stdio MCP server on the same installed bin', () => {
+  const { mcpServers } = pluginManifest();
+  assert.deepEqual(Object.keys(mcpServers), ['librarian']);
+  assert.deepEqual(mcpServers.librarian, { command: 'librarian', args: ['mcp'] });
+});

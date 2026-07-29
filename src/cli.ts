@@ -1375,8 +1375,22 @@ export async function main(argv: string[]): Promise<void> {
     case 'hook': {
       // The Claude Code plugin's four `command` hooks all invoke `librarian hook
       // claude-code`; this is the I/O shell (§14 amendment: thin plugin behind the bin).
-      // Hard-guarantee exit 0 so a hook can never break the host session — the shell
-      // already swallows every internal error and stays silent on stdout on failure.
+      //
+      // Two contracts, and they differ deliberately:
+      //  - RUNTIME (a real payload, whatever goes wrong inside): exit 0, silent on stdout.
+      //    The shell swallows every internal error, so instrumentation can never break the
+      //    host session. That is the load-bearing `process.exit(0)` below.
+      //  - MISCONFIGURATION (a bad agent name — only reachable by hand-wiring a hook
+      //    command, never from the shipped manifest): exit 2, loud on stderr. A usage error
+      //    should not fail silently and leave the operator wondering why nothing collects.
+      //
+      // Exit 2 is NOT harmless here: Claude Code treats a non-zero UserPromptSubmit hook as
+      // *blocking* (verified — the prompt is erased and the stderr shown instead), so this
+      // branch would break every prompt in the session. That is acceptable only because it
+      // needs a hand-written typo to reach. The shipped manifest appends `|| true` to each
+      // hook command so the host can never see a non-zero exit — which also covers the case
+      // this file cannot fix retroactively: a `librarian` on PATH that predates the `hook`
+      // subcommand at all, falling through to the `default:` usage exit below.
       const [agent] = rest;
       if (agent !== 'claude-code') {
         process.stderr.write('librarian: expected hook subcommand: claude-code\n');
