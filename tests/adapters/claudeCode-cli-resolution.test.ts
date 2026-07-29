@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { resolveLibrarianCommand } from '../../src/hook/claudeCode.ts';
+import { resolveLibrarianCommand } from '../../src/hook/librarianBin.ts';
 
 const candidate = new URL('../../dist/cli.js', import.meta.url);
 

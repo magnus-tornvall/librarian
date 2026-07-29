@@ -24,7 +24,7 @@ import Database from 'better-sqlite3';
 // step must NOT reach the log through the collector's in-process append primitive;
 // it is proven only through the spawned CLI boundary. The §4 test at the bottom is
 // the guard that keeps that honest by scanning this file's own source.
-import * as opencodeAdapter from '../adapters/opencode/map.ts';
+import * as opencodeAdapter from '../src/hook/opencodeMap.ts';
 import * as claudeCodeAdapter from '../src/hook/claudeCodeMap.ts';
 // Downstream pipeline stages, imported from the exact modules the roadmap names.
 import { migrate } from '../src/index/schema.ts'; // FTS5 schema

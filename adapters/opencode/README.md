@@ -7,95 +7,126 @@ stamp Resource facts, emit cheap non-authoritative salience hints, hand off. No 
 logic — redaction, validation, and salience authority all live in the collector and
 distiller (§4, §5).
 
-## Layout
+## Where the code lives
 
-- **`map.ts`** — a *pure* mapping module: native OpenCode payload → canonical event(s).
-  No I/O, no process spawning, no clock, no crypto. Everything machine-specific (the
-  `resource` facts, the `event_id` ULID, the `ts`) is **injected** by the caller. This is
-  what the origin-qualification fixtures test, and it is what makes the mapping testable
-  without an OpenCode runtime.
-- **`plugin.ts`** — the thin OpenCode plugin shell (the only part that does I/O): it
-  subscribes to OpenCode hooks, lowers each native payload onto the mapper's shape,
-  resolves the `resource` facts, stamps `event_id`/`ts`, calls `map()`, and pipes the
-  resulting NDJSON to `librarian collect` (one spawn per event for v1 — see the ceiling
-  note below).
-- **`inject.ts`** — a pure outgoing-message splice helper for recall injection. It removes
-  prior librarian synthetic parts, adds fresh brief/recall parts when present, and never
-  shells out.
+OpenCode is the only host librarian supports that loads **executable JS in-process**, so
+exactly one file has to land inside it. Everything else lives behind the installed binary
+(spec §14 amendment):
 
-## Install
+```
+plugin (in OpenCode's process)  ── {hook, cwd, input, output} ─▶  librarian hook opencode
+                                ◀─ {brief, recall}                (lower → map → collect → inject)
+```
 
-The fastest path for a per-project smoke test is the repo scripts (they build the CLI,
-record its absolute path in `~/.librarian/config.json`, and symlink this plugin into the
-repo-root `.opencode/plugins/`):
+- **`plugin.ts`** — the whole in-host integration, and **the file the wizard installs**. It
+  imports nothing but node builtins: no `ulid`, no `better-sqlite3`, no MCP SDK, nothing for
+  OpenCode to resolve. Its only jobs are the three the binary cannot do from outside the host
+  process: locate the binary, hold the per-session brief/recall cache (a hook process lives
+  for one event), and splice the cached blocks into the outgoing message array.
+- **`librarian hook opencode`** ([`src/hook/opencode.ts`](../../src/hook/opencode.ts)) — the
+  I/O shell: lower the raw native payload, resolve the `resource` facts, stamp `event_id`/`ts`,
+  call the mapper, pipe to `librarian collect`, and print the injection blocks back.
+- **[`src/hook/opencodeMap.ts`](../../src/hook/opencodeMap.ts)** — the *pure* mapper: native
+  payload → canonical event(s). No I/O, no spawning, no clock, no crypto; everything
+  machine-specific is **injected** by the shell. This is what the origin-qualification
+  fixtures test, and what makes the mapping testable without an OpenCode runtime. It lives
+  under `src/` because `tsc` compiles only `src/` (`rootDir=src`) and rewrites `.ts`→`.js`,
+  so a `src/ → adapters/` import would diverge between the dev build and the SEA bundle.
+
+Why the plugin ships *any* code: Claude Code hands `additionalContext` back over stdout from
+a spawned command; OpenCode has no such channel. Recall is spliced in
+`experimental.chat.messages.transform`, which mutates OpenCode's own outgoing array — that
+has to run in-process.
+
+## Install (the supported path)
+
+```sh
+librarian init
+```
+
+The wizard's OpenCode step writes `plugin.ts` to `~/.config/opencode/plugins/librarian.ts`
+and records `bin` in `~/.librarian/config.json` pointing at the installed binary
+(`~/.librarian/bin/librarian` — see [`scripts/install.sh`](../../scripts/install.sh)). The
+installed binary carries the plugin as an embedded build asset, so this works with no
+checkout on the machine. Plugins load only at startup — **restart OpenCode**. Re-running
+`librarian init` overwrites the file, which is how an update lands.
+
+No npm package, no release ref, no second repo: one file is a complete delivery mechanism
+for one file. The why-nots are recorded in the spec's §14 amendment (2026-07-29).
+
+Nothing is needed for MCP-only hosts (Codex, Cursor, ChatGPT, …) — they take a config entry
+pointing at `librarian mcp`, not a plugin.
+
+### How the plugin finds the binary
+
+Resolution order — **it does not require `PATH`**:
+
+1. `LIBRARIAN_BIN` env var (an absolute path to an executable or a `.js`), else
+2. `~/.librarian/config.json` `{ "bin": "…" }` — what the wizard writes. This is the
+   production mechanism: read from disk at runtime, so it survives whatever launch
+   environment OpenCode came from (unlike an env var or a shell `PATH`), else
+3. the built `dist/cli.js` two dirs above the plugin file — the zero-config default for a
+   repo checkout (the dev inner loop below), else
+4. a bare `librarian` on `PATH` (last-resort convenience).
+
+Why not rely on `PATH`: OpenCode is a native binary, and the `PATH` its plugin child inherits
+depends on how OpenCode was launched (terminal vs desktop app vs login service vs package
+manager) — nvm/asdf/Homebrew/GUI launches routinely leave a bare `librarian` unresolvable.
+
+When the resolved target is a `.js` it needs a JS runtime, and the plugin **cannot** assume
+its own `process.execPath` is one: inside OpenCode that is the compiled `opencode` binary,
+which, handed a `.js`, re-invokes itself and prints its help — nothing collects. So a `.js` is
+paired with a runtime resolved as: `LIBRARIAN_RUNTIME` env / config `{ "runtime": "…" }`, else
+`process.execPath` only when it looks like `node`/`bun`/`deno`, else a `node`/`bun` discovered
+from `NVM_BIN`/`BUN_INSTALL`, else the `.js` is spawned directly via its shebang. The
+supported install points `bin` at a real executable, so none of this applies to it.
+
+## Dev inner loop
+
+For iterating on the adapter inside this repo, the scripts install the plugin per-project
+instead (a symlink into the repo-root `.opencode/plugins/`, so edits are picked up on the
+next session with no re-copy) and point `bin` at `dist/cli.js`:
 
 ```sh
 ./scripts/opencode-setup.sh      # build + write config bin/runtime + symlink plugin into .opencode/plugins/
 ./scripts/opencode-teardown.sh   # remove the symlink + drop the config bin/runtime
 ```
 
-See the top-level [`README.md`](../../README.md#opencode-plugin-local-smoke-test) for
-what they do. To install by hand instead:
-
-1. **Make the `librarian` CLI locatable.** The plugin shells out to `librarian collect`
-   (delivery) and `librarian machine-id` (machine id). Build the CLI (`npm run build` at
-   the repo root produces `dist/cli.js`), then let the plugin find it. It resolves the CLI
-   in this order — **it does not require `PATH`**:
-
-   1. `LIBRARIAN_BIN` env var (an absolute path to `cli.js` or an executable), else
-   2. `~/.librarian/config.json` `{ "bin": "/abs/path/to/dist/cli.js" }` — the durable
-      choice, read from disk at runtime so it works regardless of how OpenCode was
-      launched (the setup script writes this for you), else
-   3. the built `dist/cli.js` located relative to this plugin file (the zero-config
-      default for a repo checkout), else
-   4. a bare `librarian` on `PATH` (last-resort convenience).
-
-   When the resolved CLI is a `.js` file it needs a JS runtime to run it, and the plugin
-   **cannot** assume its own `process.execPath` is one: inside OpenCode that is the compiled
-   `opencode` binary, which, handed a `.js`, just re-invokes itself and prints its help —
-   the collector never runs and no events are written. So a `.js` is paired with a runtime
-   resolved as: `LIBRARIAN_RUNTIME` env / config `{ "runtime": "/abs/path/to/node" }` (the
-   setup script records the `node` it validated with, making this deterministic), else
-   `process.execPath` only when it looks like `node`/`bun`/`deno`, else a `node`/`bun`
-   discovered from `NVM_BIN`/`BUN_INSTALL`, else the `.js` is spawned directly via its
-   `#!/usr/bin/env node` shebang (the setup script sets its exec bit). Why not rely on
-   `PATH`: OpenCode is a native binary, and the `PATH` its plugin child inherits depends on
-   how OpenCode was launched (terminal vs desktop app vs login service vs package manager) —
-   nvm/asdf/Homebrew/GUI launches routinely leave a bare `librarian` unresolvable.
-
-2. **Drop the plugin file where OpenCode loads plugins from:**
-   - `~/.config/opencode/plugins/` — global (all projects), or
-   - `.opencode/plugins/` — per-project.
-
-   Copy (or symlink) `plugin.ts` there, keeping `map.ts` and `inject.ts` alongside it (the
-   plugin imports both). For example:
-
-   ```sh
-   mkdir -p ~/.config/opencode/plugins/librarian
-   cp adapters/opencode/map.ts adapters/opencode/inject.ts adapters/opencode/plugin.ts \
-      ~/.config/opencode/plugins/librarian/
-   ```
-
-   OpenCode loads TypeScript plugin files directly; no build step for the plugin itself.
-
-3. That's it. New OpenCode sessions will emit canonical events to
-   `~/.librarian/data/events/<session_id>.ndjson` via the collector and can receive
-   ephemeral recall blocks from `librarian inject`.
+See the top-level [`README.md`](../../README.md#opencode-plugin) for what they do. This is
+throw-away smoke-test tooling; `librarian init` is the supported install.
 
 ## Recall Injection
 
-On `chat.message`, the plugin runs `librarian inject` with the prompt on stdin, always
-passing `--global` plus `--project <git-root-basename>` when the session is inside a git
-repo. The returned block is cached by session; on `experimental.chat.messages.transform`
-the plugin splices that exact stdout into the outgoing payload as a synthetic text part,
-after removing any prior librarian part so repeated transform fires stay idempotent.
+On `chat.message` the plugin forwards the raw payload to `librarian hook opencode`, which runs
+`librarian inject` with the prompt on stdin — always `--global` plus `--project
+<git-root-basename>` when the session is inside a git repo — and returns the block. The plugin
+caches it by session; on `experimental.chat.messages.transform` it splices that exact stdout
+into the outgoing payload as a synthetic text part, after removing any prior librarian part so
+repeated transform fires stay idempotent.
 
-The first user turn also asks `librarian inject --session-start` for the startup brief;
-that brief is pinned to the first user message, while per-turn recall stays adjacent to the
-latest user message. The adapter deliberately avoids `experimental.chat.system.transform`:
-that hook lacks the user message, while `messages.transform` is ephemeral and does not
-persist injected text to chat history. If an injected block has an `injection_id`, run
-`librarian why <injection_id>` to see why it was selected.
+The first user turn also asks for the startup brief (`librarian inject --session-start`); that
+brief is pinned to the **first** user message, while per-turn recall stays adjacent to the
+**latest** one. The shell distinguishes "ran and had nothing to say" (a below-floor prompt)
+from "the call failed", so a failed brief is retried next turn while a successful empty one is
+not re-asked. Each `inject` gets a hard 1s budget — recall must not add perceptible latency,
+and a timeout is reported as "no block", never as an error.
+
+The adapter deliberately avoids `experimental.chat.system.transform`: that hook lacks the user
+message, while `messages.transform` is ephemeral and does not persist injected text to chat
+history. If an injected block has an `injection_id`, run `librarian why <injection_id>` to see
+why it was selected.
+
+> **The in-place rule — read before touching either transform hook.** OpenCode's hook contract
+> is *"mutate `output` in place; return `void`"*. For `messages.transform` that means mutating
+> the message **array object**: verified in OpenCode 1.18.9, the call site is
+> `trigger('experimental.chat.messages.transform', {}, { messages: ze })` followed by
+> `toModelMessagesEffect(ze, …)`, so it converts the array it handed the plugin. Rebinding
+> `output.messages = newArray` — or returning `{ ...output, messages }` — is silently dropped
+> and **the injection never reaches the model**, with no error anywhere. `messages.splice(0,
+> messages.length, ...spliced)` is the fix. `experimental.session.compacting` is the same
+> shape: `context` arrives as an array to push onto and `prompt` arrives `undefined`, and the
+> object the plugin was handed is the one OpenCode reads back. A test that asserts on a
+> returned value cannot see this class of bug — assert through the object you passed in.
 
 ## What gets emitted (mapping rules, §10.1)
 
@@ -109,15 +140,15 @@ persist injected text to chat history. If an injected block has an `injection_id
 | Session start / stop / compact    | `SessionEvent`  | `action` ∈ start/stop/compact/checkpoint. |
 
 `resource` carries `agent: "opencode"`, `machine_id` (read from the persisted
-`~/.librarian/machine-id`, or `MACHINE_ID_PATH` when set; the CLI's `machine-id` is only
-the bootstrap that first writes that file), `cwd`, and `git_root`/`git_remote`/`git_branch`
-when resolvable —
-**facts, not identity**. `agent_version` is back-filled from `Session.version` once
-`session.created` is observed (OpenCode surfaces its version only on the full `Session`
-object), after which every later event in the session carries it. There is deliberately
-no `project_slug` on events (§10.1). The adapter stamps `event_id` (ULID) and `ts` before
-handoff. `hints` are non-authoritative and optional; the collector and distiller own
-judgment.
+`~/.librarian/machine-id`, or `MACHINE_ID_PATH` when set; the CLI's `machine-id` is only the
+bootstrap that first writes that file), `cwd`, and `git_root`/`git_remote`/`git_branch` when
+resolvable — **facts, not identity**. `cwd` comes from the plugin (`ctx.worktree ??
+ctx.directory`): no OpenCode payload carries it, and the shell resolves the git facts from it.
+`agent_version` is captured from `Session.version` when `session.created` is observed (OpenCode
+surfaces its version only on the full `Session` object) and stamped onto every envelope from
+then on — the shell is one process per event and cannot remember it. There is deliberately no
+`project_slug` on events (§10.1). The shell stamps `event_id` (ULID) and `ts` before handoff.
+`hints` are non-authoritative and optional; the collector and distiller own judgment.
 
 ## OpenCode hooks used
 
@@ -126,26 +157,37 @@ subscribes to (pinned to the `@opencode-ai/plugin`/`sdk` surface) are:
 
 | Hook | Emits | Notes |
 | ---- | ----- | ----- |
-| `chat.message` | `PromptEvent` (user messages) | One-shot "new message received". Chosen over `experimental.chat.messages.transform`, which is a whole-history transform firing every round-trip (would duplicate prompts). Prompt is captured at first receipt; **updated/edited messages are deferred** (not re-emitted). Deduped by message id. |
+| `chat.message` | `PromptEvent` (user messages) + the turn's recall | One-shot "new message received". Chosen over `experimental.chat.messages.transform`, which is a whole-history transform firing every round-trip (would duplicate prompts). Prompt is captured at first receipt; **updated/edited messages are deferred** (not re-emitted). Deduped by message id in the plugin. |
+| `experimental.chat.messages.transform` | — | The splice. Idempotent by construction (prior librarian parts are stripped first). |
 | `tool.execute.after` | `ToolEvent` | Tool args (command line, `filePath`) are read from `input.args`. |
 | `experimental.session.compacting` | `SessionEvent` (`compact`) + memory re-supply | Fires **before** compaction (distinct from the post-hoc `session.compacted` event); appends the cached startup brief and latest recall when OpenCode exposes a compaction prompt/context. |
-| `event` → `session.created` | `SessionEvent` (`start`) | Fires **exactly once** per session (unlike Claude Code's repeated `SessionStart`). Also back-fills `agent_version`. |
+| `event` → `session.created` | `SessionEvent` (`start`) | Fires **exactly once** per session (unlike Claude Code's repeated `SessionStart`). Also captures `agent_version`. |
 | `event` → `session.deleted` | `SessionEvent` (`stop`) | The one-shot "session ended" signal (`session.idle` repeats per turn and is intentionally not used). |
 
-There is no `turn` concept in the OpenCode payloads, so `context.turn` is left unset
-(the schema allows it to be absent).
+The hook **names** are not the canonical contract (they drift across OpenCode versions); the
+mapping is. When a hook name or payload changes, only the plugin's subscription list and the
+shell's lowering change — the mapper and its fixtures are untouched.
+
+There is no `turn` concept in the OpenCode payloads, so `context.turn` is left unset (the
+schema allows it to be absent).
 
 ## v1 ceiling
 
-`plugin.ts` spawns `librarian collect` **once per event**. That is intentional for v1
-(correctness over throughput, no long-lived child to supervise). The ceiling is marked
-with a `ponytail:` comment in the source; when it bites, the fix is a single long-lived
-`collect` child or an idle-flushed batch buffer — not more logic in the plugin.
+One process spawn per hook event (`librarian hook opencode`), which itself spawns `librarian
+collect` and up to two `librarian inject`. Intentional for v1: correctness over throughput, no
+long-lived child to supervise. The ceiling is marked with `ponytail:` comments in the source;
+when it bites, the fix is a single persistent child speaking the same envelope protocol over a
+pipe — not more logic in the plugin.
 
 ## Tests
 
-- Pure-mapping + pipeline coverage lives in
-  [`tests/adapters/opencode.test.ts`](../../tests/adapters/opencode.test.ts).
-- Origin-qualification fixtures (§9) live in [`fixtures/opencode/`](../../fixtures/opencode/);
-  see that directory's `README.md`. Adding a fixture pair requires **no** test-code edits —
-  fixtures are auto-discovered.
+- Pure-mapping + pipeline coverage: [`tests/adapters/opencode.test.ts`](../../tests/adapters/opencode.test.ts).
+- The `librarian hook opencode` shell, black-box through the real subcommand:
+  [`tests/adapters/opencodeHook.test.ts`](../../tests/adapters/opencodeHook.test.ts).
+- The plugin file's own contract (envelopes out, splice in):
+  [`tests/adapters/opencode-inject.test.ts`](../../tests/adapters/opencode-inject.test.ts).
+- The wizard install, including the "imports nothing outside node builtins" guard:
+  [`tests/cli/initOpencode.test.ts`](../../tests/cli/initOpencode.test.ts).
+- Origin-qualification fixtures (§9): [`fixtures/opencode/`](../../fixtures/opencode/); see that
+  directory's `README.md`. Adding a fixture pair requires **no** test-code edits — fixtures are
+  auto-discovered.

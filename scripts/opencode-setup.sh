@@ -15,8 +15,10 @@
 #      .opencode/plugins/ so OpenCode auto-loads it per-project, and
 #   4. prints the next steps.
 #
-# This is throw-away smoke-test tooling, not a production installer (packaging is
-# deferred — see the design spec). Idempotent: safe to run repeatedly. Undo with
+# This is the DEV INNER LOOP, not the supported installer: `librarian init` writes the same
+# plugin file to ~/.config/opencode/plugins/ and points config `bin` at the installed binary
+# (spec §14 amendment 2026-07-29). The symlink here means edits to the adapter are picked up
+# on the next session with no re-copy. Idempotent: safe to run repeatedly. Undo with
 # scripts/opencode-teardown.sh.
 set -euo pipefail
 
@@ -27,10 +29,9 @@ cd "${REPO_ROOT}"
 
 ADAPTER_DIR="${REPO_ROOT}/adapters/opencode"
 # OpenCode discovers plugin files placed DIRECTLY in .opencode/plugins/ — it does not
-# recurse into subdirectories. So the plugin is symlinked as a single flat file here
-# (named librarian.ts). map.ts is deliberately NOT symlinked alongside it: plugin.ts
-# imports it via a relative './map.ts' that resolves through the symlink's real location
-# (adapters/opencode/), and a flat map.ts would be wrongly loaded as its own plugin.
+# recurse into subdirectories, and it loads EVERY file there as its own plugin. That is the
+# other half of why plugin.ts is a single self-contained file with no sibling imports: one
+# flat symlink (named librarian.ts) is the whole install.
 PLUGIN_DIR="${REPO_ROOT}/.opencode/plugins"
 PLUGIN_LINK="${PLUGIN_DIR}/librarian.ts"
 # The CLI the plugin will spawn, and the config file that records its absolute path.
@@ -96,8 +97,8 @@ echo "    machine-id → ${machine_id}"
 
 # 3. Symlink the plugin as a single flat file directly in .opencode/plugins/. OpenCode
 #    loads files placed directly in that dir (not nested subdirs), and loads EVERY file
-#    there as a plugin — so we link only plugin.ts (as librarian.ts) and NOT map.ts,
-#    which plugin.ts pulls in via a relative import resolved through the symlink target.
+#    there as a plugin — plugin.ts imports nothing but node builtins, so one link is all
+#    it needs.
 #    `ln -sfn` is idempotent (replaces an existing symlink; -n avoids descending a dir).
 echo "==> [3/4] symlinking the plugin → ${PLUGIN_LINK}"
 mkdir -p "${PLUGIN_DIR}"
@@ -105,7 +106,7 @@ mkdir -p "${PLUGIN_DIR}"
 # Clean up a stale nested install from older setup versions (.opencode/plugins/librarian/),
 # which OpenCode never discovered. Best-effort; leave real files alone.
 if [[ -d "${PLUGIN_DIR}/librarian" ]]; then
-  rm -f "${PLUGIN_DIR}/librarian/plugin.ts" "${PLUGIN_DIR}/librarian/map.ts"
+  rm -f "${PLUGIN_DIR}/librarian/plugin.ts" "${PLUGIN_DIR}/librarian/map.ts" "${PLUGIN_DIR}/librarian/inject.ts"
   rmdir "${PLUGIN_DIR}/librarian" 2>/dev/null || true
   echo "    removed stale nested install ${PLUGIN_DIR}/librarian/"
 fi

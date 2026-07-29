@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { map, type CanonicalEvent, type MapEnv, type NativePayload } from '../../adapters/opencode/map.ts';
+import { map, type CanonicalEvent, type MapEnv, type NativePayload } from '../../src/hook/opencodeMap.ts';
 import { validateEvent } from '../../src/collector/validateEvent.ts';
 import { readAll } from '../../src/log/ndjson.ts';
 
@@ -13,7 +13,7 @@ import { readAll } from '../../src/log/ndjson.ts';
  *
  * This file contains NO per-case mapping logic. It auto-discovers every
  * fixtures/opencode/**\/*.json, and for each one asserts that the PURE mapper
- * (adapters/opencode/map.ts) produces the fixture's expected canonical event on all
+ * (src/hook/opencodeMap.ts) produces the fixture's expected canonical event on all
  * stable fields and that the result passes the collector's validateEvent(). Adding a
  * fixture pair means dropping a JSON file under fixtures/opencode/ — never editing this
  * runner (that is the Definition of Done).

@@ -17,7 +17,7 @@
  * domain logic — no salience authority, no project-slug derivation, no redaction, no
  * filtering beyond mapping. The collector and distiller own judgment.
  *
- * This mirrors the merged OpenCode adapter's conventions (adapters/opencode/map.ts):
+ * This mirrors the merged OpenCode adapter's conventions (src/hook/opencodeMap.ts):
  * a pure `map()` tested by golden fixtures, injected env, dumb classification table. It
  * deviates only where Claude Code's hook model forces it — chiefly the shape of the
  * NATIVE payload, which here is Claude Code's real hook JSON (`hook_event_name`,
