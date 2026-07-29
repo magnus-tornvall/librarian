@@ -53,7 +53,36 @@ function surfaceInstructions(agent: string): string {
   if (agent === 'claude') {
     return '  Claude Code: install the plugin — `/plugin marketplace add <librarian>` then `/plugin install librarian` (#154).';
   }
-  return '  OpenCode: install the plugin per adapters/opencode/README.md (#155).';
+  return '  OpenCode: the plugin is a single file in ~/.config/opencode/plugins/ — this wizard writes it.';
+}
+
+/**
+ * Wire OpenCode: write the one plugin file into OpenCode's global plugin dir and return the
+ * binary it should spawn, for `writeConfig` to record as `bin`.
+ *
+ * This is the only host that needs a file written (it loads JS in-process; Claude Code and
+ * every MCP host take a declarative entry pointing at the bin). Returns undefined for `bin`
+ * when no installed binary can be found — the plugin then keeps whatever `bin` the config
+ * already has (a dev checkout's `dist/cli.js`), and we say so rather than pointing it at a
+ * path that does not exist.
+ */
+async function wireOpenCode(prompter: Prompter): Promise<string | undefined> {
+  const { installOpenCodePlugin, installedLibrarianBin, openCodePluginPath } = await import('./hook/opencodeInstall.ts');
+  const target = openCodePluginPath();
+  if (!(await prompter.confirm(`Install the OpenCode plugin to ${target}?`, true))) {
+    prompter.say(surfaceInstructions('opencode'));
+    return undefined;
+  }
+  installOpenCodePlugin(target);
+  prompter.say(`  Wrote ${target} — restart OpenCode (plugins load only at startup).`);
+  const bin = installedLibrarianBin();
+  if (bin === undefined) {
+    prompter.say('  ⚠ No installed binary at ~/.librarian/bin/librarian — install it (scripts/install.sh) and re-run `librarian init`,');
+    prompter.say('    or set config `bin` yourself. The plugin needs it to reach `librarian hook opencode`.');
+    return undefined;
+  }
+  prompter.say(`  Plugin will run: ${bin}`);
+  return bin;
 }
 
 export function readRawConfig(configPath: string): Record<string, unknown> {
@@ -70,10 +99,11 @@ type WizardResult = {
   model?: string;
   embedding?: { endpoint: string; model: string };
   vault?: string;
+  bin?: string;
 };
 
 /**
- * Merge managed keys (inference, embedding, vault) over the existing config,
+ * Merge managed keys (inference, embedding, vault, bin) over the existing config,
  * preserving every unmanaged key (e.g. `scoring`) so a re-run never drops them.
  */
 function writeConfig(existing: Record<string, unknown>, configPath: string, result: WizardResult): Record<string, unknown> {
@@ -82,6 +112,9 @@ function writeConfig(existing: Record<string, unknown>, configPath: string, resu
   if (result.embedding) next.embedding = result.embedding;
   else delete next.embedding;
   if (result.vault) next.vault = result.vault;
+  // `bin` is only written when a host install resolved one — never deleted, so a dev
+  // checkout's `bin` → dist/cli.js survives a wizard run that installed nothing.
+  if (result.bin) next.bin = result.bin;
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`);
   return next;
@@ -119,12 +152,17 @@ export async function runInitWizard(prompter: Prompter, detected: Detected, conf
 
   const vault = await prompter.ask('Vault path (blank to keep current)', currentVault);
 
+  let bin: string | undefined;
   for (const agent of detected.agents) {
+    if (agent === 'opencode') {
+      bin = await wireOpenCode(prompter);
+      continue;
+    }
     if (await prompter.confirm(`Show ${agent} wiring instructions?`, true)) {
       prompter.say(surfaceInstructions(agent));
     }
   }
 
-  writeConfig(existing, configPath, { provider, model, embedding, vault: vault || undefined });
+  writeConfig(existing, configPath, { provider, model, embedding, vault: vault || undefined, bin });
   prompter.say(`\nWrote ${configPath}`);
 }

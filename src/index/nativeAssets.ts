@@ -79,6 +79,18 @@ function extractAsset(name: string): string {
 }
 
 /**
+ * A text asset embedded in the SEA blob, decoded as UTF-8 — used for source files the
+ * binary has to hand back out (the OpenCode plugin `librarian init` writes into the host).
+ * Unlike the native artifacts above these are never extracted to disk here; the caller
+ * decides where the text goes. Returns undefined off the SEA path, where the caller reads
+ * the real file out of the checkout instead.
+ */
+export function seaTextAsset(name: string): string | undefined {
+  if (!isSea() || !seaApi) return undefined;
+  return Buffer.from(seaApi.getRawAsset(name)).toString('utf8');
+}
+
+/**
  * The already-loaded `better-sqlite3` addon object for `new Database(file, {
  * nativeBinding })`. Passing the object (not a path) sidesteps SEA's restricted
  * `require`, which cannot resolve an arbitrary `.node` path — `createRequire`
