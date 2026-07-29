@@ -30,54 +30,21 @@
  * hard-guarantees exit 0.
  */
 
-import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { ulid } from 'ulid';
-import { map, type CanonicalEvent, type Context, type NativePayload, type Resource } from './claudeCodeMap.ts';
+import { map, type CanonicalEvent, type Context, type NativePayload } from './claudeCodeMap.ts';
+import { resolveLibrarianCommand, runLibrarian as spawnLibrarian } from './librarianBin.ts';
+import { buildResource as buildSharedResource, type Resource } from './resource.ts';
 
 // A namespaced tag so operators can grep the host session's hook logs for our lines.
 const LOG_TAG = 'librarian-claude-code';
 const INJECT_TIMEOUT_MS = 8_000;
 
-export type LibrarianCommand = { command: string; args: string[] };
-
-/**
- * Prefer this checkout's built CLI, but preserve the PATH fallback on any resolution failure.
- *
- * `cliUrl` is resolved lazily INSIDE the try, not as a default-parameter value: in the SEA
- * binary the shell runs from an esbuild bundle where `import.meta.url` is not a valid URL
- * base, so `new URL('../../dist/cli.js', import.meta.url)` throws. A default-param throw
- * would escape this function's try/catch (defaults evaluate before the body) and break the
- * exit-0 hook-safety contract — so it must be caught here and fall back to `librarian` on
- * PATH (the correct answer for the installed binary anyway).
- */
-export function resolveLibrarianCommand(
-  exists: (file: string) => boolean = fs.existsSync,
-  cliUrl?: URL,
-  override: string | undefined = process.env.LIBRARIAN_BIN,
-  base: string = import.meta.url,
-): LibrarianCommand {
-  try {
-    if (override) {
-      return { command: override, args: [] };
-    }
-    const cliPath = fileURLToPath(cliUrl ?? new URL('../../dist/cli.js', base));
-    return exists(cliPath)
-      ? { command: process.execPath, args: [cliPath] }
-      : { command: 'librarian', args: [] };
-  } catch {
-    return { command: 'librarian', args: [] };
-  }
-}
-
 const librarian = resolveLibrarianCommand();
 
-function runLibrarian(args: string[], options: Parameters<typeof spawnSync>[2] = {}) {
-  return spawnSync(librarian.command, [...librarian.args, ...args], options);
+function runLibrarian(args: string[], options: Parameters<typeof spawnLibrarian>[2] = {}) {
+  return spawnLibrarian(librarian, args, options);
 }
 
 function logError(message: string): void {
@@ -85,111 +52,14 @@ function logError(message: string): void {
   process.stderr.write(`${LOG_TAG}: ${message}\n`);
 }
 
-// ---------------------------------------------------------------------------
-// Resource-fact resolution (I/O — deliberately kept out of the pure mapper).
-// These mirror the OpenCode adapter's helpers; the facts are agent-independent.
-// ---------------------------------------------------------------------------
-
-/** Run a command and return trimmed stdout, or undefined on any failure. Facts are
- *  best-effort: a missing git remote or an un-init'd repo yields `undefined`, never a
- *  throw — the hook must not break the agent's session over a missing fact. */
-function tryRun(command: string, args: string[], cwd: string): string | undefined {
-  try {
-    const result = spawnSync(command, args, { cwd, encoding: 'utf8' });
-    if (result.status !== 0 || typeof result.stdout !== 'string') {
-      return undefined;
-    }
-    const out = result.stdout.trim();
-    return out.length > 0 ? out : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** The persisted machine-id file the collector owns (src/paths.ts MACHINE_ID_PATH). We
- *  recompute rather than import it (§4 boundary) and resolve lazily so it honors the
- *  current home directory. `librarian machine-id` writes this on first run, so reading it
- *  directly lets the hook skip spawning the CLI on every event. */
-function machineIdPath(): string {
-  return path.join(os.homedir(), '.librarian', 'machine-id');
-}
-
-function readIdFile(file: string): string | undefined {
-  try {
-    if (!fs.existsSync(file)) {
-      return undefined;
-    }
-    const id = fs.readFileSync(file, 'utf8').trim();
-    return id.length > 0 ? id : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
- * Resolve the machine id the way the spec mandates (§10.1, §11): a generated, persisted
- * id — never the hostname. Prefer `MACHINE_ID_PATH` when set; then the persisted file the
- * collector already owns (the common case — reading it avoids a subprocess per event);
- * only if neither exists, ask the CLI (`librarian machine-id`), which generates-and-
- * persists on first call. If all fail (librarian not on PATH — a misconfiguration the
- * README calls out), fall back to a random UUID so an event still carries a non-empty
- * machine_id and the pipeline does not wedge; a warning is logged so the operator can fix
- * PATH.
- */
-function resolveMachineId(): string {
-  const fromEnv = process.env.MACHINE_ID_PATH;
-  if (fromEnv) {
-    const id = readIdFile(fromEnv);
-    if (id) {
-      return id;
-    }
-  }
-
-  const persisted = readIdFile(machineIdPath());
-  if (persisted) {
-    return persisted;
-  }
-
-  const fromCli = tryRun(librarian.command, [...librarian.args, 'machine-id'], process.cwd());
-  if (fromCli) {
-    return fromCli;
-  }
-
-  logError(
-    'could not resolve machine id with the built CLI or `librarian` on PATH; ' +
-      'falling back to an ephemeral id for this run',
-  );
-  return randomUUID();
-}
-
-/** Resolve the git facts for a directory, all best-effort (§10.1: facts, not identity). */
-function resolveGitFacts(cwd: string): Pick<Resource, 'git_root' | 'git_remote' | 'git_branch'> {
-  const git_root = tryRun('git', ['rev-parse', '--show-toplevel'], cwd);
-  if (!git_root) {
-    return {}; // not a git repo — omit all three, don't guess
-  }
-  return {
-    git_root,
-    git_remote: tryRun('git', ['remote', 'get-url', 'origin'], cwd),
-    git_branch: tryRun('git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd),
-  };
-}
-
-/**
- * Build the `resource` block for this hook invocation. Unlike the OpenCode plugin (a
- * long-lived process that resolves this once and reuses it), each Claude Code hook is a
- * fresh short-lived process, so we resolve `resource` per invocation. `agent` is always
- * "claude-code" (issue §10.1). `agent_version` is left unset: Claude Code's hook payloads
- * do not carry the CLI version, and the spec forbids faking a fact we cannot resolve.
- * Facts we cannot resolve are omitted, never invented.
+ * Build the `resource` block for this hook invocation (facts resolved in `resource.ts`,
+ * shared with the OpenCode shell). `agent` is always "claude-code" (issue §10.1).
+ * `agent_version` is left unset: Claude Code's hook payloads do not carry the CLI version,
+ * and the spec forbids faking a fact we cannot resolve.
  */
 function buildResource(cwd: string): Resource {
-  return {
-    agent: 'claude-code',
-    machine_id: resolveMachineId(),
-    cwd,
-    ...resolveGitFacts(cwd),
-  };
+  return buildSharedResource('claude-code', cwd, logError, librarian);
 }
 
 // ---------------------------------------------------------------------------
