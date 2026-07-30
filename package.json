@@ -13,6 +13,7 @@
     "build": "tsc",
     "build:binary": "bash scripts/build-sea.sh",
     "test": "node --import ./tests/setup-home.ts --test \"tests/**/*.test.ts\"",
+    "test:binary": "LIBRARIAN_BINARY_TEST=1 node --import ./tests/setup-home.ts --test tests/cli/update.binary.test.ts",
     "qualify": "node --import ./tests/setup-home.ts --test tests/distill/providerQualification.test.ts",
     "lint": "eslint src"
   },

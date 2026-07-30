@@ -14,7 +14,7 @@ mkdir -p "$OUT"
 #    doesn't survive the CJS bundle). The version is stamped in at build time so the
 #    installed binary can report it (`librarian --version`); run-from-source keeps
 #    the dev sentinel in src/version.ts.
-VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)"
+VERSION="${LIBRARIAN_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)}"
 npm run build
 node_modules/.bin/esbuild src/sea-entry.ts \
   --bundle --platform=node --format=cjs --target=node24 \

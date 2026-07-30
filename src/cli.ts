@@ -24,6 +24,7 @@ import { buildInjection, type InjectionOptions } from './recall/inject.ts';
 import { recallWithTrace, whyNot, type RecallTraceCandidate, type WhyNotResult } from './recall/query.ts';
 import { queryEmbedding, updateIndex, type QueryEmbedding } from './recall/embedding.ts';
 import { VERSION } from './version.ts';
+import { passiveUpdateCheck, updateCommand } from './update.ts';
 
 /**
  * `librarian` CLI — a thin shell over the collector library (spec §4: collector
@@ -53,6 +54,7 @@ const USAGE = `usage:
                                             report admission, usage, cut reasons, and index embedding coverage
   librarian doctor [--index-dir <dir>] [--config <file>] [--json]
                                             report embedding endpoint and index readiness
+  librarian update [--check]                check for or explicitly apply a binary update
   librarian inject --project <slug> [--index-dir <dir>] [--global] [--session-start] [--session <id>]
                                            read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
@@ -351,6 +353,7 @@ function statsCommand(argv: string[]): void {
 }
 
 export type DoctorReport = {
+  version: string;
   embedding: {
     state: 'unconfigured' | 'unreachable' | 'timeout' | 'unpinned' | 'mismatch' | 'ok';
     model?: string;
@@ -375,10 +378,10 @@ export async function doctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PAT
   } catch (error) {
     native = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
-  return { ...(await collectDoctorReport(indexDir, configPath)), native };
+  return { ...(await collectDoctorReport(indexDir, configPath)), version: VERSION, native };
 }
 
-async function collectDoctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PATH): Promise<Omit<DoctorReport, 'native'>> {
+async function collectDoctorReport(indexDir = INDEX_DIR, configPath = CONFIG_PATH): Promise<Omit<DoctorReport, 'native' | 'version'>> {
   const config = loadConfig(configPath);
   let db: ReturnType<typeof openIndexRead> | undefined;
   let coverage = { embedded: 0, total: 0 };
@@ -1333,6 +1336,9 @@ export async function main(argv: string[]): Promise<void> {
     case 'doctor':
       await doctorCommand(rest);
       break;
+    case 'update':
+      await updateCommand(rest);
+      break;
     case 'init':
       await initCommand(rest);
       break;
@@ -1418,6 +1424,7 @@ export async function main(argv: string[]): Promise<void> {
       process.stderr.write(USAGE);
       process.exit(command === undefined ? 1 : 2);
   }
+  await passiveUpdateCheck();
 }
 
 // Auto-run only as the CLI entry point, so this module can be imported (e.g. by
