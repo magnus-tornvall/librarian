@@ -200,7 +200,7 @@ async function search(options: McpServerOptions, args: Record<string, unknown>):
 function getNote(options: McpServerOptions, args: Record<string, unknown>): CallToolResult {
   const noteId = stringArg(args, 'note_id', true) ?? '';
   const withProvenance = booleanArg(args, 'with_provenance') ?? false;
-  return jsonResult(getNoteShowPayload(options.dataDir, noteId, withProvenance));
+  return jsonResult(getNoteShowPayload(options.dataDir, noteId, withProvenance, options.indexDir ?? INDEX_DIR));
 }
 
 function getNotes(options: McpServerOptions, args: Record<string, unknown>): CallToolResult {

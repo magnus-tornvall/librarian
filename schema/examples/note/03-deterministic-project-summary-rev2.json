@@ -1,11 +1,11 @@
 {
   "kind": "note_revision",
   "schema_version": 1,
-  "note_id": "project:librarian:summary",
+  "note_id": "project:magnus-tornvall:librarian:summary",
   "revision_id": "01J8X9F3K7M9N1P3Q5R7S9T1V3",
   "previous_revision_id": "01J8X9F2A1B3C5D7E9F0G2H4J6",
   "created_at": "2026-07-06T08:30:00.000Z",
-  "identity": { "mode": "deterministic", "key": "project:librarian:summary" },
+  "identity": { "mode": "deterministic", "key": "project:magnus-tornvall:librarian:summary" },
   "source": {
     "origin": "opencode",
     "distiller": "llm",
@@ -15,7 +15,7 @@
   "note_type": "project_summary",
   "title": "Librarian project summary",
   "scope": {
-    "project_slug": "librarian",
+    "project_slug": "magnus-tornvall:librarian",
     "git_root": "/Users/magnus/dev/librarian",
     "git_remote": "git@github.com:magnus-tornvall/librarian.git"
   },

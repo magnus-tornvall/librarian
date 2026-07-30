@@ -182,7 +182,7 @@ test('pull path capstone: real collect/distill note is searchable by MCP and dri
   const { client, transport } = await connectClient(t.dataDir, t.diagnosticsDir, t.indexDir);
   try {
     const searchPayload = parseToolJson(
-      await client.callTool({ name: 'search', arguments: { query: 'periwinkle', project_slug: 'librarian', limit: 10 } }),
+      await client.callTool({ name: 'search', arguments: { query: 'periwinkle', project_slug: 'magnus-tornvall:librarian', limit: 10 } }),
     );
     const results = searchPayload.results as Array<Record<string, unknown>>;
     const hit = results.find((result) => result.note_id === note.note_id);
@@ -212,7 +212,7 @@ test('pull path capstone: real collect/distill note is searchable by MCP and dri
     );
 
     const eventOnlyPayload = parseToolJson(
-      await client.callTool({ name: 'search', arguments: { query: 'platypus', project_slug: 'librarian', limit: 10 } }),
+      await client.callTool({ name: 'search', arguments: { query: 'platypus', project_slug: 'magnus-tornvall:librarian', limit: 10 } }),
     );
     assert.deepEqual(
       eventOnlyPayload.results,

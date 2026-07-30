@@ -241,7 +241,9 @@ export async function flagNoteRecord(
   source: { kind: 'human' | 'cli' },
   configPath?: string,
 ): Promise<NoteFlag> {
-  if (!findLatestNote(dataDir, noteId)) throw new Error(`unknown note_id: ${noteId}`);
+  const localNote = findLatestNote(dataDir, noteId);
+  const inIndex = localNote || noteExistsInIndex(indexDir, noteId);
+  if (!inIndex) throw new Error(`unknown note_id: ${noteId}`);
   const record = buildFlagRecord(noteId, reason, source);
   appendNote(dataDir, record);
   // A single-record mutation: reconcile leniently so a transient embed blip on
@@ -266,7 +268,12 @@ export async function reviseNoteRecord(
 ): Promise<NoteRevision> {
   if (body.trim().length === 0) throw new Error('body must be a non-empty string');
   const latest = findLatestNote(dataDir, noteId);
-  if (!latest) throw new Error(`unknown note_id: ${noteId}`);
+  if (!latest) {
+    if (noteExistsInIndex(indexDir, noteId)) {
+      throw new Error(`cannot revise peer note: ${noteId}`);
+    }
+    throw new Error(`unknown note_id: ${noteId}`);
+  }
   if (latest.kind !== 'note_revision') {
     // ponytail: a tombstone carries no origin/scope/type to inherit; reviving one via
     // revision is out of v1 scope — un-tombstone with a fresh revision path if ever needed.
@@ -733,6 +740,24 @@ export function findLatestNote(dataDir: string, noteId: string): NoteStateRecord
   return latest.find((note) => note.note_id === noteId);
 }
 
+/**
+ * Check if a note exists in the index, including peer notes.
+ * Returns true if the note exists in the local log or in the index (peer notes).
+ */
+function noteExistsInIndex(indexDir: string, noteId: string): boolean {
+  try {
+    const db = openIndexRead(indexDir);
+    try {
+      const note = db.prepare("SELECT 1 FROM note_state WHERE note_id = ?").get(noteId);
+      return note !== undefined;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
 function formatScope(scope: NoteRevision['scope']): string {
   const parts = [
     scope.project_slug ? `project_slug=${scope.project_slug}` : undefined,
@@ -1046,9 +1071,12 @@ function machineId(flags: Map<string, string>): void {
   process.stdout.write(id + '\n');
 }
 
-export function getNoteShowPayload(dataDir: string, noteId: string, withProvenance: boolean): NoteShowPayload {
+export function getNoteShowPayload(dataDir: string, noteId: string, withProvenance: boolean, indexDir?: string): NoteShowPayload {
   const note = findLatestNote(dataDir, noteId);
   if (!note) {
+    if (indexDir && noteExistsInIndex(indexDir, noteId)) {
+      throw new Error(`peer note ${noteId} cannot be displayed locally`);
+    }
     throw new Error(`unknown note_id: ${noteId}`);
   }
 

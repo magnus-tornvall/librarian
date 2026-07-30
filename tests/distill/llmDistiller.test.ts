@@ -136,14 +136,14 @@ test('project summaries are project-scoped deterministic revisions chained to th
   const previous = {
     kind: 'note_revision',
     schema_version: 1,
-    note_id: 'project:librarian:summary',
+    note_id: 'project:magnus-tornvall:librarian:summary',
     revision_id: '01J8X7QK40M8Q3N6P0R5S7TVWY',
     created_at: '2026-07-01T00:00:00.000Z',
-    identity: { mode: 'deterministic', key: 'project:librarian:summary' },
+    identity: { mode: 'deterministic', key: 'project:magnus-tornvall:librarian:summary' },
     source: { origin: ORIGIN, distiller: 'llm' },
     note_type: 'project_summary',
     title: 'Earlier status',
-    scope: { project_slug: 'librarian' },
+    scope: { project_slug: 'magnus-tornvall:librarian' },
     provenance: {},
     links: [],
     body: { summary: 'Earlier summary.' },
@@ -151,10 +151,10 @@ test('project summaries are project-scoped deterministic revisions chained to th
 
   const note = await distill(events, SESSION_ID, makeFixtureProvider(response), ORIGIN, [previous]);
 
-  assert.equal(note.note_id, 'project:librarian:summary');
+  assert.equal(note.note_id, 'project:magnus-tornvall:librarian:summary');
   assert.equal(note.previous_revision_id, previous.revision_id);
   assert.deepEqual(note.scope, {
-    project_slug: 'librarian',
+    project_slug: 'magnus-tornvall:librarian',
     git_root: '/Users/magnus/dev/librarian',
     git_remote: 'git@github.com:magnus-tornvall/librarian.git',
   });

@@ -103,7 +103,7 @@ export async function distill(
   const resource = (events[0]?.resource ?? {}) as Record<string, unknown>;
   const gitRoot = typeof resource.git_root === 'string' ? resource.git_root : undefined;
   const gitRemote = typeof resource.git_remote === 'string' ? resource.git_remote : undefined;
-  const projectSlug = projectSlugFromGitRoot(gitRoot);
+  const projectSlug = projectSlugFromGitRoot(gitRoot, gitRemote);
   const summaryId = noteType === 'project_summary' && projectSlug !== undefined
     ? projectSummaryId(projectSlug)
     : undefined;

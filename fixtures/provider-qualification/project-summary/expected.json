@@ -1,8 +1,8 @@
 {
   "note_type": "project_summary",
   "identity_mode": "deterministic",
-  "note_id": "project:librarian:summary",
-  "project_slug": "librarian",
+  "note_id": "project:example:librarian:summary",
+  "project_slug": "example:librarian",
   "session_id": "qualify-project-summary",
   "from_event_id": "01K00000000000000000000101",
   "to_event_id": "01K00000000000000000000110"

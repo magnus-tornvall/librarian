@@ -322,7 +322,7 @@ for (const adapter of [OPENCODE, CLAUDE_CODE]) {
     migrate(db);
     indexNotes(db, t.dataDir, t.cursorPath);
 
-    const results = recall(db, term, { projectSlug: 'librarian' });
+    const results = recall(db, term, { projectSlug: 'magnus-tornvall:librarian' });
     const hit = results.find((r) => r.note_id === note.note_id);
     assert.ok(hit, `recall("${term}") must return the distilled ${adapter.origin} note`);
     assert.equal(hit!.origin, adapter.origin, `the recalled note's origin must survive as ${adapter.origin}`);
@@ -367,7 +367,7 @@ test('instrumentation §2 both origins: opencode AND claude-code both appear in 
   migrate(db);
   indexNotes(db, t.dataDir, t.cursorPath);
 
-  const results = recall(db, term, { projectSlug: 'librarian' });
+  const results = recall(db, term, { projectSlug: 'magnus-tornvall:librarian' });
   const origins = new Set(results.map((r) => r.origin));
   assert.ok(origins.has('opencode'), 'the opencode origin must appear in the recall results');
   assert.ok(origins.has('claude-code'), 'the claude-code origin must appear in the recall results');

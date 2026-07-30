@@ -28,7 +28,7 @@ import type { InjectionTrace } from '../src/diagnostics/injectionTrace.ts';
 const CLI = path.join(import.meta.dirname, '..', 'src', 'cli.ts');
 // The Claude Code plugin entry: the hook `command` invokes `librarian hook claude-code`.
 const HOOK_ARGS = [CLI, 'hook', 'claude-code'] as const;
-const PROJECT_SLUG = 'librarian';
+const PROJECT_SLUG = 'magnus-tornvall:librarian';
 
 // The judgment the fixture inference provider returns for the eligible session. Content that
 // exists ONLY here (never in the raw events) proves the note came from real distillation.

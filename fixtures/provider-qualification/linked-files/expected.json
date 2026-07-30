@@ -1,7 +1,7 @@
 {
   "note_type": "decision",
   "identity_mode": "episodic",
-  "project_slug": "librarian",
+  "project_slug": "example:librarian",
   "session_id": "qualify-linked-files",
   "from_event_id": "01K00000000000000000000201",
   "to_event_id": "01K00000000000000000000210",

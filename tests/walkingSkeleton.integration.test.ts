@@ -126,7 +126,8 @@ test('walking skeleton: fixture events → distill → note log → export → i
   );
 
   // 8. Query via recall() (024): exactly one result, whose note_id is the distilled note.
-  const results = recall(db, QUERY_TERM, { projectSlug: 'librarian' });
+  // Project slug is derived from git_remote, not just directory name.
+  const results = recall(db, QUERY_TERM, { projectSlug: 'magnus-tornvall:librarian' });
   assert.equal(results.length, 1, 'stage 8 (recall): expected exactly one result for the query term');
   assert.equal(
     results[0].note_id,
