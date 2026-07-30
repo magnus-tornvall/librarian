@@ -6,7 +6,6 @@ import os from 'node:os';
 import path from 'node:path';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
-const PLUGIN_SOURCE = path.join(ROOT, 'adapters', 'opencode', 'plugin.ts');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-update-'));
 const binaryTier = process.env.LIBRARIAN_BINARY_TEST === '1';
 let server: ChildProcess;
@@ -69,7 +68,17 @@ test('SEA update swaps a newer candidate and doctor reports its version', { skip
   assert.match(run(target, ['--version']).stdout, /v2\.0\.0/);
   assert.match(run(target, ['doctor', '--json']).stdout, /"version":"v2\.0\.0"/);
   assert.match(run(target, ['update', '--check'], env(v2)).stdout, /up to date/);
-  assert.equal(fs.readFileSync(plugin, 'utf8'), fs.readFileSync(PLUGIN_SOURCE, 'utf8'));
+  assert.equal(fs.readFileSync(plugin, 'utf8'), fs.readFileSync(path.join(ROOT, 'adapters', 'opencode', 'plugin.ts'), 'utf8'));
+});
+
+test('plugin refresh failure keeps a verified binary', { skip: !binaryTier }, () => {
+  const target = install();
+  const plugin = path.join(temp, '.config', 'opencode', 'plugins', 'librarian.ts');
+  fs.mkdirSync(plugin, { recursive: true });
+  const update = run(target, ['update'], env(v2));
+  assert.equal(update.status, 0, update.stderr);
+  assert.match(update.stderr, /could not refresh OpenCode plugin/);
+  assert.match(run(target, ['--version']).stdout, /v2\.0\.0/);
 });
 
 test('a mismatched or native-failing candidate rolls back the prior binary', { skip: !binaryTier }, () => {
@@ -85,6 +94,15 @@ test('a mismatched or native-failing candidate rolls back the prior binary', { s
   fs.chmodSync(unlaunchable, 0o755);
   const launchFailure = run(target, ['update'], env(unlaunchable));
   assert.equal(launchFailure.status, 1);
+  assert.match(run(target, ['--version']).stdout, /v1\.0\.0/);
+
+  const hanging = path.join(temp, 'hanging');
+  fs.writeFileSync(hanging, '#!/bin/sh\nsleep 60\n');
+  fs.chmodSync(hanging, 0o755);
+  const started = Date.now();
+  const timeout = run(target, ['update'], env(hanging));
+  assert.ok(Date.now() - started < 10_000, 'doctor verification must time out');
+  assert.equal(timeout.status, 1);
   assert.match(run(target, ['--version']).stdout, /v1\.0\.0/);
 
   const failing = path.join(temp, 'failing');

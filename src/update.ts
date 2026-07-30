@@ -5,8 +5,9 @@ import { CACHE_DIR } from './paths.ts';
 import { VERSION } from './version.ts';
 import { isSea } from './index/nativeAssets.ts';
 
-const DEFAULT_TAGS_URL = 'https://api.github.com/repos/magnus-tornvall/librarian/tags';
+const DEFAULT_TAGS_URL = 'https://api.github.com/repos/magnus-tornvall/librarian/tags?per_page=100';
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const NETWORK_TIMEOUT_MS = 5_000;
 const VERSION_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
 
 type Tag = { name?: unknown };
@@ -31,7 +32,7 @@ function compare(left: Version, right: Version): number {
 }
 
 export async function latestVersion(): Promise<Version | undefined> {
-  const response = await fetch(tagsUrl(), { signal: AbortSignal.timeout(5_000) });
+  const response = await fetch(tagsUrl(), { signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`tag check failed: ${response.status} ${response.statusText}`);
   const tags = await response.json();
   if (!Array.isArray(tags)) throw new Error('tag check returned invalid JSON');
@@ -72,9 +73,10 @@ function markChecked(): void {
 /** A best-effort human hint. It never affects command success or protocol stdout. */
 export async function passiveUpdateCheck(): Promise<void> {
   if (!process.stderr.isTTY || process.env.CI || recentlyChecked() || !version(VERSION)) return;
+  // Throttle attempts, including failed ones: an offline terminal must stay responsive.
+  markChecked();
   try {
     const check = await checkForUpdate();
-    markChecked();
     if (check.installed && check.latest && compare(check.latest, check.installed) > 0) {
       process.stderr.write(`\n${checkText(check)}\n`);
     }
@@ -89,7 +91,7 @@ async function stageCandidate(target: string): Promise<string> {
     if (process.env.LIBRARIAN_BINARY) {
       fs.copyFileSync(process.env.LIBRARIAN_BINARY, staged);
     } else if (process.env.LIBRARIAN_URL) {
-      const response = await fetch(process.env.LIBRARIAN_URL);
+      const response = await fetch(process.env.LIBRARIAN_URL, { signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) });
       if (!response.ok) throw new Error(`download failed: ${response.status} ${response.statusText}`);
       fs.writeFileSync(staged, Buffer.from(await response.arrayBuffer()));
     } else {
@@ -104,7 +106,7 @@ async function stageCandidate(target: string): Promise<string> {
 }
 
 function verify(target: string, candidate: string): string | undefined {
-  const result = spawnSync(target, ['doctor', '--json'], { encoding: 'utf8' });
+  const result = spawnSync(target, ['doctor', '--json'], { encoding: 'utf8', timeout: NETWORK_TIMEOUT_MS });
   if (result.error || result.status !== 0) return result.error?.message ?? `doctor exited ${result.status}`;
   try {
     const report = JSON.parse(result.stdout) as { version?: unknown; native?: { ok?: unknown } };
@@ -118,7 +120,7 @@ function verify(target: string, candidate: string): string | undefined {
 
 function refreshOpenCodePlugin(): void {
   const result = spawnSync(process.execPath, ['update', '--refresh-opencode-plugin'], { encoding: 'utf8' });
-  if (result.status !== 0) throw new Error(result.stderr.trim() || 'could not refresh OpenCode plugin');
+  if (result.status !== 0) process.stderr.write(`librarian: updated, but could not refresh OpenCode plugin: ${result.stderr.trim() || 'unknown error'}\n`);
 }
 
 export async function updateCommand(argv: string[]): Promise<void> {
@@ -128,12 +130,13 @@ export async function updateCommand(argv: string[]): Promise<void> {
     return;
   }
   if (argv.length > 1 || (argv.length === 1 && argv[0] !== '--check')) throw new Error('update accepts only --check');
-  const check = await checkForUpdate();
   if (argv[0] === '--check') {
+    const check = await checkForUpdate();
     process.stdout.write(checkText(check) + '\n');
     return;
   }
   if (!isSea()) throw new Error('update requires an installed Librarian binary; run-from-source will not modify the Node executable');
+  const check = await checkForUpdate();
   if (!check.installed) throw new Error(`development build (${VERSION}) cannot self-update`);
   if (!check.latest || compare(check.latest, check.installed) <= 0) {
     process.stdout.write(checkText(check) + '\n');

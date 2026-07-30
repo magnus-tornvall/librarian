@@ -445,6 +445,7 @@ async function doctorCommand(argv: string[]): Promise<void> {
 function renderDoctorText(report: DoctorReport): string {
   const embedding = report.embedding;
   return [
+    `Version: ${report.version}`,
     `Native stack: ${report.native.ok ? 'ok' : `FAILED — ${report.native.error}`}`,
     `Embedding: ${embedding.state}`,
     ...(embedding.model ? [`Configured model: ${embedding.model}${embedding.digest ? `@${embedding.digest}` : ''}`] : []),
@@ -1424,7 +1425,7 @@ export async function main(argv: string[]): Promise<void> {
       process.stderr.write(USAGE);
       process.exit(command === undefined ? 1 : 2);
   }
-  await passiveUpdateCheck();
+  if (command !== 'update') await passiveUpdateCheck();
 }
 
 // Auto-run only as the CLI entry point, so this module can be imported (e.g. by
