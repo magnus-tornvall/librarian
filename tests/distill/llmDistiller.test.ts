@@ -159,3 +159,22 @@ test('project summaries are project-scoped deterministic revisions chained to th
     git_remote: 'git@github.com:magnus-tornvall/librarian.git',
   });
 });
+
+test('a normalized git root produces the same project slug', async () => {
+  const events = loadFixtureEvents();
+  (events[0].resource as Record<string, unknown>).git_root = '~/dev/librarian';
+  const response = JSON.stringify({
+    note_type: 'project_summary',
+    title: 'Librarian status',
+    summary: 'The project summary was refreshed.',
+  });
+
+  const note = await distill(events, SESSION_ID, makeFixtureProvider(response), ORIGIN);
+
+  assert.equal(note.kind, 'note_revision');
+  assert.deepEqual(note.scope, {
+    project_slug: 'librarian',
+    git_root: '~/dev/librarian',
+    git_remote: 'git@github.com:magnus-tornvall/librarian.git',
+  });
+});
