@@ -1,10 +1,10 @@
 # Librarian — Feedback loops on memory output (research round)
 
-**Date:** 2026-07-31 (revised same day after author challenge — see §11). **Status:** research, not a
-settled decision. Companion to `docs/specs/librarian-design-consolidated.md` (§4 logs/consumers,
+**Date:** 2026-07-31 (revised twice same day after author challenges — see §12). **Status:** research,
+not a settled decision. Companion to `docs/specs/librarian-design-consolidated.md` (§4 logs/consumers,
 §5 decisions register, §6 recall/injection contract, §7 rendering, §8 diagnostics isolation, §10
-schemas, §12 items 12.2/12.5/12.11, §15 open items) and to issues #91, #109, #171, #172, #179. If
-this document disagrees with the spec, the spec wins.
+schemas, §12 items 12.2/12.5/12.11, §15 open items) and to issues #91, #109, #171, #172, #179, #182.
+If this document disagrees with the spec, the spec wins.
 
 **Do not relitigate:** §8's diagnostics isolation (self-observation never becomes memory except
 through a human curated note), 12.3's closure (no worth multiplier without a flowing note-granular
@@ -48,7 +48,10 @@ spec amendments. The real design problems are not the ones I raised in the first
 re-distill invariant (which currently forbids exactly this), the novelty gate (which will silently
 eat the loop's output), the **note-invisible event problem** (events from skipped/NOOP'd sessions are
 unreachable by a note-indexed pool — the very 25 sessions from #179), and pool budgeting in rendered
-tokens rather than calendar windows.
+tokens rather than calendar windows. On the retrieval question the answer is also cheaper than
+expected (§7): a window pool is a SQL filter, not a search; the vector channel has a live
+scope-starvation bug that gets worse with every note (#182) plus an embedded-text mis-specification;
+and the relatedness signal worth building is an exact provenance join, not a fancier vector space.
 
 ## 2. Vocabulary: four loops that get conflated, plus the non-loop
 
@@ -258,7 +261,106 @@ pool = notes(scope, window, lens) → provenanceEvents()      # precision, note-
   that gates ordinary acquisition — separate lock, separate cursor, and acquisition wins on
   contention.
 
-## 7. The honest cost model at steady state
+## 7. Finding the notes: is BM25 + embeddings the right selector?
+
+Asked directly: *is BM25 + the current embeddings good enough to find the notes that seed a pool, or
+would a purpose-built sqlite-vec table tuned for patterns help?* Three answers, in decreasing order of
+how much they change the plan.
+
+### 7.1 For the loop worth building first, similarity is not the tool
+
+A window pool for `consolidation:{slug}:{lens}` is a **filter**, not a search:
+
+```sql
+WHERE project_slug = ? AND created_at BETWEEN ? AND ? AND note_type IN (…)
+```
+
+Every one of those columns already exists on `notes_fts` (`src/index/schema.ts:19-22` — `UNINDEXED`,
+i.e. filterable and returnable but not tokenized). Deterministic, explainable in `why`, no tuning, no
+embedding, no relevance floor to re-derive. Similarity only earns its keep for a **cross-project theme
+lens**, where the lens cannot be written as a predicate. So the retrieval question does not gate the
+first loop at all — which is the cheapest possible answer to it.
+
+### 7.2 The vector channel is mis-specified for its job — two independent defects
+
+**Defect 1 — scope is post-filtered, so KNN starves as the corpus grows (→ #182).** `note_vectors` is
+created with no partition or metadata columns (`src/index/indexer.ts:85`), `knnRanks` takes no scope
+argument and asks for a fixed global `k = 50` (`src/recall/query.ts:16,60-68`), and scope is applied
+only when the KNN-only ids are joined back to FTS (`src/recall/query.ts:189-197`). Rank globally,
+discard out-of-scope. At 68 notes the top-50 is ~74% of the corpus and the bug is invisible; at 3000
+notes across 20 projects a scoped query often keeps **zero** vector candidates, because the global
+top-50 is filled by whichever projects are semantically loudest. Recall then reverts to BM25-only —
+losing precisely the cross-language capability §5 bought embeddings for — while the trace still reports
+`embedding: "ok"`, since §6's state vocabulary has no value for *"KNN ran, nothing in scope."*
+`sqlite-vec` partition keys and metadata columns landed in 0.1.6 and `package.json:32` pins **0.1.9**,
+so the fix is available and unused. Filed as **#182** (under #115), including the fork the implementer
+must settle: a partition key cannot serve "project match OR global scope" in one query, so the likely
+shape is two KNN queries — project partition and global partition — merged before RRF.
+
+**Defect 2 — one vector per note, over text built for a different channel.** `buildSearchText`
+(`src/index/indexer.ts:8-19`) concatenates title + summary + bullets + `body.details` +
+`project_slug` + link targets, and the same string feeds both FTS and the embedder
+(`src/index/indexer.ts:120`). Two consequences:
+
+- **Dilution.** A 0.6b embedding over a long concatenation is a centroid. Curated notes preserve human
+  Markdown verbatim in `body.details`, so the highest-weighted note class (`curated: 1.4`) is the most
+  diluted of all. Backwards.
+- **Slug noise.** A project slug is an identifier, not language. Embedding it inflates similarity
+  between any two notes in the same project — redundant once scope is filtered, and actively harmful
+  for a cross-project theme lens, where it makes same-project notes look related regardless of topic.
+
+`search_text` was designed for BM25, where a slug token is a useful exact match, then reused for
+vectors, where it is noise. This is §7-of-the-spec's category error in miniature (storage optimizes for
+machines, prompts for signal-per-token; they meet at the renderer), and the fix belongs at the same
+place: **BM25 keeps `search_text`, the vector channel gets a gist rendering** (title + summary +
+bullets; no slug, no `details`). A rendering change, not a schema change. Deserves its own issue.
+
+### 7.3 What "tuned for patterns" should actually be — a join, not a vector space
+
+The strongest relatedness signals in librarian are not semantic. They are exact, and they are already
+in the logs:
+
+| Relation | Signal | Cost |
+|---|---|---|
+| co-derived | notes whose `provenance.event_ids` sets overlap | exact join |
+| same locus | notes whose events touch the same `files[].path` | exact join |
+| same episode | events temporally adjacent within one session | exact join |
+| **same failure class** | post-#179: events sharing a normalized stderr signature | exact join — **this is the recurring-ABI-failure case** |
+
+No embedding can beat an exact join on these, they are explainable in `why`, and they are
+derived-artifact class (§4): deletable, rebuildable, trivial in SQLite even at 10⁵ events/year. This is
+also HippoRAG 2's actual lesson, easy to misread as "better embeddings": its win came from graph
+structure plus Personalized PageRank *over* an index, not from a stronger vector model. So the
+purpose-built tables worth building are **`note_events(note_id, event_id)`,
+`event_files(event_id, path)`, and (post-#179) `event_failures(event_id, signature)`** — not a fancier
+`vec0`.
+
+### 7.4 Ranked, with costs
+
+| Option | Cost | Verdict |
+|---|---|---|
+| Gist rendering for the vector channel | none — a renderer change | ✅ correctness fix |
+| Scope-aware KNN (partition key or metadata column) | vec0 shape + `INDEX_SCHEMA_VERSION` bump; index is disposable so rebuild *is* the migration | ✅ #182 |
+| Provenance-join tables | new derived tables + an event-log cursor consumer | ✅ the real relatedness engine |
+| A second vector per note in a different space (qwen3-embedding supports instruction prefixes, so "what class of problem is this" is expressible) | +1 embed/note, +1 table, +1 digest to pin, 3-channel fusion | ⏸ defer behind a measured miss |
+| Bullet-level vectors with max-sim aggregation | N× rows; breaks the note→vector 1:1 that `note_vectors`' PRIMARY KEY encodes | ⏸ defer |
+| Event-level embeddings | 10⁴–10⁵ embeds/year on a local 0.6b model, hundreds of MB of vectors | ❌ refuse; a deterministic selector does this job |
+
+### 7.5 The eval that answers it, and one consistency note
+
+"Good enough" is not answerable from intuition, and the cheap eval already exists in the store: the 25
+ABI-failure sessions from #179. Hand-label which events belong in a `failures` pool, then measure
+**recall@budget** for each selector — window filter / BM25 / KNN / provenance join. Plain-file fixture,
+project idiom, no framework. It is only meaningful **post-#179**: before that, every selector scores
+zero for the same uninformative reason.
+
+Finally, a consistency worth recording rather than re-deriving later: §5 disqualified embeddings from
+deciding novelty verdicts because they score contradictions as near neighbours. For *pool selection*
+that property inverts into a virtue — the contradicting note is exactly what the pool wants. Embeddings
+are well suited to selecting inputs and unsuited to rendering verdicts, which is the same read/write
+asymmetry §8 draws below.
+
+## 8. The honest cost model at steady state
 
 The first draft claimed tokens are not the constraint. At a decade of usage that is wrong, and the
 correction matters:
@@ -276,7 +378,7 @@ conclusion) but: **loops whose output is a bounded revision of an addressable no
 budget-bounded pool of real events, are cheap; loops that mint unbounded new notes, or that read
 notes instead of events, are expensive.** Replay is the cheap shape and 3a is the expensive one.
 
-## 8. Why differently-sized loops at all
+## 9. Why differently-sized loops at all
 
 Because signals settle at different times, and each size can only act on what has settled:
 
@@ -297,7 +399,7 @@ weaker note, caught by the existing gates. Guessing wrong about which note to ki
 memory. The asymmetry is what makes similarity-based pool selection acceptable where
 similarity-based closure is not.
 
-## 9. What the spec needs (three amendments, all small)
+## 10. What the spec needs (three amendments, all small)
 
 Per AGENTS.md's routing test — these outlive any single unit of work, so they belong in the spec, and
 the rest belongs on issues. No fourth tracking home.
@@ -307,12 +409,12 @@ the rest belongs on issues. No fourth tracking home.
    forbids the work (P1).
 2. **§10 provenance may span sessions.** Record the widened shape and that the single-session form
    stays valid. Non-retrofittable in spirit — decide it once, before the first replay note exists.
-3. **Sharpen #172's addressability rule into a creation/closure split** (§8 above): heuristic
+3. **Sharpen #172's addressability rule into a creation/closure split** (§9 above): heuristic
    selection of *inputs*, structural addressing of *targets whose validity closes*. Also record the
    ruling that no note is derived from notes — every note's provenance resolves to events — with 3a
    named as the rejected alternative and the model-collapse reasoning attached.
 
-## 10. Recommendations (ordered)
+## 11. Recommendations (ordered)
 
 - **R1 — Ship #179 first.** Unchanged, and now doubly load-bearing: replay quality is bounded by
   event fidelity (no insight without prior training), and captured output changes the pool's token
@@ -328,20 +430,30 @@ the rest belongs on issues. No fourth tracking home.
   vocabulary. Success signals for the issue should include the two silent-failure traps: a fixture
   proving the loop's output is **not** NOOP'd as a near-duplicate of its own seeds (P2), and a
   fixture proving a session that produced **no note** can still contribute events to a pool (P4).
-- **R4 — Read-side one-hop `links` expansion: demoted to optional.** Still cheap and still
-  fixture-gated ("expansion must not resurrect below-floor distractors"), but it is a recall nicety,
-  not the answer to associativity. Replay is the answer.
-- **R5 — Measure to *tune* the loop, not to permit it.** The first draft gated the loop's existence
+- **R4 — Fix the vector channel before any loop leans on it (§7.2).** #182 (scope-aware KNN) is a live
+  silent-degradation bug on its own timeline, not loop work; the gist-rendering split for the embedded
+  text is a sibling issue not yet filed. A cross-project theme lens *is* a scoped vector query, so a
+  loop built on today's channel would inherit a defect that worsens with every note.
+- **R5 — Build relatedness as a join before buying it as a vector (§7.3).** `note_events`,
+  `event_files`, and (post-#179) `event_failures` are derived-artifact tables that make "patterns and
+  related stuff" an exact query, explainable in `why`. Defer the second embedding space and
+  bullet-level vectors behind a measured miss; refuse event-level embeddings.
+- **R6 — Read-side one-hop `links` expansion: optional.** Still cheap and still fixture-gated
+  ("expansion must not resurrect below-floor distractors"), but a recall nicety rather than the answer
+  to associativity. Replay plus the joins in R5 is the answer.
+- **R7 — Measure to *tune* the loop, not to permit it.** The first draft gated the loop's existence
   on fragmentation harm; that was wrong for a decade-scale design. What genuinely needs measuring is
   the loop's **parameters**: rendered-tokens-per-pool distribution (sets the budget and the cadence),
   the skip+noop share of sessions (sizes the event-side selector — i.e. how much of the log is
-  note-invisible), and the duplicate rate of loop output against its seeds (validates the P2 choice).
-  #171's fragmentation probe stays useful as a quality signal.
-- **R6 — Still refuse, with reasons that survive:** notes-derived-from-notes with no re-grounding in
+  note-invisible), the duplicate rate of loop output against its seeds (validates the P2 choice), and
+  §7.5's recall@budget comparison across selectors on the labelled ABI-failure pool. #171's
+  fragmentation probe stays useful as a quality signal.
+- **R8 — Still refuse, with reasons that survive:** notes-derived-from-notes with no re-grounding in
   events (3a — model collapse, drift, provenance loss); similarity-addressed *closure* of validity
-  (#172); diagnostics → memory (§8); usage → ranking (12.3).
+  (#172); diagnostics → memory (§8 of the spec); usage → ranking (12.3); event-level embeddings
+  (§7.4).
 
-## 11. Critique of this round
+## 12. Critique of this round
 
 - **The first draft's central recommendation was wrong**, and wrong in an instructive way: it took
   "consolidation" to mean summarization-of-notes because that is what most of the surveyed systems
@@ -366,6 +478,15 @@ the rest belongs on issues. No fourth tracking home.
 - **Nothing here is measured.** No pool was built, no token count computed, no replay pass run. P2 and
   P4 are read off the code (`noveltyGate.ts`, the skip heuristic, `provenanceEvents`) and are
   predictions, not observations — which is why R3 carries them as fixtures rather than as caveats.
+- **§7's defects are likewise read, not reproduced.** The scope-starvation table extrapolates from
+  `KNN_FETCH = 50` and an assumed even spread across projects; the real distribution is skewed and the
+  threshold where it bites is unmeasured. #182 therefore leads with a fixture that *manufactures* the
+  scale and must fail on `main` — an argument that only convinces once it is executable. The dilution
+  and slug-noise claims about the embedded text are mechanism arguments with no retrieval measurement
+  behind them at all; §7.5's recall@budget comparison is what would settle them.
+- **§7.3 risks the same convenience bias flagged above.** "Use the structural signal you already
+  have" is again the answer that happens to fit the architecture. It is at least falsifiable the same way: if the
+  join-based selectors do not beat BM25/KNN on the labelled pool, they are not worth their tables.
 
 ---
 
@@ -390,6 +511,9 @@ Evaluation and failure modes: [HaluMem](https://arxiv.org/abs/2511.03506) ·
 [Memory poisoning attack and defense](https://arxiv.org/html/2601.05504v2) ·
 [Model collapse / accumulating data](https://openreview.net/forum?id=5B2K4LRgmz) ·
 [Agent memory benchmarks 2026](https://mem0.ai/blog/ai-memory-benchmarks-in-2026)
+
+Retrieval mechanics: [sqlite-vec metadata columns, partition keys and KNN filtering (v0.1.6)](https://alexgarcia.xyz/blog/2024/sqlite-vec-metadata-release/index.html) ·
+[sqlite-vec architecture](https://github.com/asg017/sqlite-vec/blob/main/ARCHITECTURE.md)
 
 Cognitive science: [Sleep inspires insight (Wagner et al., Nature 2004)](https://www.nature.com/articles/nature02223) ·
 [Preregistered replication attempt (CCN 2024)](https://2024.ccneuro.org/pdf/29_Paper_authored_CCN_2024.pdf) ·
