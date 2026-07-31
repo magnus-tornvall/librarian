@@ -174,7 +174,6 @@ test('a normalized git root produces the same project slug', async () => {
   assert.equal(note.kind, 'note_revision');
   assert.deepEqual(note.scope, {
     project_slug: 'librarian',
-    git_root: '~/dev/librarian',
     git_remote: 'git@github.com:magnus-tornvall/librarian.git',
   });
 });
