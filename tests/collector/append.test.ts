@@ -68,6 +68,21 @@ test('normalizes home paths throughout an event before durable append', () => {
   assert.deepEqual(readAll(logFilePath), [persisted, persisted]);
 });
 
+test('leaves paths that only neighbour or contain the home path unchanged', () => {
+  const home = os.homedir();
+  const record = JSON.parse(
+    fs.readFileSync(path.join(GOLDEN_DIR, '01-prompt-in-git-repo.json'), 'utf8'),
+  );
+  record.resource.cwd = `/mnt/backup${home}/dev`;
+  record.context.cwd = `${home}ish/dev`;
+  record.prompt = `restored /mnt/backup${home}/dev into ${home}ish/dev`;
+
+  const logFilePath = tempLogFile();
+  appendEvent(logFilePath, record);
+
+  assert.deepEqual(readAll(logFilePath), [record]);
+});
+
 test('leaves paths outside home unchanged', () => {
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '01-prompt-in-git-repo.json'), 'utf8'),

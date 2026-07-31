@@ -3,7 +3,11 @@ import { redact } from '../redact.ts';
 import { validateEvent } from './validateEvent.ts';
 import os from 'node:os';
 
-const HOME_PATH = new RegExp(`${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[\\\\/])`, 'g');
+// A home path is only a home path where one can start: at the beginning of the string or
+// after a separator character. The lookbehind keeps a directory that merely *contains* the
+// home path (`/mnt/backup/Users/me`, or `packages/root/x` when $HOME is `/root`) from being
+// rewritten into a bogus `~` — corruption that would be as permanent as the leak this guards.
+const HOME_PATH = new RegExp(`(?<![\\w.~-])${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[\\\\/])`, 'g');
 
 function normalizeHomePaths(value: unknown): unknown {
   if (typeof value === 'string') return value.replace(HOME_PATH, '~');
