@@ -1,313 +1,371 @@
 # Librarian — Feedback loops on memory output (research round)
 
-**Date:** 2026-07-31. **Status:** research, not a settled decision. Companion to
-`docs/specs/librarian-design-consolidated.md` (§5 decisions register, §6 recall/injection
-contract, §8 diagnostics isolation, §12 items 12.2/12.5/12.11, §15 open items) and to issues
-#91, #109, #171, #172, #179. If this document disagrees with the spec, the spec wins.
+**Date:** 2026-07-31 (revised same day after author challenge — see §11). **Status:** research, not a
+settled decision. Companion to `docs/specs/librarian-design-consolidated.md` (§4 logs/consumers,
+§5 decisions register, §6 recall/injection contract, §7 rendering, §8 diagnostics isolation, §10
+schemas, §12 items 12.2/12.5/12.11, §15 open items) and to issues #91, #109, #171, #172, #179. If
+this document disagrees with the spec, the spec wins.
 
 **Do not relitigate:** §8's diagnostics isolation (self-observation never becomes memory except
-through a human curated note), 12.3's closure (no worth multiplier without a flowing
-note-granular outcome signal), 12.8's closure (lexical overlap is not contradiction detection),
-the §5 embeddings ruling (embeddings fetch candidates, never decide verdicts), #172's
-addressability rule (validity closes through structural addressing, never guessed relatedness),
-and §15's deferral of entity identity / episodic consolidation. This document is written *inside*
-those rulings; where a recommendation touches one, it says so explicitly.
+through a human curated note), 12.3's closure (no worth multiplier without a flowing note-granular
+outcome signal), 12.8's closure, the §5 embeddings ruling (embeddings fetch candidates, never decide
+verdicts), #172's addressability rule for *closing* a note's validity, and §15's deferral of entity
+identity. This document is written inside those rulings; §9 names the three places where a
+recommendation needs a spec amendment rather than an exemption.
 
 **Question that prompted this:** *When I learn something new, that knowledge can trigger further
 realizations when combined with what I already knew. How do other memory implementations handle
-this? What does memory research say? What feedback loops can we apply on librarian output —
-events, notes, or both? Which are likely to be cost effective? Why should we apply
-differently-sized loops on the data at all?*
+this? What does memory research say? What feedback loops can we apply on librarian output — events,
+notes, or both? Which are likely to be cost effective? Why should we apply differently-sized loops?*
+
+**Author's design constraint, which reframed the answer (2026-07-31):** loop sizing must be designed
+for years of usage and tens of thousands of events, not for today's corpus. And the mechanism is
+**not** notes-derived-from-notes: *notes are relevant for finding and building context, but only to
+look up which **events** to include when learning from a bigger set of events.* A distill session
+produces a note that references events; two weeks later a bigger loop finds that note, resolves it
+back to its events, and includes those events in the data pool for that larger distillation.
 
 ---
 
 ## 1. Answer in one paragraph
 
-The idea is real, and both literatures have names for it: **consolidation** (write-side synthesis
-running at a slower timescale than acquisition) and **associativity** (linking done at read time).
-Every serious agent-memory system implements one or both, and the cognitive-science prior is
-strong — complementary learning systems (fast store + slow store + offline replay) and
-sleep-dependent insight, where restructuring during an offline period produces explicit insight
-that an equal period of waking does not. But the same literature is unusually clear about the
-failure mode: consolidation stages hallucinate and their errors propagate downstream, recursive
-self-generated content drifts, self-evolving memory degrades safety, and at least one 2026
-evaluation finds an extra reflection layer *hurting* a pipeline that already reasons well. For
-librarian specifically, three settled invariants make "new notes derived from old notes" the most
-expensive loop available (provenance is collector-stamped from events; faithfulness verify is
-defined against events; §8 forbids the usage-signal→memory path), while three much cheaper loops
-are sitting unbuilt: the deterministic `project:{slug}:summary` note already **is** a slow-store
-consolidation slot that nothing currently schedules; every note already carries `links` that
-recall never follows; and `librarian stats` already is the policy loop, with the human curated
-note as the sanctioned door for genuine insight. And one scale fact governs all of it — per
-#179's probe the real store holds **68 notes from 260 sessions**, with 25 sessions hitting the
-same node/ABI failure and *zero* notes capturing it. There is very little to consolidate and a
-great deal to capture. Fidelity first, then correction loops, then exactly one bounded synthesis
-loop on an addressable key.
+The idea is real and both literatures have names for it: **consolidation** (write-side synthesis at a
+slower timescale than acquisition) and **associativity** (linking at read time). The author's
+mechanism — notes as an *index* into the event log, bigger loops replaying the indexed events — is
+also a named idea, and a better one than what most agent-memory systems ship: it is the
+**hippocampal indexing theory** of memory (the fast store holds pointers; consolidation replays the
+pointed-to traces, not a summary of them), and in retrieval engineering it is **parent-document /
+small-to-big retrieval** and **ReadAgent's gist-then-look-up-the-page** loop. It matters that this is
+the shape, because it converts the two expensive objections to consolidation into non-issues:
+provenance stays event-grounded so `note show --with-provenance` keeps working, and the faithfulness
+verifier keeps a source to verify against. It also inherits the one mitigation the model-collapse
+literature actually endorses — **re-ground in the real data instead of replacing it with your own
+output** — so errors do not compound across loop generations the way they do in reflection trees.
+Librarian already has every piece: notes stamp the full `provenance.event_ids` list plus a range, and
+`provenanceEvents()` (`src/cli.ts:782`) already hydrates verbatim events from a note for the
+drill-down tool. What is missing is a second consumer, a deterministic pool builder, and three small
+spec amendments. The real design problems are not the ones I raised in the first draft: they are the
+re-distill invariant (which currently forbids exactly this), the novelty gate (which will silently
+eat the loop's output), the **note-invisible event problem** (events from skipped/NOOP'd sessions are
+unreachable by a note-indexed pool — the very 25 sessions from #179), and pool budgeting in rendered
+tokens rather than calendar windows.
 
 ## 2. Vocabulary: four loops that get conflated, plus the non-loop
 
-"Feedback loop on librarian output" is four different mechanisms with four different risk
-profiles. Conflating them is what makes the topic feel large.
-
-| # | Loop kind | What it changes | Unit it acts on | Librarian status |
+| # | Loop kind | What it changes | Reads | Librarian status |
 |---|---|---|---|---|
-| 1 | **Acquisition** | events → a new note | event delta | Shipped (gated admission pipeline, §5) |
-| 2 | **Correction / validity** | closes or replaces an *existing* note | one addressed note | Partial: supersede/flag/12.2 shipped; #172, #91 pending |
-| 3 | **Consolidation / synthesis** | derives a *new, more abstract* note from notes | a set of notes | **Does not exist. The actual subject of this round.** |
-| 4 | **Policy / tuning** | changes weights, gates, prompts — writes no memory | the config + the prompt | Shipped (`librarian stats`, 12.10) |
-| — | *Read-side association* | changes what a query returns, writes nothing | the candidate set at recall | Not built; `links` exist and are ignored |
+| 1 | **Acquisition** | events → a new note | one session delta | Shipped (gated admission pipeline, §5) |
+| 2 | **Correction / validity** | closes or replaces an existing note | events + one addressed note | Partial: supersede/flag/12.2 shipped; #172, #91 pending |
+| 3a | **Consolidation by summarization** | derives a note *from notes* | notes only | Does not exist — **and should not** (§4, §7) |
+| 3b | **Consolidation by replay** | derives a note from a *larger event pool*, selected via notes | notes → events | Does not exist. **The recommendation.** |
+| 4 | **Policy / tuning** | weights, gates, prompts — writes no memory | diagnostics | Shipped (`librarian stats`, 12.10) |
+| — | *Read-side association* | what a query returns; writes nothing | `links` on retrieved notes | Not built; `links` exist and recall ignores them |
 
-The last row is not a loop at all, and that is precisely why it matters: it buys a large share of
-what people want from loop 3 (multi-hop, "this connects to that") at a fraction of the cost and
-with none of the write-side risk.
+Splitting 3a from 3b is the whole content of this revision. They are usually discussed as one thing
+("reflection", "consolidation", "memory evolution") and they have opposite risk profiles.
 
-**The load-bearing observation for the whole document:** the safety of a loop is decided by *how
-it addresses its target*, not by how often it runs. Loop 2 is safe when it addresses a
-deterministic key or an exact provenance link (#172's rule) and unsafe when it guesses relatedness.
-Loop 3 has the same property, and almost every implementation in §3 addresses its target by
-similarity or clustering — i.e. by guessing. That is the same deferred entity-resolution problem
-§15 names, wearing a new hat.
+## 3. How other implementations handle it
 
-## 3. How other implementations handle "new knowledge triggers realizations"
+| System | Shape | Reads notes or source? | Notable |
+|---|---|---|---|
+| **Generative Agents** (2023) | reflection tree; importance-sum > 150, ~2–3×/day | **notes** (observations *and* prior reflections) | Ablation: believability 29.89 → 26.88 without reflection — the strongest pro-synthesis result in the field, and a 3a design |
+| **A-MEM** (2025) | per-note link generation + rewrites neighbours' context/tags | **notes** | 2 LLM calls per event; up to 6× multi-hop; 85–93% fewer memory-operation tokens |
+| **Mem0** | ADD / UPDATE / DELETE / NOOP against similar memories | notes | **Deliberately no abstraction layer** — correction is the entire loop |
+| **Zep / Graphiti** | bi-temporal edge invalidation + community summaries | notes | Label propagation chosen over Leiden *because* it extends incrementally, delaying full recompute |
+| **RAPTOR** | recursive cluster → summarize → recurse | **notes (summaries of summaries)** | +20% absolute on QuALITY; a pure 3a tree |
+| **GraphRAG → LazyGraphRAG** | entity graph + community summaries → *deferred* to query time | notes → source | ~$33k index (early 2024) → vector-RAG indexing cost (~0.1%), global queries up to 700× cheaper. The field's own correction of over-eager write-time synthesis |
+| **HippoRAG 2** | dual-node KG (phrases + **passages**), Personalized PageRank | index ranks, **source passages are returned** | +7 F1 on associative tasks over embedding retrievers, beating the summarization systems while indexing more cheaply. Evidence for 3b over 3a |
+| **ReadAgent** | gist memory per page, then **look up the original pages** | gist → **source** | 3.5–20× effective context window. This is the author's mechanism at document scale |
+| **Parent-document / small-to-big retrieval** | index small chunks, feed the **parent document** | index → **source** | Mainstream RAG practice; the granularity of the index is deliberately not the granularity of the context |
+| **MemWalker** | navigate a summary tree down to the **leaf segment** | tree → **source** | Summaries are routing structure, not the answer substrate |
+| **Letta sleep-time compute** | offline "learned context" from raw context on idle | **source** | ~5× fewer test-time tokens; pays off only when a context serves multiple related queries |
+| **MemoryOS** | STM→MTM→LPM, promotion by **heat** (visit frequency × length), not clock | notes | +49% F1 vs GPT-4o-mini baselines on LoCoMo. Note the trigger: usage, not cadence |
+| **TiMem** (ACL 2026) | temporal memory tree, cross-level consolidation | notes | 75.30 LoCoMo / 76.88 LongMemEval-S **with 52.20% shorter recalled memory** |
+| **Consumer products** | background curation (ChatGPT "Dreaming", reported 2026-06; Claude.ai project summaries) | notes | Direction of travel is *correction*, not abstraction |
 
-| System | Loop kind | Size / trigger | What it writes | Cost shape | Reported outcome |
-|---|---|---|---|---|---|
-| **Generative Agents** (Park 2023) | 3 | importance-sum > 150; ~2–3× per simulated day | reflection nodes citing the observations they came from; reflections can reflect on reflections (recursive tree) | 1 question-generation + 1 synthesis call per reflection | Ablation: removing reflection dropped believability from μ=29.89 to μ=26.88 (TrueSkill) — the strongest pro-synthesis result in the field |
-| **A-MEM** (Xu 2025) | 2+3 | *per note*, the smallest possible loop | links to neighbours, plus rewritten context/tags on the neighbours ("memory evolution") | 2 LLM calls per memory event | Up to 6× on multi-hop; 85–93% fewer memory-operation tokens vs. baselines |
-| **Mem0** | 2 only | per message pair | ADD / UPDATE / DELETE / NOOP against retrieved similar memories | 1 extract + 1 update call | Deliberately *no* abstraction layer — correction is the whole loop |
-| **Zep / Graphiti** | 2+3 | continuous per episode; communities refreshed lazily | bi-temporal edge invalidation (invalidate, never discard) + community summaries via label propagation | incremental by design — label propagation was chosen over Leiden *because* it extends dynamically and delays full recompute | Temporal invalidation is the headline feature, not abstraction |
-| **RAPTOR** | 3 | offline, whole corpus | recursive cluster → summarize → recurse tree; retrieval reads multiple abstraction levels | full re-index; GMM soft clustering + UMAP | +20% absolute on QuALITY with GPT-4 |
-| **GraphRAG** | 3 | offline, whole corpus | entity graph + hierarchical community summaries | one LLM call per chunk; **~$33k** for a large enterprise index in early 2024 | LazyGraphRAG then moved *all* LLM summarization to query time, reaching plain-vector indexing cost (~0.1%) with global queries up to 700× cheaper |
-| **HippoRAG 2** | read-side | query time | nothing durable — Personalized PageRank over a KG | cheap offline indexing vs. GraphRAG/RAPTOR/LightRAG | +7 F1 over embedding retrievers on *associative* tasks while beating summarization systems that specialize in sense-making |
-| **Letta sleep-time compute** | 3 | between sessions, on idle | "learned context" derived from raw context | pays off only when one context serves *multiple related* queries | ~5× fewer test-time tokens; explicitly **not** worth it for one-off questions |
-| **MemoryOS** | 3 | promotion by **heat** (visit frequency × interaction length), not by clock | STM→MTM→LPM; persona/profile updates | tiered, amortized | +49% F1 vs GPT-4o-mini baselines on LoCoMo |
-| **TiMem** (ACL 2026 Findings) | 3 | temporal hierarchy levels | temporal memory tree, progressively abstracted persona | consolidation across levels, no fine-tuning | 75.30 LoCoMo / 76.88 LongMemEval-S **and 52.20% shorter recalled memory** |
-| **Consumer products** | mostly 2 | background | ChatGPT "Dreaming" (reported June 2026) curates and updates stale entries ("going to Singapore" → "went to Singapore"); Claude.ai synthesizes project summaries; Claude Code = flat markdown | vendor-side | Direction of travel is background *curation*, not abstraction |
+**The pattern that decides this document:** every system that returns to the source — HippoRAG 2,
+ReadAgent, MemWalker, parent-document retrieval, LazyGraphRAG's retreat from write-time summarization
+— either wins on quality against the summarization systems or wins on cost by an order of magnitude.
+The systems that summarize summaries pay the full indexing bill up front and inherit drift. The
+author's proposal is on the winning side of that split, and it is the side librarian's own §6 already
+endorses on the read path: *"distilled notes are a supplement to recoverable verbatim source, not a
+replacement [endorsed — distillation pays a measured lossy-compression tax; supplement-not-replace
+recovers most verbatim performance at a fraction of the tokens]."* **The proposal is that endorsed
+principle applied to the write side.**
 
-Three patterns are worth extracting, because they are what actually transfers:
+## 4. What memory research claims — and what it doesn't
 
-1. **The systems that win on associativity do it at read time** (HippoRAG 2), and they beat the
-   systems that bought associativity with write-time summarization — while spending less offline.
-2. **The systems that win on cost do correction at write time and nothing else** (Mem0, Graphiti's
-   invalidation). Correction is the cheap half; abstraction is where the money goes.
-3. **The measurable win from hierarchy is compression, not accuracy** — TiMem's honest headline is
-   52% less recalled memory at equal-or-better accuracy. For librarian, whose push budget is
-   already 0–5 notes and ~300–700 tokens, *that win is already banked by the distiller*. This is
-   the single most important negative finding in the table.
+**For replay-based consolidation specifically:**
 
-## 4. What memory research actually claims — and what it doesn't
+- **Hippocampal indexing theory** (Teyler & DiScenna 1986; Teyler & Rudy 2007): the hippocampal trace
+  is an *index* into distributed neocortical patterns; retrieval and replay reactivate those patterns
+  rather than reading a stored digest of them. This is the author's mechanism, and it is a closer
+  mapping than the one my first draft used (a summary note being rewritten). It also predicts the
+  right division of labour: the index must be cheap, addressable and lossy; the trace must be
+  verbatim and durable — which is exactly librarian's note log / event log split.
+- **Complementary learning systems** (McClelland et al. 1995, and the bidirectional-interaction work
+  since): fast pattern-separating store, slow generalizing store, exchange by replay during off-task
+  periods. Generalization belongs to the slow store. An argument for **two** timescales — the count
+  above two must be justified by something other than the theory.
+- **Sleep inspires insight** (Wagner, Gais, Haider, Verleger & Born, *Nature* 2004): >2× as many
+  subjects gained insight into a hidden rule after 8h sleep than after matched wakefulness — insight
+  as *restructuring* of an existing representation. The closest thing in the literature to the
+  intuition in the question. **The clause that matters more than the result:** no benefit without
+  prior training. Consolidation amplifies what was encoded; it cannot recover what was never
+  captured. Applied here: replay over intent-only tool events replays a record that never contained
+  the failure. That is #179, and it gates the value of every loop below.
 
-**For the idea:**
+**Bounding it:**
 
-- **Complementary learning systems** (McClelland et al. 1995 and the bidirectional-interaction work
-  since): a fast, pattern-separating hippocampal store and a slow, generalizing neocortical store,
-  exchanging information through replay during off-task periods. Generalization is a property of the
-  *slow* store. This is a direct argument for **two** timescales — not five.
-- **Sleep inspires insight** (Wagner, Gais, Haider, Verleger & Born, *Nature* 2004): more than twice
-  as many subjects gained insight into a hidden rule after 8h of sleep than after equivalent
-  wakefulness, at matched times of day. Insight here is explicitly *restructuring* of an existing
-  representation. This is the closest thing in the literature to the intuition in the question.
-- **The clause that matters more than the result:** sleep produced no insight benefit *in the absence
-  of initial training*. Consolidation amplifies what was encoded; it cannot recover signal that was
-  never captured. Applied to librarian: a loop over intent-only tool events restructures a record
-  that never contained the failure. That is #179, and it dominates every loop in this document.
-
-**Against, or bounding it:**
-
-- **Model collapse / recursive-training literature:** training on recursively generated output loses
-  distribution tails and drifts, with error growing per iteration; the mitigation that works is
-  *accumulating* real data rather than replacing it (a finite error bound rather than an unbounded
-  one). Notes-derived-from-notes is the same shape at the corpus level.
-- **HaluMem** (first operation-level hallucination benchmark for memory systems): systems generate
-  and accumulate hallucinations at *both* the extraction and update stages, and those upstream
-  errors propagate into QA and amplify. Every consolidation layer is another extraction stage.
-- **MemEvoBench / "Your Agent May Misevolve":** biased or contaminated memory accumulation produces
-  gradual behavioural drift; risks are self-generated by routine evolution, and static prompt-based
-  defenses are insufficient. Librarian's honest reading of this is already in §6 ("labels are a
-  prior, not a guard").
+- **Model collapse / recursive-training literature:** recursive training on own output loses
+  distribution tails and drifts, with error growing per iteration; the mitigation that provably works
+  is **accumulating real data rather than replacing it** (finite error bound instead of unbounded).
+  This is the sharpest technical argument for 3b over 3a: **replay re-grounds every pass in the
+  sacred event log, so loop generations do not compose their own errors.** A reflection tree
+  composes them by construction.
+- **HaluMem** (operation-level hallucination benchmark for memory systems): systems hallucinate at
+  *both* the extraction and update stages, and upstream errors propagate and amplify downstream.
+  Every consolidation layer is another extraction stage — which is an argument for *few* layers, not
+  for none, and for each layer reading source rather than the layer below it.
+- **MemEvoBench / "Your Agent May Misevolve":** biased memory accumulation produces gradual
+  behavioural drift; risks are self-generated by routine evolution; static prompt defenses are
+  insufficient. Consistent with §6's "labels are a prior, not a guard."
 - **Semantic drift under reconsolidation:** the 2026 agent-native-memory analysis (arXiv 2606.24775)
-  frames it bluntly — repeated summarization distorts facts; every time you allow reconsolidation
-  you allow distortion. (Full text returned 403 to my fetch; this and the next bullet are taken from
-  indexed excerpts, not a read of the paper.)
-- **A negative result on stacking loops:** the same 2026 line of evaluation reports that adding
-  reflection *on top of* planning yields no further gains and may weaken routing decisions.
-- **Memory poisoning research:** a wrong memory is self-reinforcing — decisions made from it generate
-  new memories that corroborate it, and the original error becomes progressively harder to identify
-  because it is surrounded by legitimate-looking descendants.
+  puts it bluntly — repeated summarization distorts facts; allowing reconsolidation allows
+  distortion. (Full text returned 403; this and the next bullet come from indexed excerpts.)
+- **A negative result on stacking loops:** the same line of evaluation reports reflection *on top of*
+  planning yielding no further gains and possibly weakening routing.
+- **Memory poisoning:** a wrong memory is self-reinforcing — decisions taken from it mint descendants
+  that corroborate it, and the original error becomes progressively harder to isolate. Replay
+  weakens this too: the descendants are re-derived from events, not from the wrong note.
 
-**Synthesis of the evidence:** the research supports two timescales, correction-heavy maintenance,
-read-time association, and compression as the measurable win. It does not support unbounded
-recursive self-synthesis, and it specifically warns about the failure being *quiet*.
+## 5. Sizing for steady state, not for today's corpus
 
-## 5. Where librarian's own invariants bite
+The first draft leaned on a corpus count (68 notes / 260 sessions from #179's probe) to argue there
+was little to consolidate. That argument is **withdrawn as an architectural input** — it was a
+sequencing observation and it cannot constrain a design that must hold for a decade. What replaces
+it is an extrapolation and a budget.
 
-Six constraints decide which loops are cheap here and which are expensive. They are the reason a
-generic "add a reflection pass" recommendation would not survive.
+Order-of-magnitude from #179's probe: **7266 tool events across 260 sessions** of dogfooding — call
+it ~10² events per session, and (at that observed cadence) ~10⁴–10⁵ events per year, growing.
+Post-#179 each `command` / `vcs_*` event also carries captured output, so **bytes per event rise
+sharply while count rises linearly** — the pool budget must be computed on *rendered tokens*, never
+on event counts.
 
-1. **§8 reflexive isolation.** Diagnostics never enter memory; insights from them enter through
-   exactly one door — a human curated note. So any loop driven by *usage* signals (dead notes,
-   injection traces, cut reasons) can legitimately end in a policy change or a human note, and
-   never in a machine-minted memory. This rules out the entire "learn from what got injected"
-   family by construction. It is the right call and this document does not reopen it.
-2. **Provenance is collector-stamped from events** (§7, §10, drill-down tool in §6). A note
-   synthesized from notes has no `event_range`. Either the field quietly becomes optional — which
-   breaks the endorsed "distilled notes are a supplement to recoverable verbatim source" property
-   that `note show --with-provenance` sells — or a new provenance kind is needed (`derived_from:
-   note_ids[]`). That schema decision, in an append-only sacred log, is the single largest
-   complexity driver of any synthesis loop.
-3. **Faithfulness verify is defined against events** (12.6). A note-derived note has no events to
-   verify against, so it would enter the log with *weaker* admission control than an ordinary note —
-   exactly backwards for the record class with the broadest match surface.
-4. **#172's addressability rule.** Validity may be closed only through structural addressing
-   (content-derived key or exact provenance link), never guessed relatedness — and §5 records that
-   embeddings score contradictions as near neighbours. "Cluster similar notes and synthesize" is
-   guessed relatedness by definition; it is the deferred entity-resolution problem (§15).
-5. **Episodic immutability + latest-wins.** A synthesis loop cannot revise episodic notes. It can
-   only *add* — and adding is the expensive direction.
-6. **The 0–5 budget, the floor, and the workspace-bottleneck rationale (§6).** An abstraction note
-   is by construction a strong match for many queries. Under a fixed 5-slot budget it does not add
-   capacity; it **displaces** the specific note that would have been more useful, and a
-   near-miss distractor is measurably worse than an empty slot. Benchmarks in §3 measure recall@k on
-   QA; librarian's product surface is precision under invisible injection. The gains in that table
-   are not denominated in librarian's currency.
+That gives the honest definition of loop size, which is neither a calendar nor a note count:
 
-**And the scale fact.** #179's probe of the real store: 7266 tool events, 260 sessions, **68 notes**.
-Twenty-five of those sessions hit the same `NODE_MODULE_VERSION` / `nvm use` failure; zero notes
-captured it, while the same lesson was hand-written into a Claude Code memory file after **one**
-occurrence — because that session saw the error text. A corpus of 68 notes has very little to
-consolidate. The deficit is upstream of every loop in this document.
+| Loop | Pool source | Order of events | Rendered budget | Cadence that follows |
+|---|---|---|---|---|
+| **Delta** (shipped) | one session's pending delta | 10¹–10² | small | per boundary |
+| **Window** | notes for one project in a window + salient events in that window | 10²–10³ | ~10–30k tokens | days–weeks |
+| **Theme** | notes matching a lens across projects + selector-matched events | 10³–10⁴ | needs aggressive selection to fit at all | months |
+| **Corpus** | everything | 10⁵+ | **does not fit, ever** | never — this is why selection is the design |
 
-## 6. The honest cost model for this project
+**Size is a budget, not a clock.** The cadence is derived: run the loop when its deterministic pool
+builder has accumulated roughly a budget's worth of material. That also makes the loop's cost
+predictable for a decade instead of growing with the log — the property a calendar-driven loop
+cannot have.
 
-Token cost is not the binding constraint. One user, a local Ollama or `claude -p`, 68 notes, monthly
-cadence: a corpus-wide reflection pass is a handful of calls — effectively free. So a
-"cost-effective" ranking based on tokens would be worthless here. The real ledger:
+## 6. The replay loop, concretely
 
-| Cost term | Why it dominates | Which loops pay it |
+### 6.1 The pieces that already exist
+
+- Every note stamps `provenance.session_id`, the **full `event_ids` list**, and an `event_range`
+  (`src/distill/llmDistiller.ts:149-153`). The index is already there, at event granularity.
+- `provenanceEvents(dataDir, note)` (`src/cli.ts:782`) already resolves a note back to its **verbatim
+  events**, preferring `event_ids` and falling back to the range. The pool builder is a function that
+  already ships — it was written for `note show --with-provenance`.
+- Events live at `data/events/{session_id}.ndjson`, so hydrating K notes costs K distinct file reads.
+  The §4 hot-path contract governs *injection* only; a background replay pass is free to read logs.
+- Redaction and the memory-echo guard both ran **before append**, so replayed events carry no secrets
+  and no `<librarian-memory>` blocks. Replay inherits both guarantees for free.
+- `valid_at` / `invalid_at` are already in the note schema, and the renderer (§7) already does
+  field elision and indexed compact text with ordinal→ULID mapping for collector-stamped provenance.
+
+So the mechanism is: **recall over notes → resolve to event ids → hydrate verbatim events → render →
+the existing distill judgment + admission pipeline → a note whose provenance is real events.**
+
+### 6.2 The four real problems (none of which are the ones I raised first time)
+
+**P1 — The re-distill invariant currently forbids this.** §5: *"idempotency is by provenance, not
+content: a re-distill of an already-provenanced event range is a bug."* The replay loop re-reads
+already-provenanced events **by design**. As written, an agent picking up the work would correctly
+refuse it. The fix is not an exemption but a sharpening: **idempotency is per-consumer.** §4 already
+models "independent cursor-tracking consumers"; the acquisition distiller must never re-distill its
+own range, and a replay consumer with its own cursor, lock and note-type space re-reading events is
+its function, not a bug. This is the same disambiguation problem #179 flagged for 12.3, and it needs
+the same treatment: fix the spec line before an agent reads it.
+
+**P2 — The novelty gate will silently eat the loop's output.** `findNearDuplicate`
+(`src/distill/noveltyGate.ts`) runs a BM25 near-duplicate query, project-scoped, against the whole
+index. A note derived from the same events its seed notes came from overlaps them lexically by
+construction → duplicate verdict → NOOP → the loop reports "nothing found" while working perfectly.
+This is the single most likely way the feature ships broken and looks fine. Three options, in
+increasing order of preference:
+
+1. Exclude the seed note ids from the gate's candidate set (smallest change; leaves the gate blind to
+   *other* prior consolidations).
+2. Scope the gate by note type, so consolidation output is only checked against consolidation output.
+3. **Give the loop deterministic ids, so its output is a *revision* and skips the gate the way every
+   other deterministic-ID revision already does** (§5: "revisions are supposed to overlap their
+   prior"). This is the option that also solves note-count growth at 10-year scale.
+
+**P3 — Keys without entity resolution: name the lens, not the topic.** Option 3 needs a deterministic
+key, and keying by *topic* is the deferred entity-resolution problem (§15). The way out: derive the
+key from the **pool definition** rather than from the content — `consolidation:{project_slug}:{lens}`,
+where a lens is a small, finite, human-configured selector (`failures`, `conventions`, `decisions`,
+`summary`). The lens names *how the pool was built*, which is known before the LLM is called, so no
+resolution is needed and the note count is bounded by projects × lenses instead of growing with
+history. Two consequences worth recording: `project:{slug}:summary` becomes simply the `summary`
+lens (the smallest instance of the general loop, not a separate feature), and this is the first place
+where claude-mem's declined **mode system** (§5) genuinely fits — not as a per-origin acquisition
+profile, which is what was declined, but as a *loop selector*. That is a different trigger and it
+arguably fires here.
+
+**P4 — Note-invisible events (the most important critique of the proposal as stated).** If notes are
+the *only* index into events, then every event from a session that was **skipped** by the heuristic
+or **NOOP'd** by the worth judgment is permanently unreachable by every larger loop — no note points
+at it. This is not marginal: skip and noop rates are first-class counters in `librarian stats`
+precisely because they are large. And it is the #179 case exactly — 25 sessions hit the same ABI
+failure and produced **zero notes**, so a purely note-indexed pool can never see any of them. The
+loop would be structurally blind to the very pattern that motivated the whole discussion.
+
+The fix is to accept that notes are a **precision** index, not a complete one, and give the pool
+builder a second, **event-side selector** that does not depend on a note existing: salient events in
+the window (`hints.possibly_salient`, including post-#179 `command_failed`), or events from sessions
+with no note at all. Two sources, deterministic, both recorded in the verdict:
+
+```
+pool = notes(scope, window, lens) → provenanceEvents()      # precision, note-indexed
+     ∪ events(scope, window, selector)                       # recall, note-independent
+     → dedupe by event_id → order by ULID → truncate to budget (record the cut)
+```
+
+### 6.3 Two smaller details that are cheap now and expensive later
+
+- **Provenance must be allowed to span sessions.** `provenance` is single-session-shaped today
+  (`session_id` + one `event_range`), and `provenanceEvents()` throws without a `session_id`. A
+  replay note's events come from many sessions. This is the one genuine schema change the design
+  needs — and it is far smaller and better-motivated than the `derived_from: note_ids[]` my first
+  draft feared. Shape to settle on the issue: `event_ids` grouped per session (e.g.
+  `provenance.sessions: [{ session_id, event_ids }]`), with `provenanceEvents()` extended to
+  multi-session and the single-session form kept working (unknown-field tolerance + read-time
+  defaults, per §11's precedent).
+- **`valid_at` must be the pool's time span, not "now".** A note minted today from two-year-old
+  events would otherwise beat the older, more accurate note on recency decay. The bi-temporal fields
+  are already in the schema; the loop just has to stamp them honestly.
+- **Locking.** The distiller lock is one lock per data dir. A long replay pass must not hold the lock
+  that gates ordinary acquisition — separate lock, separate cursor, and acquisition wins on
+  contention.
+
+## 7. The honest cost model at steady state
+
+The first draft claimed tokens are not the constraint. At a decade of usage that is wrong, and the
+correction matters:
+
+| Cost term | At today's scale | At 10-year scale |
 |---|---|---|
-| **Risk cost** | a wrong note is injected *invisibly*, matches broadly, and (per §5) has weaker verification | loops that mint notes |
-| **Irreversible surface** | new record kinds/fields in an append-only sacred log are forever; mistakes are superseded, never deleted | loops needing new provenance/record kinds |
-| **Explainability loss** | `why` / `why-not` / drill-down are the differentiator vs. vendor memory; a derived note degrades all three unless the derivation chain is stored | synthesis loops |
-| **Maintenance** | each loop size adds a scheduler trigger, a prompt, a verdict class, and fixtures | all loops |
-| **Opportunity cost** | the same effort on #179/#171 buys more memory quality with no new risk class | all loops |
+| **Tokens per pass** | negligible | **binding** — a theme pool is 10³–10⁴ events with captured output; corpus-wide never fits. This is why the pool budget *is* the design |
+| **Risk: a wrong note injected invisibly** | dominant | still dominant, but **lower than 3a's**: each pass re-grounds in events, so errors don't compound across generations |
+| **Irreversible surface** | one schema change (multi-session provenance) | same — it is a widening, and it is needed once |
+| **Explainability** | **improves**: a replay note drills down to real events, unlike a summary-of-summaries | same |
+| **Maintenance** | a second consumer, a pool builder, a lens config, fixtures | lens vocabulary grows slowly; bounded note count keeps `stats` legible |
 
-So cost-effectiveness here is decided by three questions, in order: **does it write to memory?**
-**is its target structurally addressable?** **does it need a new record kind?** Loops that write
-nothing are nearly free. Loops that revise an addressable note are cheap. Loops that mint derived
-notes are expensive *regardless of token cost*.
+So the cost-effectiveness ordering is not "loops that write nothing are cheapest" (the first draft's
+conclusion) but: **loops whose output is a bounded revision of an addressable note, derived from a
+budget-bounded pool of real events, are cheap; loops that mint unbounded new notes, or that read
+notes instead of events, are expensive.** Replay is the cheap shape and 3a is the expensive one.
 
-## 7. The loop catalogue, sized, with verdicts
+## 8. Why differently-sized loops at all
 
-| Loop | Size / trigger | Writes | Addressing | New schema? | Verdict |
-|---|---|---|---|---|---|
-| **A. Acquisition** | per event delta | new note | — | no | Shipped |
-| **B. Trailing-delta supersession** (#172) | intra-session | closes one note | exact `provenance.session_id` | widen supersession source union | ✅ Keep, gated on #171 as designed |
-| **C. Injected-note contradiction** (12.11 / #91) | session boundary | closes one note | exact trace join (session_id × shipped ids) | needs #109 so it doesn't depend on deletable diagnostics | ✅ Highest-value *correction* loop; keep deferred but ahead of any synthesis |
-| **D. Project-summary re-consolidation** | every N notes for a slug, or first session of a day/week for that project | **revises one existing note** | deterministic key `project:{slug}:summary` | **none** | ✅ **The one synthesis loop to build.** See below |
-| **E. Read-side one-hop link expansion** | per query | nothing | follows `links` already on retrieved notes | none | ✅ Cheapest associativity win; fixture-gated |
-| **F. Clustered / reflection-tree synthesis** | daily/weekly/corpus | mints derived notes | **similarity — guessed** | `derived_from` provenance | ❌ Refuse now; named trigger below |
-| **G. Cross-session failure-pattern mining** | corpus | mints notes | similarity | as F | ❌ #179 makes *one* session sufficient; revisit only if post-#179 stats show recurrence |
-| **H. Usage/outcome → ranking** | continuous | changes scoring | — | — | ❌ Closed by 12.3 and forbidden in shape by §8. Stays closed |
-| **I. Policy loop** (`stats` → weights/prompt/gates) | weekly-ish, human in the middle | nothing in memory | — | none | ✅ Already exists; extend its measurements |
-| **J. Human insight loop** (read stats/vault → curated note) | irregular | a curated note | human judgment | none | ✅ The §8-sanctioned door for realizations |
-
-### Why D is the loop that survives
-
-`project:{slug}:summary` is already a deterministic-ID note: revisable by the LLM distiller, fetched
-by exact key (never searched), faithfulness-verified, exempt from the novelty gate because revisions
-are *supposed* to overlap their prior, and **bounded to one note per project** so it cannot inflate
-note count or the distractor surface. It is, structurally, the slow store that CLS describes and that
-TiMem/MemoryOS build elaborate trees to approximate. Librarian has it already — what it lacks is a
-*trigger*: today it is revised only when a session happens to be about the project summary.
-
-Scheduling that revision is therefore the rare case where the expensive-sounding idea costs nearly
-nothing: no new record kind, no new provenance kind, no guessed relatedness, no growth in the note
-count, and it inherits every existing gate. Its input can legitimately include the project's recent
-notes *as context for revising one addressed note* — which is categorically different from minting a
-new note from a cluster of them. The residual risk is real and bounded: drift in a single note across
-repeated revisions (the reconsolidation-distortion warning from §4), with the existing backstops —
-append-only history, `previous_revision_id` chain, `note edit` / `revise_note`, `flag_note`.
-
-### Why E is worth doing before any of F/G
-
-The `links` array is in the note schema and recall ignores it. One-hop expansion of *already
-retrieved* notes is deterministic, LLM-free, writes nothing, and is trivially reversible. It is the
-HippoRAG lesson applied at the cheapest possible scale. It must run before the floor and the budget,
-and it needs the same acceptance test hybrid scoring got: **expansion must not resurrect below-floor
-distractors**, proven by the §9 negative-recall fixtures.
-
-## 8. Why apply differently-sized loops at all — the direct answer
-
-Because signals settle at different times, and each loop size can only act on what has settled:
+Because signals settle at different times, and each size can only act on what has settled:
 
 | Signal | Settles after | Only visible to |
 |---|---|---|
-| A conclusion was corrected mid-work | one session | intra-session loop (B) |
-| A shipped note was wrong | that session's end | boundary loop (C) |
-| Notes about one project have fragmented / gone stale | a few sessions on that project | project-scoped slow loop (D) |
-| An abstraction spans projects | many sessions | corpus loop (F) — refused |
-| We are injecting distractors | many injections | policy loop (I) |
+| A conclusion was corrected mid-work | one session | intra-session loop (#172) |
+| A shipped note was wrong | that session's end | boundary loop (12.11 / #91) |
+| One project's notes have fragmented or gone stale | days–weeks on that project | window replay |
+| A pattern spans many sessions (the recurring failure class) | months | theme replay |
+| We are injecting distractors | many injections | policy loop (`stats`) |
 
-A single per-delta loop is structurally blind to everything below the first row. That is the honest
-justification for multiple sizes, and it comes with an honest limit: **a loop is only safe at a given
-size if something structurally addressable exists at that size.** Session id addresses B. The trace
-join addresses C. The deterministic project key addresses D. Nothing addresses F except similarity —
-which is why F is refused, and why the answer to "why differently-sized loops" is *sizes follow
-addressability, not cadence aesthetics*.
+A single per-delta loop is structurally blind to everything below the second row. The limit that
+comes with it: **a loop is safe at a given size only if its pool builder is deterministic at that
+size.** #172's rule survives the replay reframe in a sharpened form — *selection of inputs to a
+judgment may be heuristic, because inputs are judged and never mutated; addressing a note whose
+validity you intend to close must be structural.* Guessing wrong about which events to replay costs a
+weaker note, caught by the existing gates. Guessing wrong about which note to kill destroys a true
+memory. The asymmetry is what makes similarity-based pool selection acceptable where
+similarity-based closure is not.
 
-## 9. Critique of this research round
+## 9. What the spec needs (three amendments, all small)
 
-- **Domain transfer is weak.** LoCoMo/LongMemEval/BEAM are conversational-personalization
-  benchmarks; librarian is a coding-agent memory with an invisible 0–5 push budget. Gains in §3 do
-  not obviously transfer, and BEAM is explicitly unsaturated by any current architecture.
-- **The strongest pro-synthesis result measures the wrong thing.** Generative Agents' ablation
-  measures *believability of a simulated character*, not injection precision.
+Per AGENTS.md's routing test — these outlive any single unit of work, so they belong in the spec, and
+the rest belongs on issues. No fourth tracking home.
+
+1. **§5 re-distill invariant → per-consumer.** Idempotency binds a consumer to its own cursor; a
+   replay consumer re-reading already-provenanced events is its function. Without this, the invariant
+   forbids the work (P1).
+2. **§10 provenance may span sessions.** Record the widened shape and that the single-session form
+   stays valid. Non-retrofittable in spirit — decide it once, before the first replay note exists.
+3. **Sharpen #172's addressability rule into a creation/closure split** (§8 above): heuristic
+   selection of *inputs*, structural addressing of *targets whose validity closes*. Also record the
+   ruling that no note is derived from notes — every note's provenance resolves to events — with 3a
+   named as the rejected alternative and the model-collapse reasoning attached.
+
+## 10. Recommendations (ordered)
+
+- **R1 — Ship #179 first.** Unchanged, and now doubly load-bearing: replay quality is bounded by
+  event fidelity (no insight without prior training), and captured output changes the pool's token
+  math, which is the parameter every larger loop is sized by.
+- **R2 — Keep the correction loops ahead of the replay loop.** #172 (gated on #171 as designed), then
+  #91 with #109. They are cheap, they are what the cost-effective systems in §3 actually ship, and a
+  memory that corrects itself is a better substrate for replay.
+- **R3 — Build the replay loop as a second distill consumer.** Own cursor, own lock, deterministic
+  two-source pool builder (note-indexed ∪ event-selector), budget in **rendered tokens** with the
+  truncation recorded as a cut reason, output as a **revision of `consolidation:{slug}:{lens}`** so it
+  skips the novelty gate the way other deterministic revisions do and cannot inflate note count.
+  Start with one lens on one project — `summary` is the smallest instance and needs no new key
+  vocabulary. Success signals for the issue should include the two silent-failure traps: a fixture
+  proving the loop's output is **not** NOOP'd as a near-duplicate of its own seeds (P2), and a
+  fixture proving a session that produced **no note** can still contribute events to a pool (P4).
+- **R4 — Read-side one-hop `links` expansion: demoted to optional.** Still cheap and still
+  fixture-gated ("expansion must not resurrect below-floor distractors"), but it is a recall nicety,
+  not the answer to associativity. Replay is the answer.
+- **R5 — Measure to *tune* the loop, not to permit it.** The first draft gated the loop's existence
+  on fragmentation harm; that was wrong for a decade-scale design. What genuinely needs measuring is
+  the loop's **parameters**: rendered-tokens-per-pool distribution (sets the budget and the cadence),
+  the skip+noop share of sessions (sizes the event-side selector — i.e. how much of the log is
+  note-invisible), and the duplicate rate of loop output against its seeds (validates the P2 choice).
+  #171's fragmentation probe stays useful as a quality signal.
+- **R6 — Still refuse, with reasons that survive:** notes-derived-from-notes with no re-grounding in
+  events (3a — model collapse, drift, provenance loss); similarity-addressed *closure* of validity
+  (#172); diagnostics → memory (§8); usage → ranking (12.3).
+
+## 11. Critique of this round
+
+- **The first draft's central recommendation was wrong**, and wrong in an instructive way: it took
+  "consolidation" to mean summarization-of-notes because that is what most of the surveyed systems
+  do, then reasoned correctly about that shape and concluded the loop was mostly not worth building.
+  The author's reframe (notes index events; replay the events) dissolves the two costs that drove
+  that conclusion. Survey-shaped research inherits the field's default architecture as an unexamined
+  premise — that is the generalizable failure here.
+- **The corpus-count argument is withdrawn** as an architectural input (§5). It was a sequencing
+  observation dressed as a design constraint.
+- **Domain transfer is still weak.** LoCoMo/LongMemEval/BEAM are conversational-personalization
+  benchmarks; librarian is coding-agent memory with an invisible 0–5 push budget. The §3 numbers
+  indicate direction, not magnitude, and BEAM is explicitly unsaturated by any current architecture.
+- **The strongest pro-synthesis result measures the wrong thing** (Generative Agents' ablation scores
+  believability of a simulated character) — and it is a 3a system, so it does not transfer cleanly to
+  the recommended shape either.
 - **The neuroscience justifies a shape, not a mechanism.** Wagner 2004 is one human study on a
   number-reduction task; a preregistered replication attempt exists (CCN 2024) whose outcome I did
-  not read. CLS is about weight-based consolidation in neural systems, not text records — the
-  analogy is suggestive, not evidential.
-- **Some 2026 sources are secondary.** Two arXiv full texts returned 403; those claims come from
-  indexed excerpts. The ChatGPT "Dreaming" behaviour is reported by third-party write-ups, not
-  verified against a vendor doc.
-- **I measured nothing.** The 68-notes/260-sessions figures are #179's probe, not an independent
-  count. Crucially, **this round cannot tell you whether synthesis would help librarian** — no
-  fragmentation or multi-hop-miss measurement exists yet. Recommendation R5 is partly an admission
-  of that.
-- **Confirmation risk in my own conclusion.** "The loop you should build is the one that fits your
-  existing invariants" is a suspiciously convenient finding. The check on it: D's value claim is
-  falsifiable — if #171 and the association probe both report zero harm, D is unnecessary too, and
-  that should close it rather than motivate a bigger loop.
-
-## 10. Recommendations (ordered; each survives §9)
-
-- **R1 — Ship #179 before any loop work.** Sleep produces no insight without prior training. 25
-  sessions × the same failure × 0 notes is an acquisition deficit, and no loop over intent-only
-  events recovers it. Everything else in this list is downstream.
-- **R2 — Prioritise the correction family over the synthesis family.** #172 (gated on #171, as
-  designed), then #91 with #109 so the detector reads a durable ledger rather than deletable
-  diagnostics. This is what the field's cost-effective systems actually do.
-- **R3 — Build exactly one new synthesis loop: scheduled `project:{slug}:summary`
-  re-consolidation.** Deterministic key, one bounded note, existing revision semantics, existing
-  faithfulness verify, provenance = the triggering delta. Hard rule: it may revise *that key only*,
-  and may never mint or close any other note. Trigger candidate for the issue to settle: N new notes
-  for the slug since the last summary revision (N measurable from the note log), not a wall clock.
-- **R4 — Add read-side one-hop link expansion, gated on the negative-recall fixtures.** Deterministic,
-  no LLM, no writes. Acceptance test mirrors hybrid's: expansion must not resurrect below-floor
-  distractors. Do this *before* considering any write-side abstraction.
-- **R5 — Extend `librarian stats` with the two metrics the refused loops are gated on:** #171's
-  fragmentation harm, plus an **association-miss probe** (a shipped note's `links` point at a note
-  that scored below floor, and the session subsequently touched that note's subject). If both stay
-  at zero, F and G are *not needed* — and, per the #172 precedent, that is a success, not a gap.
-- **R6 — Refuse F, G and H for now, with named triggers recorded:** clustered/embedding
-  consolidation and reflection trees (trigger: fragmentation harm > 0 *and* association misses that
-  R4 does not fix); cross-session failure-pattern mining (trigger: post-#179 stats show the same
-  failure class recurring after capture works); usage→ranking (stays closed per 12.3/§8).
-- **R7 — Route the durable parts per AGENTS.md; do not invent a fourth home.** If R3/R4 are accepted,
-  the spec needs two lines and no more: **(a)** extend #172's addressable-vs-guessed rule from
-  *closure* to *creation* — a note may be derived only from events or from a deterministic key it can
-  address, never from a guessed set of related notes; **(b)** state that in v1 no note is derived
-  from notes, with F's trigger named. Everything else — schedule, prompt, fixtures, metrics — belongs
-  on issues.
+  not read. Hippocampal indexing theory is a strikingly good analogy for note-log/event-log, and an
+  analogy is all it is.
+- **Two arXiv full texts returned 403**; those claims come from indexed excerpts. The ChatGPT
+  "Dreaming" behaviour is third-party reporting, not a vendor doc.
+- **Nothing here is measured.** No pool was built, no token count computed, no replay pass run. P2 and
+  P4 are read off the code (`noveltyGate.ts`, the skip heuristic, `provenanceEvents`) and are
+  predictions, not observations — which is why R3 carries them as fixtures rather than as caveats.
 
 ---
 
@@ -320,10 +378,10 @@ Agent-memory systems: [Generative Agents](https://arxiv.org/pdf/2304.03442) ·
 [RAPTOR](https://arxiv.org/pdf/2401.18059) ·
 [LazyGraphRAG](https://www.microsoft.com/en-us/research/blog/lazygraphrag-setting-a-new-standard-for-quality-and-cost/) ·
 [HippoRAG 2 / From RAG to Memory](https://arxiv.org/abs/2502.14802) ·
+[ReadAgent](https://arxiv.org/abs/2402.09727) · [MemWalker](https://gonzoml.substack.com/p/memwalker) ·
+[Parent-document retrieval](https://zeroentropy.dev/concepts/parent-document-retrieval/) ·
 [Sleep-time compute](https://arxiv.org/html/2504.13171v1) ·
-[Letta sleeptime agents](https://forum.letta.com/t/sleeptime-agents-for-memory-consolidation-best-practices-guide/154) ·
-[MemoryOS](https://arxiv.org/abs/2506.06326) ·
-[TiMem](https://aclanthology.org/2026.findings-acl.1091/)
+[MemoryOS](https://arxiv.org/abs/2506.06326) · [TiMem](https://aclanthology.org/2026.findings-acl.1091/)
 
 Evaluation and failure modes: [HaluMem](https://arxiv.org/abs/2511.03506) ·
 [MemEvoBench](https://arxiv.org/pdf/2604.15774) ·
