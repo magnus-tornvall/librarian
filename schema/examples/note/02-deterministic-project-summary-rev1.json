@@ -15,7 +15,6 @@
   "title": "Librarian project summary",
   "scope": {
     "project_slug": "librarian",
-    "git_root": "/Users/magnus/dev/librarian",
     "git_remote": "git@github.com:magnus-tornvall/librarian.git"
   },
   "provenance": {

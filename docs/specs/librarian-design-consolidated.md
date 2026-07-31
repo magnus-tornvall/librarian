@@ -364,7 +364,7 @@ type NoteRevision = {
   };
   note_type: "fact" | "decision" | "project_summary" | "person" | "daily" | "episode" | "curated";
   title: string;
-  scope: { project_slug?: string; git_root?: string; git_remote?: string; global?: boolean };
+  scope: { project_slug?: string; git_remote?: string; global?: boolean };
   provenance: { session_id?: string; event_ids?: string[];
                 event_range?: { from_event_id: string; to_event_id: string } };
   links: Array<{ target_type: "note" | "entity" | "project" | "file" | "url";
