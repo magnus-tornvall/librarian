@@ -5,6 +5,7 @@ import path from 'node:path';
 
 const EVENT_DIR = path.join(import.meta.dirname, '..', '..', 'schema', 'examples', 'event');
 const NOTE_DIR = path.join(import.meta.dirname, '..', '..', 'schema', 'examples', 'note');
+const SCOPE_KEYS = new Set(['project_slug', 'git_remote', 'global']);
 
 function loadJsonFiles(dir: string): Array<{ file: string; data: unknown }> {
   return readdirSync(dir)
@@ -39,6 +40,13 @@ for (const { file, data } of loadJsonFiles(NOTE_DIR)) {
       assert.equal(typeof source.origin, 'string');
       assert.ok((source.origin as string).length > 0);
       assert.ok(['llm', 'human'].includes(source.distiller as string));
+
+      // A golden example is the acceptance test for the documented shape (§10), so an
+      // undocumented scope key must fail here — that is what caught `git_root` (#176)
+      // living on in the examples after it was dropped from the type.
+      for (const key of Object.keys((note.scope ?? {}) as Record<string, unknown>)) {
+        assert.ok(SCOPE_KEYS.has(key), `undocumented scope key "${key}" — see schema/note.md "Types"`);
+      }
     }
   });
 }
