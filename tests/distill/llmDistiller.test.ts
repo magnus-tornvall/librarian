@@ -153,9 +153,9 @@ test('project summaries are project-scoped deterministic revisions chained to th
 
   assert.equal(note.note_id, 'project:librarian:summary');
   assert.equal(note.previous_revision_id, previous.revision_id);
+  // The fixture events carry `resource.git_root`; the note keeps only what it derived from it.
   assert.deepEqual(note.scope, {
     project_slug: 'librarian',
-    git_root: '/Users/magnus/dev/librarian',
     git_remote: 'git@github.com:magnus-tornvall/librarian.git',
   });
 });

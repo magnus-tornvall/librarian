@@ -142,7 +142,6 @@ export async function distill(
     scope: projectSlug
       ? {
           project_slug: projectSlug,
-          ...(gitRoot ? { git_root: gitRoot } : {}),
           ...(gitRemote ? { git_remote: gitRemote } : {}),
         }
       : { global: true },

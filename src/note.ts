@@ -40,7 +40,7 @@ export type NoteRevision = {
   };
   note_type: NoteType;
   title: string;
-  scope: { project_slug?: string; git_root?: string; git_remote?: string; global?: boolean };
+  scope: { project_slug?: string; git_remote?: string; global?: boolean };
   provenance: {
     session_id?: string;
     event_ids?: string[];

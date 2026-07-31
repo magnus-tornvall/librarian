@@ -15,7 +15,6 @@
   "title": "Adopt BM25-over-SQLite-FTS5 as the sole recall index",
   "scope": {
     "project_slug": "librarian",
-    "git_root": "/Users/magnus/dev/librarian",
     "git_remote": "git@github.com:magnus-tornvall/librarian.git"
   },
   "provenance": {

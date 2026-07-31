@@ -28,7 +28,7 @@ type NoteRevision = {
   };
   note_type: "fact" | "decision" | "project_summary" | "person" | "daily" | "episode" | "curated";
   title: string;
-  scope: { project_slug?: string; git_root?: string; git_remote?: string; global?: boolean };
+  scope: { project_slug?: string; git_remote?: string; global?: boolean };
   provenance: { session_id?: string; event_ids?: string[];
                 event_range?: { from_event_id: string; to_event_id: string } };
   links: Array<{ target_type: "note" | "entity" | "project" | "file" | "url";
@@ -132,11 +132,16 @@ schema mismatch (the fields are optional); flagged here so it isn't silently inv
 correctly left unset (human-only field per the Rules section, preserved verbatim from
 Markdown by the human distiller, which doesn't exist yet).
 
-**`scope`** — no change to the type. The LLM distiller always stamps `{}`; deterministic
+**`scope`** — ~~no change to the type. The LLM distiller always stamps `{}`; deterministic
 `project_slug`/`git_root`/`git_remote` derivation (§4) is not implemented by any module yet
 — there is no project-slug-deriving code anywhere in `src/`. This is a real gap, but it's
 new functionality (out of scope per this issue's "reconciliation, not redesign" rule), not
-a doc/implementation disagreement about the shape.
+a doc/implementation disagreement about the shape.~~ **SUPERSEDED — the gap was closed, then
+the type narrowed.** Derivation now exists (`src/projectSlug.ts`, applied in
+`src/distill/llmDistiller.ts`), and `git_root` was dropped from `scope` (#176): it had no
+reader, and it cached a machine-local absolute path beside the `project_slug` already derived
+from it. The event keeps `resource.git_root` — that is the replayable input to a slug rule
+that has not settled. Current shape is the `Types` section above.
 
 **`provenance`** — no change. `session_id`/`event_ids` are stamped mechanically from the
 input events, exactly as documented; `event_range` is unused by the LLM path (it stamps

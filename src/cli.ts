@@ -741,7 +741,6 @@ export function findLatestNote(dataDir: string, noteId: string): NoteStateRecord
 function formatScope(scope: NoteRevision['scope']): string {
   const parts = [
     scope.project_slug ? `project_slug=${scope.project_slug}` : undefined,
-    scope.git_root ? `git_root=${scope.git_root}` : undefined,
     scope.git_remote ? `git_remote=${scope.git_remote}` : undefined,
     scope.global === true ? 'global=true' : undefined,
   ].filter((part): part is string => part !== undefined);
