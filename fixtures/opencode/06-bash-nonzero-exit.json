@@ -1,13 +1,13 @@
 {
-  "name": "bash-with-stderr",
-  "description": "A bash tool whose lowered payload carries a non-empty stderr maps to a ToolEvent that CARRIES both streams and is deliberately NOT hinted command_failed — stderr is not a failure signal (see the Claude Code adapter for the measurement). OpenCode's live `tool.execute.after` exposes a single combined output string, so today's shell lowers stdout only; the mapper's two-stream contract is proven here.",
+  "name": "bash-nonzero-exit",
+  "description": "A bash tool whose harness reported a non-zero exit maps to a ToolEvent carrying both the output and the exit code, hinted possibly_salient with reason command_failed. This is OpenCode's real failure signal: `output.metadata.exit` is present on 3639 of 3673 persisted bash calls and every non-zero one arrived with status \"completed\", so the hook fires for all of them. Note the asymmetry with the Claude Code adapter, which has no exit code in its payload at all and can only honour `interrupted`. OpenCode never emits a separate stderr stream, so none is asserted here.",
   "native": {
     "kind": "tool",
     "tool": "bash",
     "command": "npm test",
     "outcome": {
-      "stdout": "> librarian@ test\n> node --test \"tests/**/*.test.ts\"\n",
-      "stderr": "Error: The module 'better_sqlite3.node' was compiled against a different Node.js version using\nNODE_MODULE_VERSION 115. This version of Node.js requires NODE_MODULE_VERSION 127 (ERR_DLOPEN_FAILED).\n"
+      "stdout": "> librarian@ test\n> node --test \"tests/**/*.test.ts\"\nℹ fail 1\n",
+      "exit": 1
     }
   },
   "env": {
@@ -52,8 +52,12 @@
     },
     "command": "npm test",
     "outcome": {
-      "stdout": "> librarian@ test\n> node --test \"tests/**/*.test.ts\"\n",
-      "stderr": "Error: The module 'better_sqlite3.node' was compiled against a different Node.js version using\nNODE_MODULE_VERSION 115. This version of Node.js requires NODE_MODULE_VERSION 127 (ERR_DLOPEN_FAILED).\n"
+      "stdout": "> librarian@ test\n> node --test \"tests/**/*.test.ts\"\nℹ fail 1\n",
+      "exit": 1
+    },
+    "hints": {
+      "possibly_salient": true,
+      "reason": "command_failed"
     }
   }
 }

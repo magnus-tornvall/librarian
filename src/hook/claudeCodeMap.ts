@@ -86,12 +86,17 @@ export type PromptEvent = EventBase & { type: 'prompt'; prompt: string };
 
 /**
  * What a shell/VCS command actually did (schema/event.md). Empty streams are elided, so an
- * `Outcome` is only present when there is something to say. Captured verbatim; the *render*
- * truncates (§7) — the prompt budget must not dictate what the archive keeps.
+ * `Outcome` is only present when there is something to say. Captured as the harness handed
+ * it over; the *render* truncates (§7) — the prompt budget must not dictate what the archive
+ * keeps.
+ *
+ * `exit` is part of the canonical shape but this adapter never fills it: a Claude Code
+ * `tool_response` carries no exit code (see `commandFailed`). The OpenCode adapter does.
  */
 export interface Outcome {
   stdout?: string;
   stderr?: string;
+  exit?: number;
   interrupted?: boolean;
 }
 
@@ -353,7 +358,11 @@ function extractOutcome(response: unknown, category: ToolCategory): Outcome | un
  * a false `← salient:command_failed` misdirects the distiller — the precise opposite of what
  * this capture is for. Grepping output for error text would be sharper and is exactly the
  * salience authority §4 keeps out of the adapter. The distiller reads the output and judges
- * for itself; that is the feature. Widen this only when a payload exposes an exit code.
+ * for itself; that is the feature. Widen this only when the payload exposes an exit code.
+ *
+ * NOT the same rule as the OpenCode adapter's, which lifts a real `metadata.exit`. The two
+ * mappers duplicate structure (no shared runtime module, same reason as GIT_SUBCOMMAND) but
+ * their failure rules diverge because their payloads do.
  */
 function commandFailed(outcome: Outcome | undefined): boolean {
   return outcome?.interrupted === true;

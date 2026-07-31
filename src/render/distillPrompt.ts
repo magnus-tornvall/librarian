@@ -64,6 +64,12 @@ function outcomeSuffix(outcome: unknown): string {
   if (streams.interrupted === true) {
     parts.push('interrupted');
   }
+  // A non-zero exit is the harness's own verdict and the cheapest signal on the line. A zero
+  // exit is left implicit — "it worked" is the default reading of a command with no verdict,
+  // and spending prompt tokens restating it on every successful command is not worth it.
+  if (typeof streams.exit === 'number' && streams.exit !== 0) {
+    parts.push(`exit ${streams.exit}`);
+  }
   if (out !== undefined) {
     parts.push(excerpt(out, OUTCOME_EXCERPT_CHARS));
   }

@@ -39,10 +39,10 @@ type ToolEvent = EventBase & {
           category: "file_read" | "file_write" | "command" | "search"
                   | "vcs_commit" | "vcs_push" | "other" };
   command?: string;                                  // redacted before append
-  outcome?: { stdout?: string; stderr?: string; interrupted?: boolean };
+  outcome?: { stdout?: string; stderr?: string; exit?: number; interrupted?: boolean };
                                                      // shell/VCS categories only; empty streams
-                                                     // elided; redacted and 64 KB head+tail
-                                                     // capped before append
+                                                     // elided (exit kept even at 0); redacted
+                                                     // and 64 KB head+tail capped before append
   files?: Array<{ path: string; action: "read" | "write" | "edit" | "delete" }>;
 };
 
@@ -59,11 +59,15 @@ guard, and an unclosed `<private>` in machine output does NOT fail closed — no
 declared, so nothing is destroyed). `outcome` is captured for `command` / `vcs_commit` /
 `vcs_push` only: their output is a function of machine state at that instant and is gone,
 whereas a `file_read`'s result is a copy of a file on disk and a `search`'s is re-runnable.
-Streams are stored verbatim up to a 64 KB head+tail cap per stream, which names what it
-elided; the *render* truncates far harder (§7). `hints.reason: "command_failed"` means
-**interrupted** — no adapter payload carries an exit code, and stderr is not a failure
-signal (measured: 266 of 266 non-empty stderr values in real transcripts were a harness
-notice). `resource` stores facts, not authoritative identity; `project_slug` not on events;
+Streams are stored as the harness handed them over — itself already bounded, Claude Code
+hard-truncates at 30,000 characters — up to a further 64 KB head+tail cap per stream that
+names what it elided; the *render* truncates far harder (§7). **What earns
+`hints.reason: "command_failed"` is adapter-dependent, because the payloads differ**, and
+hints are non-authoritative precisely so this is allowed: OpenCode lifts a real exit code
+(`output.metadata.exit`, present on 3639 of 3673 real bash calls) and fires on non-zero;
+Claude Code has no exit code, never sets `is_error`, and its non-empty `stderr` is a harness
+notice rather than a failure (266 of 266 measured), so it can only honour `interrupted`.
+`exit` is recorded whatever its value — a zero is the "the remedy worked" half of the chain. `resource` stores facts, not authoritative identity; `project_slug` not on events;
 hints non-authoritative; partial lines ignored/quarantined; cursors advance after success;
 validators hard-reject `record_class: diagnostic`. **Provenance is
 collector-stamped, never LLM-authored:** the renderer presents events with ordinal indexes;

@@ -79,12 +79,18 @@ export type PromptEvent = EventBase & { type: 'prompt'; prompt: string };
 
 /**
  * What a shell/VCS command actually did (schema/event.md). Empty streams are elided, so an
- * `Outcome` is only present when there is something to say. Captured verbatim; the *render*
- * truncates (§7) — the prompt budget must not dictate what the archive keeps.
+ * `Outcome` is only present when there is something to say. Captured as the harness handed
+ * it over; the *render* truncates (§7) — the prompt budget must not dictate what the archive
+ * keeps.
+ *
+ * `exit` is OpenCode's own verdict, lifted from `output.metadata.exit`, and is present on
+ * 99% of its bash calls. It is kept even when zero: a successful exit is the third link in
+ * the failure → remedy → success chain, and the log has never recorded that either.
  */
 export interface Outcome {
   stdout?: string;
   stderr?: string;
+  exit?: number;
   interrupted?: boolean;
 }
 
@@ -219,7 +225,8 @@ function classifyTool(
 const OUTCOME_CATEGORIES: ReadonlySet<ToolCategory> = new Set(['command', 'vcs_commit', 'vcs_push']);
 
 /** Drop empty streams so a clean run carries nothing, and no outcome at all when nothing is
- *  left. Keeps `{stdout: "", stderr: ""}` out of a log that is never deleted. */
+ *  left. Keeps `{stdout: "", stderr: ""}` out of a log that is never deleted. `exit` is kept
+ *  whatever its value — zero is a fact worth recording, not an empty field. */
 function nonEmptyOutcome(outcome: Outcome | undefined): Outcome | undefined {
   if (!outcome) {
     return undefined;
@@ -227,22 +234,36 @@ function nonEmptyOutcome(outcome: Outcome | undefined): Outcome | undefined {
   const trimmed: Outcome = {};
   if (outcome.stdout !== undefined && outcome.stdout.length > 0) trimmed.stdout = outcome.stdout;
   if (outcome.stderr !== undefined && outcome.stderr.length > 0) trimmed.stderr = outcome.stderr;
+  if (typeof outcome.exit === 'number') trimmed.exit = outcome.exit;
   if (outcome.interrupted === true) trimmed.interrupted = true;
   return Object.keys(trimmed).length > 0 ? trimmed : undefined;
 }
 
 /**
- * Did the command fail? `interrupted` only — see the Claude Code adapter for the measurement
- * that rules out stderr (266 of 266 non-empty stderr values in real transcripts were a
- * harness notice, not a failure) and rules out everything else (no exit code in either
- * payload). OpenCode's `tool.execute.after` exposes a single combined output string, so it
- * carries even less: capture is the deliverable there, the hint is not.
+ * Did the command fail? On OpenCode the harness says so itself: `output.metadata.exit` is a
+ * real exit code, present on 3639 of 3673 real bash calls, and every non-zero one arrived
+ * with `status: "completed"` so the hook fires for all of them.
  *
- * ponytail: identical rule to the Claude Code adapter's, duplicated for the same reason
- * GIT_SUBCOMMAND is — these mappers deliberately share no runtime module.
+ * This is NOT the Claude Code rule, and deliberately so — that payload has no exit code at
+ * all, so it can only honour `interrupted`. The two mappers duplicate structure for the same
+ * reason GIT_SUBCOMMAND does (no shared runtime module), but the RULES differ because the
+ * payloads do. Claiming they are identical is what produced a fixture asserting a stderr
+ * stream OpenCode has never emitted.
+ *
+ * Reading `metadata.exit` stays inside §4's dumb-adapter contract: the adapter is reporting
+ * a verdict its harness already reached, not deriving one. Grepping stdout for `npm ERR!`
+ * would be the adapter manufacturing salience, and remains out of bounds.
+ *
+ * Known false-positive class (~15%): commands where non-zero is a negative answer rather
+ * than a failure — `grep` with no match, `git config --get` on an unset key. 39 of 258
+ * non-zero exits, 20 of which printed nothing at all. The distiller sees the command line
+ * and decides; a cheap hint that is right ~85% of the time is worth having.
  */
 function commandFailed(outcome: Outcome | undefined): boolean {
-  return outcome?.interrupted === true;
+  if (outcome === undefined) {
+    return false;
+  }
+  return outcome.interrupted === true || (outcome.exit !== undefined && outcome.exit !== 0);
 }
 
 // ---------------------------------------------------------------------------

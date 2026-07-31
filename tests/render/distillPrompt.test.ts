@@ -175,6 +175,14 @@ test('a multi-line output collapses to one line', () => {
   assert.equal(line, '[1] 12:07 bash: ls → a b c');
 });
 
+test('a non-zero exit is named on the line; a zero exit is left implicit', () => {
+  const failed = renderEventsForDistill([commandEvent('npm test', { stdout: 'fail 1', exit: 1 })]);
+  assert.equal(failed, '[1] 12:07 bash: npm test → exit 1 | fail 1');
+
+  const passed = renderEventsForDistill([commandEvent('npm test', { stdout: 'fail 0', exit: 0 })]);
+  assert.equal(passed, '[1] 12:07 bash: npm test → fail 0', 'success is the default reading');
+});
+
 test('a stderr-only outcome is labelled so the model knows which stream it read', () => {
   const line = renderEventsForDistill([commandEvent('gcc x.c', { stderr: 'x.c:1: error' })]);
   assert.equal(line, '[1] 12:07 bash: gcc x.c → stderr: x.c:1: error');
