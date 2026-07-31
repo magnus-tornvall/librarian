@@ -26,7 +26,8 @@ type EventBase = {
   };
   context: { session_id: string; turn?: number; cwd: string };
   hints?: { possibly_salient?: boolean;
-            reason?: "file_write" | "vcs_commit" | "cwd_change" | "user_pushback" | "manual" };
+            reason?: "file_write" | "vcs_commit" | "command_failed" | "cwd_change"
+                   | "user_pushback" | "manual" };
 };
 
 type PromptEvent = EventBase & { type: "prompt"; prompt: string };
@@ -38,6 +39,9 @@ type ToolEvent = EventBase & {
           category: "file_read" | "file_write" | "command" | "search"
                   | "vcs_commit" | "vcs_push" | "other" };
   command?: string;                                  // redacted before append
+  outcome?: { stdout?: string; stderr?: string; interrupted?: boolean };
+                                                     // shell/VCS categories only; verbatim,
+                                                     // empty streams elided, redacted before append
   files?: Array<{ path: string; action: "read" | "write" | "edit" | "delete" }>;
 };
 
@@ -48,7 +52,12 @@ type SessionEvent = EventBase & { type: "session"; action: "start" | "stop" | "c
 
 Redaction before append: `<private>...</private>` spans in prompt and command fields become
 `[PRIVATE]` without a hash, and injected `<librarian-memory>...</librarian-memory>` blocks are
-removed. `resource` stores facts, not authoritative identity; `project_slug` not on events;
+removed, and `outcome.stdout`/`outcome.stderr` are pattern-redacted like any other captured
+text (machine-generated output carries no `<private>` markup, so the patterns are its only
+guard). `outcome` is captured for `command` / `vcs_commit` / `vcs_push` only: their output is
+a function of machine state at that instant and is gone, whereas a `file_read`'s result is a
+copy of a file on disk and a `search`'s is re-runnable. It is stored verbatim — the *render*
+truncates (§7), never the archive. `resource` stores facts, not authoritative identity; `project_slug` not on events;
 hints non-authoritative; partial lines ignored/quarantined; cursors advance after success;
 validators hard-reject `record_class: diagnostic`. **Provenance is
 collector-stamped, never LLM-authored:** the renderer presents events with ordinal indexes;

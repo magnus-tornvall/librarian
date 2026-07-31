@@ -235,6 +235,43 @@ test('hook opencode: tool, compacting, and session.deleted envelopes each collec
   assert.equal(collected[2].action, 'stop');
 });
 
+test('hook opencode: a bash tool lowers output.output onto the event, a read tool does not', () => {
+  const repo = makeGitRepo();
+  const dataDir = tempDir('opencode-hook-outcome-');
+  const bin = makeLibrarianBin(dataDir, tempDir('d-'), tempDir('i-'));
+
+  const bash = runHook(
+    {
+      hook: 'tool.execute.after',
+      cwd: repo,
+      input: { tool: 'bash', sessionID: 'oc-outcome', callID: 'c1', args: { command: 'node -v' } },
+      output: { title: 'node -v', output: 'v24.18.0\n', metadata: {} },
+    },
+    repo,
+    bin,
+  );
+  assert.equal(bash.status, 0, `bash hook should exit 0; stderr: ${bash.stderr}`);
+
+  // A read's `output.output` is the file's contents — capturing it would make the
+  // never-deleted log a second copy of the working tree.
+  const read = runHook(
+    {
+      hook: 'tool.execute.after',
+      cwd: repo,
+      input: { tool: 'read', sessionID: 'oc-outcome', callID: 'c2', args: { filePath: '/repo/src/x.ts' } },
+      output: { title: 'x.ts', output: 'export const x = 1;\n', metadata: {} },
+    },
+    repo,
+    bin,
+  );
+  assert.equal(read.status, 0, `read hook should exit 0; stderr: ${read.stderr}`);
+
+  const collected = events(dataDir, 'oc-outcome');
+  assert.equal(collected.length, 2);
+  assert.deepEqual(collected[0].outcome, { stdout: 'v24.18.0\n' }, 'a command keeps what it printed');
+  assert.equal(collected[1].outcome, undefined, 'a file_read keeps nothing');
+});
+
 test('hook opencode: a file tool lowers filePath into files[] with the matching action', () => {
   const repo = makeGitRepo();
   const dataDir = tempDir('opencode-hook-file-');

@@ -203,8 +203,13 @@ function lowerChatMessage(output: Loose): PromptPayload | undefined {
  * (command line, filePath) are on `input.args` — the pinned signature is
  * `input: { tool, sessionID, callID, args }`, `output: { title, output, metadata }` (there
  * is no `output.args`).
+ *
+ * `output.output` is a single combined string with no stream split and no exit code, so it
+ * lowers to `outcome.stdout` and the failure hint never fires for OpenCode. That is a
+ * limitation of the payload, not of the mapper — the mapper's rule is the shared one, and it
+ * starts working here the day OpenCode separates the streams.
  */
-function lowerTool(input: Loose): NativePayload | undefined {
+function lowerTool(input: Loose, output: Loose): NativePayload | undefined {
   const tool = asString(input.tool);
   if (!tool) {
     return undefined;
@@ -213,10 +218,14 @@ function lowerTool(input: Loose): NativePayload | undefined {
   const args = asRecord(input.args) ?? {};
   const command = asString(args.command);
   const files = extractFiles(tool, args);
+  const printed = asString(output.output);
 
   const payload: NativePayload = { kind: 'tool', tool };
   if (command) {
     payload.command = command; // raw — collector redacts (§5)
+  }
+  if (printed) {
+    payload.outcome = { stdout: printed }; // raw — collector redacts (§5)
   }
   if (files) {
     payload.files = files;
@@ -249,7 +258,7 @@ function lower(envelope: OpenCodeEnvelope): { payload: NativePayload; sessionId?
       return { payload, sessionId: asString(input.sessionID) ?? asString((asRecord(output.message) ?? {}).sessionID) };
     }
     case 'tool.execute.after': {
-      const payload = lowerTool(input);
+      const payload = lowerTool(input, output);
       return payload ? { payload, sessionId: asString(input.sessionID) } : undefined;
     }
     case 'experimental.session.compacting':

@@ -43,6 +43,26 @@ test('a plausible pre-redaction secret in command never reaches disk', () => {
   );
 });
 
+test('a secret printed by a command never reaches disk', () => {
+  // Machine-generated output arrives with no `<private>` markup — nobody tagged it — so the
+  // patterns are its only guard, on the same non-retrofittable boundary as `command` (#179).
+  const secret = 'ghp_' + 'D'.repeat(36);
+  const record = JSON.parse(
+    fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
+  );
+  record.command = 'gh auth token';
+  record.outcome = { stdout: `${secret}\n`, stderr: `warning: using ${secret}\n` };
+
+  const logFilePath = tempLogFile();
+  appendEvent(logFilePath, record);
+
+  assert.ok(!fs.readFileSync(logFilePath, 'utf8').includes(secret));
+  const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
+  const outcome = persisted.outcome as Record<string, string>;
+  assert.match(outcome.stdout, /^\[REDACTED:token:sha256:[0-9a-f]{8}\]\n$/);
+  assert.match(outcome.stderr, /^warning: using \[REDACTED:token:sha256:[0-9a-f]{8}\]\n$/);
+});
+
 test('normalizes home paths throughout an event before durable append', () => {
   const home = os.homedir();
   const record = JSON.parse(

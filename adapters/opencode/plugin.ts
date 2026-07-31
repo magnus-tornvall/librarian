@@ -490,9 +490,10 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
       }
     },
 
-    /** A tool finished executing → forwarded for collection. */
-    'tool.execute.after': async (input: Loose, _output: Loose) => {
-      await send({ hook: 'tool.execute.after', input });
+    /** A tool finished executing → forwarded for collection. `output` carries what the tool
+     *  printed; the shell lifts it onto the event for shell/VCS tools only. */
+    'tool.execute.after': async (input: Loose, output: Loose) => {
+      await send({ hook: 'tool.execute.after', input, output });
     },
 
     /**

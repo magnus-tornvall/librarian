@@ -47,6 +47,7 @@ export type SessionAction = 'start' | 'stop' | 'compact' | 'checkpoint';
 export type HintReason =
   | 'file_write'
   | 'vcs_commit'
+  | 'command_failed'
   | 'cwd_change'
   | 'user_pushback'
   | 'manual';
@@ -83,10 +84,22 @@ interface EventBase {
 
 export type PromptEvent = EventBase & { type: 'prompt'; prompt: string };
 
+/**
+ * What a shell/VCS command actually did (schema/event.md). Empty streams are elided, so an
+ * `Outcome` is only present when there is something to say. Captured verbatim; the *render*
+ * truncates (§7) — the prompt budget must not dictate what the archive keeps.
+ */
+export interface Outcome {
+  stdout?: string;
+  stderr?: string;
+  interrupted?: boolean;
+}
+
 export type ToolEvent = EventBase & {
   type: 'tool';
   tool: { native_name: string; canonical_name: CanonicalName; category: ToolCategory };
   command?: string;
+  outcome?: Outcome;
   files?: Array<{ path: string; action: FileAction }>;
 };
 
@@ -166,7 +179,9 @@ export interface PostToolUsePayload extends CommonHookFields {
   tool_name: string;
   /** The tool's arguments; per-tool shape (Bash→command, Write/Edit/Read→file_path…). */
   tool_input?: Record<string, unknown>;
-  /** The tool's result. Recorded for completeness; the dumb adapter does not read it. */
+  /** The tool's result. For the Bash tool this is `{stdout, stderr, interrupted, isImage}`;
+   *  for file tools it is the file's contents (see 04-post-tool-use-read.json) — which is
+   *  why only shell/VCS categories lift an outcome from it. */
   tool_response?: unknown;
   tool_use_id?: string;
   duration_ms?: number;
@@ -289,6 +304,51 @@ function extractCommand(toolInput: Record<string, unknown> | undefined): string 
   return typeof command === 'string' && command.length > 0 ? command : undefined;
 }
 
+/**
+ * The only categories whose output is worth keeping: a command's output is a function of
+ * machine state at that instant and is gone the moment the session ends. A `file_read`'s
+ * result is a verbatim copy of a file on disk and a `search`'s is re-runnable in a second —
+ * capturing those would turn an append-only, never-deleted log into a second copy of the
+ * working tree.
+ */
+const OUTCOME_CATEGORIES: ReadonlySet<ToolCategory> = new Set(['command', 'vcs_commit', 'vcs_push']);
+
+/**
+ * Lift `{stdout, stderr, interrupted}` out of a shell tool's `tool_response`, dropping empty
+ * streams so a clean run carries nothing. Anything else (a string result, a missing response)
+ * yields no outcome.
+ */
+function extractOutcome(response: unknown, category: ToolCategory): Outcome | undefined {
+  if (!OUTCOME_CATEGORIES.has(category) || typeof response !== 'object' || response === null) {
+    return undefined;
+  }
+  const record = response as Record<string, unknown>;
+  const outcome: Outcome = {};
+  if (typeof record.stdout === 'string' && record.stdout.length > 0) {
+    outcome.stdout = record.stdout;
+  }
+  if (typeof record.stderr === 'string' && record.stderr.length > 0) {
+    outcome.stderr = record.stderr;
+  }
+  if (record.interrupted === true) {
+    outcome.interrupted = true;
+  }
+  return Object.keys(outcome).length > 0 ? outcome : undefined;
+}
+
+/**
+ * Did the command fail? Claude Code's Bash `tool_response` carries no exit code, so the
+ * signal is "wrote to stderr, or was interrupted".
+ *
+ * ponytail: stderr-as-failure false-positives on tools that log progress there (`git push`,
+ * npm warnings). Acceptable — hints are explicitly non-authoritative (§5) and a false
+ * positive only points the distiller at a line it can read for itself. Upgrade to an exit
+ * code the day a hook payload exposes one.
+ */
+function commandFailed(outcome: Outcome | undefined): boolean {
+  return outcome !== undefined && (outcome.interrupted === true || outcome.stderr !== undefined);
+}
+
 // ---------------------------------------------------------------------------
 // Mapping.
 // ---------------------------------------------------------------------------
@@ -326,6 +386,12 @@ function mapTool(payload: PostToolUsePayload, env: MapEnv): ToolEvent {
     event.command = command;
   }
 
+  // Raw output too — nobody marked it up, so the collector's patterns are its only guard.
+  const outcome = extractOutcome(payload.tool_response, category);
+  if (outcome !== undefined) {
+    event.outcome = outcome;
+  }
+
   const filePath = extractFilePath(payload.tool_input);
   if (filePath !== undefined) {
     // Derive the per-file action from the classification: a read tool reads, an edit
@@ -335,9 +401,13 @@ function mapTool(payload: PostToolUsePayload, env: MapEnv): ToolEvent {
     event.files = [{ path: filePath, action }];
   }
 
-  // Non-authoritative salience hint on file writes and commits (§5). Nothing more —
-  // this is a cheap flag, not a salience engine (do-not-relitigate).
-  if (category === 'file_write') {
+  // Non-authoritative salience hint on failures, file writes and commits (§5). Nothing more
+  // — this is a cheap flag, not a salience engine (do-not-relitigate). Failure outranks the
+  // other two: hard-won knowledge is hard-won *because* something failed first, and a failed
+  // `git commit` is more worth reading than a successful one.
+  if (commandFailed(outcome)) {
+    event.hints = { possibly_salient: true, reason: 'command_failed' };
+  } else if (category === 'file_write') {
     event.hints = { possibly_salient: true, reason: 'file_write' };
   } else if (category === 'vcs_commit') {
     event.hints = { possibly_salient: true, reason: 'vcs_commit' };

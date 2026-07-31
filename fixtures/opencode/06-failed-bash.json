@@ -1,0 +1,60 @@
+{
+  "name": "failed-bash-command",
+  "description": "A bash tool whose lowered payload carries a non-empty stderr maps to a ToolEvent that CARRIES the output — the failure text, not only the intent — and is hinted possibly_salient with reason command_failed. NOTE: OpenCode's live `tool.execute.after` exposes a single combined output string, so today's shell lowers stdout only and this hint does not fire in production; the mapper's rule is proven here so it starts working the day the payload separates the streams.",
+  "native": {
+    "kind": "tool",
+    "tool": "bash",
+    "command": "npm test",
+    "outcome": {
+      "stdout": "> librarian@ test\n> node --test \"tests/**/*.test.ts\"\n",
+      "stderr": "Error: The module 'better_sqlite3.node' was compiled against a different Node.js version using\nNODE_MODULE_VERSION 115. This version of Node.js requires NODE_MODULE_VERSION 127 (ERR_DLOPEN_FAILED).\n"
+    }
+  },
+  "env": {
+    "event_id": "01J8X7QK46Z1B5U8R2V6X0Y4A1",
+    "ts": "2026-07-06T09:16:03.412Z",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 4,
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK46Z1B5U8R2V6X0Y4A1",
+    "ts": "2026-07-06T09:16:03.412Z",
+    "type": "tool",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 4,
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "bash",
+      "canonical_name": "bash",
+      "category": "command"
+    },
+    "command": "npm test",
+    "outcome": {
+      "stdout": "> librarian@ test\n> node --test \"tests/**/*.test.ts\"\n",
+      "stderr": "Error: The module 'better_sqlite3.node' was compiled against a different Node.js version using\nNODE_MODULE_VERSION 115. This version of Node.js requires NODE_MODULE_VERSION 127 (ERR_DLOPEN_FAILED).\n"
+    },
+    "hints": { "possibly_salient": true, "reason": "command_failed" }
+  }
+}

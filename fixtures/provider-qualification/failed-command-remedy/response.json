@@ -1,0 +1,4 @@
+[
+  "{\"note_type\":\"fact\",\"title\":\"better-sqlite3 needs the .nvmrc node (24), not the shell default\",\"summary\":\"Running npm test under node 20 fails with NODE_MODULE_VERSION 115 vs 127 (ERR_DLOPEN_FAILED) because better-sqlite3's prebuilt native module targets the node 24 pinned in .nvmrc; `nvm use` before npm test is the remedy.\"}",
+  "{\"faithful\":true,\"errors\":[],\"reason\":\"Supported by the events.\"}"
+]

@@ -170,6 +170,7 @@ Items marked **[endorsed]** were independently validated by the 2026-07-04 liter
 - Redaction **before durable append** — non-retrofittable (secrets in an append-only replayable log are immortal). Pipeline: native event → normalize → redact → validate → append. Redaction preserves correlation without the secret: `[REDACTED:token:sha256:abc123]`. Applies to prompts as well as commands. **[endorsed]**
 - **User-declared privacy (2026-07-15/16 → #101):** spans wrapped in `<private>…</private>` in prompt text are removed at the collector's redact stage, before durable append — same non-retrofittable rule as secret redaction, different threat model (declared intent vs. pattern detection; complements, not alternatives). Replacement is `[PRIVATE]` with **no hash**: unlike tokens, private content gets no correlation affordance — the user asked for it to not exist. Renderer-side stripping is not the mechanism; the append-time strip is the guarantee.
 - **Home-path normalization (2026-07-30 → #175):** every string in an event record replaces `$HOME` with `~` at the collector's redact stage, before durable append — same non-retrofittable rule as secret redaction, for operator identity and machine-layout privacy. Recursive traversal covers required `resource.cwd` and `context.cwd`, optional metadata such as `git_root` and tool file paths, and pasted paths in prompts without a field allowlist. Paths are display-only downstream; `projectSlugFromGitRoot` still derives the same basename from the normalized form.
+- **Command-output redaction (2026-07-31 → #179):** `ToolEvent.outcome.stdout`/`.stderr` pass the same pattern redaction as `command` and `prompt`, at the same append boundary. Machine-generated output arrives with no `<private>` markup — nobody tagged it — so pattern matching is the only guard it gets, and the blast radius per miss is larger than for a typed command (an `env` dump, not one token). Capture is confined to `command`/`vcs_commit`/`vcs_push` for the same reason: a `file_read`'s result is a copy of a file on disk, and copying the working tree into a never-deleted log is a redaction surface with no upside.
 - **Memory-echo guard (2026-07-15/16 → #101):** `<librarian-memory>…</librarian-memory>` blocks are stripped from prompt events before append. Without this, push-path injection re-enters the event log as prompt content, gets distilled, and memory begins citing itself — the §8 reflexive loop through the front door. Structural, collector-owned, fixture-backed.
 - Cursors: `{consumer, log_name, file_path, byte_offset, last_record_id?, updated_at}`; advance only after successful processing. Bounded retries; poison records quarantined with debug context (quarantine verdicts → diagnostics log); partial trailing JSON lines ignored until completed.
 - Detached workers: explicit lock ownership, stale-lock recovery (PID/token checks, timeout).
@@ -265,8 +266,11 @@ current user instructions if they conflict.
 ```
 [1] 12:04 prompt "fix the login redirect bug, it loops on expired tokens"
 [2] 12:05 write src/auth/session.ts
+[3] 12:07 bash: npm test → Error: NODE_MODULE_VERSION 115 vs 127. …  ← salient:command_failed
 [4] 12:09 bash: git commit -m "fix: expire check before redirect"  ← salient:vcs_commit
 ```
+
+- **Tool outcome renders as a bounded excerpt (2026-07-31 → #179).** A `command`/`vcs_*` event's captured `outcome` is stored verbatim and rendered as at most `OUTCOME_EXCERPT_CHARS` of collapsed text, stderr preferred over stdout. Storage and prompt budget are separate contracts, and letting the budget dictate the schema is exactly what left failure unrecorded for 7266 events.
 
 - Injection rendering (§6) is the same principle on the read side: tagged markdown, never raw records.
 - Per-task renderer shapes are free to diverge (e.g., an EAV-triple rendering *derived* for a future contradiction-detection task) — renderer outputs, never storage formats.
@@ -324,7 +328,8 @@ type EventBase = {
   };
   context: { session_id: string; turn?: number; cwd: string };
   hints?: { possibly_salient?: boolean;
-            reason?: "file_write" | "vcs_commit" | "cwd_change" | "user_pushback" | "manual" };
+            reason?: "file_write" | "vcs_commit" | "command_failed" | "cwd_change"
+                   | "user_pushback" | "manual" };
 };
 
 type PromptEvent = EventBase & { type: "prompt"; prompt: string };
@@ -336,6 +341,9 @@ type ToolEvent = EventBase & {
           category: "file_read" | "file_write" | "command" | "search"
                   | "vcs_commit" | "vcs_push" | "other" };
   command?: string;                                  // redacted before append
+  outcome?: { stdout?: string; stderr?: string; interrupted?: boolean };
+                                                     // shell/VCS categories only; verbatim,
+                                                     // empty streams elided, redacted before append
   files?: Array<{ path: string; action: "read" | "write" | "edit" | "delete" }>;
 };
 

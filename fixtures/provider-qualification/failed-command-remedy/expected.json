@@ -1,0 +1,8 @@
+{
+  "note_type": "fact",
+  "identity_mode": "episodic",
+  "project_slug": "librarian",
+  "session_id": "qualify-failed-command-remedy",
+  "from_event_id": "01K00000000000000000000101",
+  "to_event_id": "01K00000000000000000000110"
+}

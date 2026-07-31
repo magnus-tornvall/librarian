@@ -154,14 +154,19 @@ function inlineEnv(overrides: Partial<MapEnv> = {}): MapEnv {
   };
 }
 
-/** Build a PostToolUse native payload for a given tool + input. */
-function postToolUse(tool_name: string, tool_input?: Record<string, unknown>): PostToolUsePayload {
+/** Build a PostToolUse native payload for a given tool + input (+ optional tool result). */
+function postToolUse(
+  tool_name: string,
+  tool_input?: Record<string, unknown>,
+  tool_response?: unknown,
+): PostToolUsePayload {
   return {
     session_id: 'cc-inline-session',
     cwd: '/repo',
     hook_event_name: 'PostToolUse',
     tool_name,
     tool_input,
+    tool_response,
   };
 }
 
@@ -185,6 +190,50 @@ test('claude-code mapping: Grep and Glob map to search/search', () => {
     assert.equal(event.files, undefined, `${tool}: a search has no files[]`);
     assert.doesNotThrow(() => validateEvent(event));
   }
+});
+
+test('claude-code mapping: a search carries NO outcome even with a populated tool_response', () => {
+  // The file_read half of this rule is pinned by 04-post-tool-use-read.json, whose
+  // tool_response IS the file's contents. Search is the other excluded category: its result
+  // is re-runnable in a second, so copying it into a never-deleted log buys nothing.
+  for (const tool of ['Grep', 'Glob']) {
+    const [event] = map(
+      postToolUse(tool, { pattern: 'TODO' }, { mode: 'content', numLines: 3, filenames: ['a.ts'] }),
+      inlineEnv(),
+    ) as [Record<string, unknown>];
+    assert.equal(event.outcome, undefined, `${tool}: a search captures no outcome`);
+    assert.equal(event.hints, undefined, `${tool}: a search is never hinted command_failed`);
+  }
+});
+
+test('claude-code mapping: a clean command carries its stdout but is NOT hinted command_failed', () => {
+  const response = { stdout: 'ok\n', stderr: '', interrupted: false, isImage: false };
+  const [event] = map(postToolUse('Bash', { command: 'npm test' }, response), inlineEnv()) as [
+    Record<string, unknown>,
+  ];
+  assert.deepEqual(event.outcome, { stdout: 'ok\n' }, 'empty stderr and interrupted:false are elided');
+  assert.equal(event.hints, undefined, 'a succeeding command carries no salience hint');
+  assert.doesNotThrow(() => validateEvent(event));
+});
+
+test('claude-code mapping: an interrupted command is hinted command_failed even with no stderr', () => {
+  const response = { stdout: 'partial', stderr: '', interrupted: true, isImage: false };
+  const [event] = map(postToolUse('Bash', { command: 'npm test' }, response), inlineEnv()) as [
+    Record<string, unknown>,
+  ];
+  assert.deepEqual(event.outcome, { stdout: 'partial', interrupted: true });
+  assert.deepEqual(event.hints, { possibly_salient: true, reason: 'command_failed' });
+});
+
+test('claude-code mapping: a FAILED git commit is hinted command_failed, not vcs_commit', () => {
+  // Failure outranks the success hints — the failed commit is the one worth reading.
+  const response = { stdout: '', stderr: 'error: pathspec did not match\n', interrupted: false };
+  const [event] = map(
+    postToolUse('Bash', { command: 'git commit -m "wip"' }, response),
+    inlineEnv(),
+  ) as [Record<string, unknown>];
+  assert.equal((event.tool as Record<string, unknown>).category, 'vcs_commit');
+  assert.deepEqual(event.hints, { possibly_salient: true, reason: 'command_failed' });
 });
 
 test('claude-code mapping: an unrecognized tool falls through to unknown/other (dumb by design)', () => {

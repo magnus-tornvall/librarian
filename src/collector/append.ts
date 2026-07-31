@@ -28,6 +28,18 @@ export function appendEvent(logFilePath: string, event: Record<string, unknown>)
   if (typeof redacted.prompt === 'string') {
     redacted.prompt = redact(redacted.prompt);
   }
+  // Command output arrives with no `<private>` markup — nobody tagged it — so the patterns
+  // are the only guard it gets, on the same non-retrofittable boundary. `redacted` is the
+  // fresh deep copy normalizeHomePaths returned, so mutating in place cannot touch the input.
+  if (typeof redacted.outcome === 'object' && redacted.outcome !== null) {
+    const outcome = redacted.outcome as Record<string, unknown>;
+    for (const stream of ['stdout', 'stderr'] as const) {
+      const text = outcome[stream];
+      if (typeof text === 'string') {
+        outcome[stream] = redact(text);
+      }
+    }
+  }
 
   validateEvent(redacted);
   appendRecord(logFilePath, redacted);
