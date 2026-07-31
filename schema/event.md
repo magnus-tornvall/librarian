@@ -40,8 +40,9 @@ type ToolEvent = EventBase & {
                   | "vcs_commit" | "vcs_push" | "other" };
   command?: string;                                  // redacted before append
   outcome?: { stdout?: string; stderr?: string; interrupted?: boolean };
-                                                     // shell/VCS categories only; verbatim,
-                                                     // empty streams elided, redacted before append
+                                                     // shell/VCS categories only; empty streams
+                                                     // elided; redacted and 64 KB head+tail
+                                                     // capped before append
   files?: Array<{ path: string; action: "read" | "write" | "edit" | "delete" }>;
 };
 
@@ -51,13 +52,18 @@ type SessionEvent = EventBase & { type: "session"; action: "start" | "stop" | "c
 ## Rules
 
 Redaction before append: `<private>...</private>` spans in prompt and command fields become
-`[PRIVATE]` without a hash, and injected `<librarian-memory>...</librarian-memory>` blocks are
-removed, and `outcome.stdout`/`outcome.stderr` are pattern-redacted like any other captured
+`[PRIVATE]` without a hash; injected `<librarian-memory>...</librarian-memory>` blocks are
+removed; and `outcome.stdout`/`outcome.stderr` are pattern-redacted like any other captured
 text (machine-generated output carries no `<private>` markup, so the patterns are its only
-guard). `outcome` is captured for `command` / `vcs_commit` / `vcs_push` only: their output is
-a function of machine state at that instant and is gone, whereas a `file_read`'s result is a
-copy of a file on disk and a `search`'s is re-runnable. It is stored verbatim — the *render*
-truncates (§7), never the archive. `resource` stores facts, not authoritative identity; `project_slug` not on events;
+guard, and an unclosed `<private>` in machine output does NOT fail closed — nothing was
+declared, so nothing is destroyed). `outcome` is captured for `command` / `vcs_commit` /
+`vcs_push` only: their output is a function of machine state at that instant and is gone,
+whereas a `file_read`'s result is a copy of a file on disk and a `search`'s is re-runnable.
+Streams are stored verbatim up to a 64 KB head+tail cap per stream, which names what it
+elided; the *render* truncates far harder (§7). `hints.reason: "command_failed"` means
+**interrupted** — no adapter payload carries an exit code, and stderr is not a failure
+signal (measured: 266 of 266 non-empty stderr values in real transcripts were a harness
+notice). `resource` stores facts, not authoritative identity; `project_slug` not on events;
 hints non-authoritative; partial lines ignored/quarantined; cursors advance after success;
 validators hard-reject `record_class: diagnostic`. **Provenance is
 collector-stamped, never LLM-authored:** the renderer presents events with ordinal indexes;

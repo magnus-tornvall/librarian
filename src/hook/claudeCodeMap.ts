@@ -337,16 +337,26 @@ function extractOutcome(response: unknown, category: ToolCategory): Outcome | un
 }
 
 /**
- * Did the command fail? Claude Code's Bash `tool_response` carries no exit code, so the
- * signal is "wrote to stderr, or was interrupted".
+ * Did the command fail? `interrupted` is the ONLY failure signal a Claude Code Bash
+ * `tool_response` carries. Measured over 1217 real Bash results from this project's own
+ * transcripts:
  *
- * ponytail: stderr-as-failure false-positives on tools that log progress there (`git push`,
- * npm warnings). Acceptable — hints are explicitly non-authoritative (§5) and a false
- * positive only points the distiller at a line it can read for itself. Upgrade to an exit
- * code the day a hook payload exposes one.
+ *   - no exit code in the payload at all (key set is
+ *     `{stdout, stderr, interrupted, isImage, noOutputExpected}`),
+ *   - `is_error` on the tool result: never set,
+ *   - non-empty `stderr`: 266 of 1217 (22%) — and **all 266** were Claude Code's own
+ *     "Shell cwd was reset to …" notice. Zero were failures,
+ *   - real failures print to stdout (`npm ERR!`, `✖ failing`), because `2>&1 | tail` is how
+ *     a suite actually gets run and `node --test` writes failures there.
+ *
+ * So stderr-as-failure would be ~100% false positives that also miss every real failure, and
+ * a false `← salient:command_failed` misdirects the distiller — the precise opposite of what
+ * this capture is for. Grepping output for error text would be sharper and is exactly the
+ * salience authority §4 keeps out of the adapter. The distiller reads the output and judges
+ * for itself; that is the feature. Widen this only when a payload exposes an exit code.
  */
 function commandFailed(outcome: Outcome | undefined): boolean {
-  return outcome !== undefined && (outcome.interrupted === true || outcome.stderr !== undefined);
+  return outcome?.interrupted === true;
 }
 
 // ---------------------------------------------------------------------------

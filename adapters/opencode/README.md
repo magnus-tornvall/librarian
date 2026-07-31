@@ -137,7 +137,7 @@ why it was selected.
 | bash `git commit …`               | `ToolEvent`     | category sharpened to `vcs_commit`; `hints.possibly_salient` (`reason: vcs_commit`). |
 | bash `git push …`                 | `ToolEvent`     | category sharpened to `vcs_push`. |
 | File tool (read/write/edit)       | `ToolEvent`     | `files[]` populated; file writes get `hints.possibly_salient` (`reason: file_write`). No `outcome` — a read's result is a copy of a file on disk. |
-| bash / vcs tool output            | `ToolEvent`     | `outcome.stdout` lifted from `output.output`. A non-empty `stderr` or `interrupted` would set `hints.possibly_salient` (`reason: command_failed`), but OpenCode exposes a single combined output string with no stream split and no exit code, so that hint does not fire here yet. |
+| bash / vcs tool output            | `ToolEvent`     | `outcome.stdout` lifted from `output.output`. `interrupted` would set `hints.possibly_salient` (`reason: command_failed`), but OpenCode exposes a single combined output string with no stream split, no exit code and no interrupt flag, so that hint does not fire here yet. Capture is the deliverable; the distiller reads the output and judges for itself. |
 | Session start / stop / compact    | `SessionEvent`  | `action` ∈ start/stop/compact/checkpoint. |
 
 `resource` carries `agent: "opencode"`, `machine_id` (read from the persisted
@@ -160,7 +160,7 @@ subscribes to (pinned to the `@opencode-ai/plugin`/`sdk` surface) are:
 | ---- | ----- | ----- |
 | `chat.message` | `PromptEvent` (user messages) + the turn's recall | One-shot "new message received". Chosen over `experimental.chat.messages.transform`, which is a whole-history transform firing every round-trip (would duplicate prompts). Prompt is captured at first receipt; **updated/edited messages are deferred** (not re-emitted). Deduped by message id in the plugin. |
 | `experimental.chat.messages.transform` | — | The splice. Idempotent by construction (prior librarian parts are stripped first). |
-| `tool.execute.after` | `ToolEvent` | Tool args (command line, `filePath`) are read from `input.args`; what the tool printed is read from `output.output` and kept only for `command`/`vcs_*` categories. |
+| `tool.execute.after` | `ToolEvent` | Tool args (command line, `filePath`) are read from `input.args`. What the tool printed is read from `output.output` — and the plugin forwards `output` **only when `input.args.command` is set**, so a read never serializes a whole file into the hook's stdin for a field the collector would drop. |
 | `experimental.session.compacting` | `SessionEvent` (`compact`) + memory re-supply | Fires **before** compaction (distinct from the post-hoc `session.compacted` event); appends the cached startup brief and latest recall when OpenCode exposes a compaction prompt/context. |
 | `event` → `session.created` | `SessionEvent` (`start`) | Fires **exactly once** per session (unlike Claude Code's repeated `SessionStart`). Also captures `agent_version`. |
 | `event` → `session.deleted` | `SessionEvent` (`stop`) | The one-shot "session ended" signal (`session.idle` repeats per turn and is intentionally not used). |

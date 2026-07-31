@@ -63,6 +63,72 @@ test('a secret printed by a command never reaches disk', () => {
   assert.match(outcome.stderr, /^warning: using \[REDACTED:token:sha256:[0-9a-f]{8}\]\n$/);
 });
 
+test('an incidental private tag in command output does not truncate the rest', () => {
+  const record = JSON.parse(
+    fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
+  );
+  record.outcome = {
+    stdout: 'FAIL x.spec.ts\n  expected <private>true</privat\nREAL ERROR: ENOENT config.yml\n',
+  };
+
+  const logFilePath = tempLogFile();
+  appendEvent(logFilePath, record);
+
+  const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
+  const stdout = (persisted.outcome as Record<string, string>).stdout;
+  assert.ok(stdout.includes('REAL ERROR: ENOENT config.yml'), 'the failure text survives');
+  // An UNCLOSED tag in machine output is left as literal text — the same treatment an
+  // unclosed `<librarian-memory>` already gets in a prompt. Nothing is declared, so nothing
+  // is destroyed. A well-formed span is still stripped (next test).
+  assert.ok(stdout.includes('<private>true'), 'the incidental tag is left as literal output');
+});
+
+test('a well-formed private span in command output is still stripped', () => {
+  const record = JSON.parse(
+    fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
+  );
+  record.outcome = { stdout: 'before <private>do not persist this</private> after\n' };
+
+  const logFilePath = tempLogFile();
+  appendEvent(logFilePath, record);
+
+  const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
+  const stdout = (persisted.outcome as Record<string, string>).stdout;
+  assert.equal(stdout, 'before [PRIVATE] after\n');
+  assert.ok(!fs.readFileSync(logFilePath, 'utf8').includes('do not persist this'));
+});
+
+test('a multi-megabyte stream is capped head+tail before durable append', () => {
+  const record = JSON.parse(
+    fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
+  );
+  record.outcome = { stdout: `HEAD${'x'.repeat(4 * 1024 * 1024)}TAIL` };
+
+  const logFilePath = tempLogFile();
+  appendEvent(logFilePath, record);
+
+  const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
+  const stdout = (persisted.outcome as Record<string, string>).stdout;
+  assert.ok(stdout.length < 70 * 1024, `capped, got ${stdout.length} chars`);
+  assert.ok(stdout.startsWith('HEAD'), 'the head survives — it holds the invocation');
+  assert.ok(stdout.endsWith('TAIL'), 'the tail survives — it holds the error');
+  assert.match(stdout, /…\[\d+ characters elided\]…/, 'the elision names what was dropped');
+});
+
+test('a stream at the cap is stored verbatim, with no elision marker', () => {
+  const record = JSON.parse(
+    fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
+  );
+  const exact = 'z'.repeat(64 * 1024);
+  record.outcome = { stdout: exact };
+
+  const logFilePath = tempLogFile();
+  appendEvent(logFilePath, record);
+
+  const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
+  assert.equal((persisted.outcome as Record<string, string>).stdout, exact);
+});
+
 test('normalizes home paths throughout an event before durable append', () => {
   const home = os.homedir();
   const record = JSON.parse(

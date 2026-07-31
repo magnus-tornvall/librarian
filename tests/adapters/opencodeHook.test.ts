@@ -252,8 +252,9 @@ test('hook opencode: a bash tool lowers output.output onto the event, a read too
   );
   assert.equal(bash.status, 0, `bash hook should exit 0; stderr: ${bash.stderr}`);
 
-  // A read's `output.output` is the file's contents — capturing it would make the
-  // never-deleted log a second copy of the working tree.
+  // A read's `output.output` is the file's contents. The plugin does not even forward it
+  // (see the `args.command` gate there), but the shell must drop it regardless — the two
+  // halves ship independently, so neither may rely on the other.
   const read = runHook(
     {
       hook: 'tool.execute.after',

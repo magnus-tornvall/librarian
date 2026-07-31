@@ -232,16 +232,17 @@ function nonEmptyOutcome(outcome: Outcome | undefined): Outcome | undefined {
 }
 
 /**
- * Did the command fail? OpenCode's tool payload carries no exit code, so the signal is
- * "wrote to stderr, or was interrupted".
+ * Did the command fail? `interrupted` only — see the Claude Code adapter for the measurement
+ * that rules out stderr (266 of 266 non-empty stderr values in real transcripts were a
+ * harness notice, not a failure) and rules out everything else (no exit code in either
+ * payload). OpenCode's `tool.execute.after` exposes a single combined output string, so it
+ * carries even less: capture is the deliverable there, the hint is not.
  *
  * ponytail: identical rule to the Claude Code adapter's, duplicated for the same reason
- * GIT_SUBCOMMAND is — these mappers deliberately share no runtime module. Today OpenCode's
- * `tool.execute.after` exposes only a single combined output string, so this never fires
- * there; it will the day the payload separates the streams.
+ * GIT_SUBCOMMAND is — these mappers deliberately share no runtime module.
  */
 function commandFailed(outcome: Outcome | undefined): boolean {
-  return outcome !== undefined && (outcome.interrupted === true || outcome.stderr !== undefined);
+  return outcome?.interrupted === true;
 }
 
 // ---------------------------------------------------------------------------

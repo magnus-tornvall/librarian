@@ -216,6 +216,29 @@ test('claude-code mapping: a clean command carries its stdout but is NOT hinted 
   assert.doesNotThrow(() => validateEvent(event));
 });
 
+test('claude-code mapping: stderr alone does NOT mean failure', () => {
+  // Regression guard on the measurement behind this rule: over 1217 real Bash results, all
+  // 266 non-empty stderr values were Claude Code's own "Shell cwd was reset to …" notice and
+  // none were failures. Hinting on stderr would fire on ~22% of commands, every one of them
+  // wrong, and a false `← salient:command_failed` misdirects the distiller.
+  const response = {
+    stdout: 'ok\n',
+    stderr: '\nShell cwd was reset to /repo',
+    interrupted: false,
+    isImage: false,
+    noOutputExpected: false,
+  };
+  const [event] = map(postToolUse('Bash', { command: 'ls' }, response), inlineEnv()) as [
+    Record<string, unknown>,
+  ];
+  assert.deepEqual(
+    event.outcome,
+    { stdout: 'ok\n', stderr: '\nShell cwd was reset to /repo' },
+    'both streams are still captured — capture is the feature, the hint is not',
+  );
+  assert.equal(event.hints, undefined, 'a harness notice on stderr is not a failure');
+});
+
 test('claude-code mapping: an interrupted command is hinted command_failed even with no stderr', () => {
   const response = { stdout: 'partial', stderr: '', interrupted: true, isImage: false };
   const [event] = map(postToolUse('Bash', { command: 'npm test' }, response), inlineEnv()) as [
@@ -225,9 +248,9 @@ test('claude-code mapping: an interrupted command is hinted command_failed even 
   assert.deepEqual(event.hints, { possibly_salient: true, reason: 'command_failed' });
 });
 
-test('claude-code mapping: a FAILED git commit is hinted command_failed, not vcs_commit', () => {
-  // Failure outranks the success hints — the failed commit is the one worth reading.
-  const response = { stdout: '', stderr: 'error: pathspec did not match\n', interrupted: false };
+test('claude-code mapping: an INTERRUPTED git commit is hinted command_failed, not vcs_commit', () => {
+  // Failure outranks the success hints — the commit that did not land is the one worth reading.
+  const response = { stdout: '', stderr: '', interrupted: true };
   const [event] = map(
     postToolUse('Bash', { command: 'git commit -m "wip"' }, response),
     inlineEnv(),

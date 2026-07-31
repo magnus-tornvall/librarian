@@ -93,19 +93,41 @@ test('a plain command renders its command line, not an empty write', () => {
   assert.equal(line, '[1] 12:07 bash: npm test');
 });
 
-test('a failed command renders an excerpt of its output and its salience reason', () => {
+test('a failed command renders an excerpt of its output', () => {
   const stderr = 'Error: NODE_MODULE_VERSION 115. This version of Node.js requires 127.\n';
   const line = renderEventsForDistill([
-    commandEvent('npm test', { stdout: '> librarian@ test\n', stderr }, {
+    commandEvent('npm test', { stdout: '> librarian@ test\n', stderr }),
+  ]);
+  assert.ok(line.includes('bash: npm test →'), `outcome is rendered on the line: ${line}`);
+  assert.ok(line.includes('NODE_MODULE_VERSION 115'), 'the failure text reaches the prompt');
+});
+
+test('BOTH streams reach the prompt, stdout first', () => {
+  // Preferring either stream loses the lesson: measured over real transcripts, a failing
+  // suite prints its failure to stdout while stderr carries harness noise.
+  const line = renderEventsForDistill([
+    commandEvent('npm test 2>&1 | tail -25', {
+      stdout: '✖ failing tests: ✖ a matching note is returned',
+      stderr: '\nShell cwd was reset to /repo',
+    }),
+  ]);
+  assert.ok(line.includes('✖ failing tests'), 'the real failure text is not dropped');
+  assert.ok(line.includes('stderr: Shell cwd was reset to /repo'), 'stderr is labelled, not silent');
+  assert.ok(
+    line.indexOf('✖ failing') < line.indexOf('stderr:'),
+    'stdout comes first — it is where failures actually land',
+  );
+});
+
+test('the salience marker still renders when an adapter sets one', () => {
+  const line = renderEventsForDistill([
+    commandEvent('npm test', { stdout: 'partial', interrupted: true }, {
       possibly_salient: true,
       reason: 'command_failed',
     }),
   ]);
-  assert.ok(line.includes('bash: npm test →'), `outcome is rendered on the line: ${line}`);
-  assert.ok(line.includes('NODE_MODULE_VERSION 115'), 'the failure text reaches the prompt');
+  assert.ok(line.includes('→ interrupted | partial'));
   assert.ok(line.endsWith('← salient:command_failed'));
-  // stderr wins over stdout — a failure's explanation is what the distiller is here for.
-  assert.ok(!line.includes('> librarian@ test'), 'stdout is not rendered when stderr is present');
 });
 
 test('an interrupted command says so even with no output', () => {
@@ -124,9 +146,38 @@ test('a 1 MB output renders to a single line under the documented cap', () => {
   assert.ok(line.endsWith('…'), 'a truncated excerpt is marked as truncated');
 });
 
+test('two 1 MB streams are each capped, and the line stays bounded', () => {
+  const huge = 'x'.repeat(1024 * 1024);
+  const line = renderEventsForDistill([
+    commandEvent('cat big.log', { stdout: huge, stderr: 'y'.repeat(1024 * 1024) }),
+  ]);
+  assert.equal(line.split('\n').length, 1);
+  assert.ok(
+    line.length < 100 + 2 * OUTCOME_EXCERPT_CHARS,
+    `the cap is per stream, so a line is bounded by twice it, got ${line.length} chars`,
+  );
+  assert.ok(line.includes('x…'), 'stdout is present and truncated');
+  assert.ok(line.includes('stderr: y'), 'stderr is present too');
+});
+
+test('a whitespace-heavy giant output is excerpted without copying it whole', () => {
+  // Guards the bounded pre-slice: the renderer must not allocate a collapsed copy of a
+  // multi-megabyte stream to produce 400 characters.
+  const spaced = 'a' + ' '.repeat(4 * 1024 * 1024) + 'b';
+  const line = renderEventsForDistill([commandEvent('cat spaced.log', { stdout: spaced })]);
+  assert.equal(line.split('\n').length, 1);
+  assert.ok(line.length < 100 + OUTCOME_EXCERPT_CHARS);
+  assert.ok(line.endsWith('…'), 'content beyond the raw headroom is marked as dropped');
+});
+
 test('a multi-line output collapses to one line', () => {
   const line = renderEventsForDistill([commandEvent('ls', { stdout: 'a\nb\nc\n' })]);
   assert.equal(line, '[1] 12:07 bash: ls → a b c');
+});
+
+test('a stderr-only outcome is labelled so the model knows which stream it read', () => {
+  const line = renderEventsForDistill([commandEvent('gcc x.c', { stderr: 'x.c:1: error' })]);
+  assert.equal(line, '[1] 12:07 bash: gcc x.c → stderr: x.c:1: error');
 });
 
 test('an event with no outcome renders exactly as before', () => {

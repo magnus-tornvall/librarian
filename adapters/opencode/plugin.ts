@@ -490,10 +490,20 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
       }
     },
 
-    /** A tool finished executing → forwarded for collection. `output` carries what the tool
-     *  printed; the shell lifts it onto the event for shell/VCS tools only. */
+    /**
+     * A tool finished executing → forwarded for collection.
+     *
+     * `output` carries what the tool printed, and is forwarded ONLY for shell tools. For a
+     * read or a grep, `output.output` is the file's contents or the whole hit list: the
+     * collector drops it (capture is confined to command/vcs_* categories), so serializing
+     * it into a spawn's stdin on every read is pure cost on the hottest tool there is.
+     * `args.command` is the shell-tool marker — the same gate as the role check on
+     * `chat.message`, not mapping logic: what the payload MEANS is still the shell's call.
+     */
     'tool.execute.after': async (input: Loose, output: Loose) => {
-      await send({ hook: 'tool.execute.after', input, output });
+      const args = asRecord(input.args) ?? {};
+      const isShellTool = asString(args.command) !== undefined;
+      await send({ hook: 'tool.execute.after', input, ...(isShellTool ? { output } : {}) });
     },
 
     /**

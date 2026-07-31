@@ -56,7 +56,8 @@ not fail a case; a change to a stable field would.
 | `03-post-tool-use-bash-git-commit.json`| PostToolUse `Bash` `git commit …` | recategorized `vcs_commit`, raw command, `outcome.stdout` lifted (empty stderr elided), vcs_commit hint. |
 | `04-post-tool-use-read.json`           | PostToolUse `Read`         | `ToolEvent` file_read, `files[]` action read, no hint — and **no `outcome`** even though `tool_response` holds the file's contents. |
 | `05-session-start.json`                | SessionStart               | `SessionEvent` action `start`. |
-| `06-post-tool-use-bash-failed.json`    | PostToolUse `Bash`, non-empty `stderr` | `outcome` carries the failure text, hint `command_failed`. |
+| `06-post-tool-use-bash-stderr.json`    | PostToolUse `Bash`, non-empty `stderr` | `outcome` carries BOTH streams — and **no hint**: stderr is not a failure signal. |
+| `07-post-tool-use-bash-interrupted.json`| PostToolUse `Bash`, `interrupted: true` | the one honest failure signal → hint `command_failed`. |
 
 Additional mapping rules (git push → `vcs_push`, Grep/Glob → search, an unrecognized tool
 → `unknown`/`other`, Stop → `stop`) plus the end-to-end pipe, the redaction pass, and the

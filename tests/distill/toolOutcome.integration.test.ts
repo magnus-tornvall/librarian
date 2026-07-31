@@ -73,10 +73,10 @@ test('the failure text and its remedy survive the append boundary into the disti
   assert.ok(prompt.includes(ABI_ERROR), 'the ABI mismatch reaches the model');
   assert.ok(prompt.includes('ERR_DLOPEN_FAILED'), 'so does the error code');
   assert.ok(prompt.includes(REMEDY), 'and so does the remedy that made it pass');
-  assert.ok(
-    prompt.includes('← salient:command_failed'),
-    'the failing command is flagged, so the model is pointed at the line that matters',
-  );
+  // No salience hint is asserted here, deliberately. Neither adapter's payload exposes an
+  // exit code, `is_error`, or a stderr channel that means failure (see claudeCodeMap's
+  // commandFailed for the measurement), so nothing can flag this run as failed. What makes
+  // the lesson recoverable is that the model can now READ the output — that is the feature.
 });
 
 test('without outcomes the two npm test runs are indistinguishable — the blind spot #179 closes', () => {

@@ -1,6 +1,6 @@
 {
-  "name": "post-tool-use-bash-failed",
-  "description": "A Claude Code PostToolUse hook for the Bash tool whose tool_response carries a non-empty stderr maps to a ToolEvent that CARRIES the output — the failure text, not only the intent — and is hinted possibly_salient with reason command_failed. Failure outranks the file_write/vcs_commit hints: hard-won knowledge is hard-won because something failed first.",
+  "name": "post-tool-use-bash-stderr",
+  "description": "A Claude Code PostToolUse hook for the Bash tool whose tool_response carries a non-empty stderr maps to a ToolEvent that CARRIES both streams — the failure text, not only the intent. It is deliberately NOT hinted command_failed: measured over 1217 real Bash results, all 266 non-empty stderr values were the harness's own \"Shell cwd was reset to …\" notice and zero were failures, while real failures print to stdout. The payload exposes no exit code and never sets is_error, so `interrupted` is the only honest failure signal (see 07). The distiller reads the captured output and judges for itself.",
   "native": {
     "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
     "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
@@ -63,7 +63,6 @@
     "outcome": {
       "stdout": "> librarian@ test\n> node --test \"tests/**/*.test.ts\"\n",
       "stderr": "Error: The module '/Users/magnus/dev/librarian/node_modules/better-sqlite3/build/Release/better_sqlite3.node'\nwas compiled against a different Node.js version using\nNODE_MODULE_VERSION 115. This version of Node.js requires\nNODE_MODULE_VERSION 127. Please try re-compiling or re-installing\nthe module (ERR_DLOPEN_FAILED).\n"
-    },
-    "hints": { "possibly_salient": true, "reason": "command_failed" }
+    }
   }
 }

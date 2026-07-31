@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { redact } from '../src/redact.ts';
+import { redact, redactOutput } from '../src/redact.ts';
 
 const GOLDEN_DIR = path.join(import.meta.dirname, '..', 'schema', 'examples', 'event');
 
@@ -21,6 +21,28 @@ test('replaces private spans without retaining their content or a correlation ha
 test('private spans are fail-closed when unclosed and support nesting', () => {
   assert.equal(redact('keep <private>outer <private>inner</private> secret</private> end'), 'keep [PRIVATE] end');
   assert.equal(redact('keep <private>do not persist'), 'keep [PRIVATE]');
+});
+
+// --- redactOutput: machine text, not human text (#179) --------------------------------
+
+test('redactOutput does NOT fail closed on an unclosed private tag', () => {
+  // The bug this guards: a `<private>` that is an accident of a test diff, not a
+  // declaration, would otherwise truncate everything after it — permanently, on a log that
+  // is never deleted, destroying the exact failure text the capture exists to keep.
+  const output = 'FAIL x.spec.ts\n  expected <private>true</privat\nREAL ERROR: ENOENT config.yml\n';
+  assert.equal(redact(output), 'FAIL x.spec.ts\n  expected [PRIVATE]', 'human text still fails closed');
+  // Left verbatim, tag and all — the same treatment an unclosed `<librarian-memory>` gets.
+  assert.equal(redactOutput(output), output, 'machine text is kept whole');
+});
+
+test('redactOutput still strips a well-formed private span', () => {
+  assert.equal(redactOutput('a <private>b</private> c'), 'a [PRIVATE] c');
+});
+
+test('redactOutput applies the secret patterns and the memory-echo strip', () => {
+  const secret = 'ghp_' + 'E'.repeat(36);
+  assert.match(redactOutput(secret), /^\[REDACTED:token:sha256:[0-9a-f]{8}\]$/);
+  assert.equal(redactOutput('out <librarian-memory>echo</librarian-memory> put'), 'out  put');
 });
 
 test('removes all injected librarian-memory blocks', () => {
