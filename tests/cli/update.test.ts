@@ -4,6 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { buildSync } from 'esbuild';
 import { CACHE_DIR } from '../../src/paths.ts';
 import { latestVersion } from '../../src/update.ts';
 
@@ -72,11 +73,16 @@ test('passive check throttles failed network attempts on a TTY', async () => {
   const previous = process.env.LIBRARIAN_TAGS_URL;
   process.env.LIBRARIAN_TAGS_URL = await startFailingTags();
   const bundle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-update-test-')), 'update.cjs');
-  const build = spawnSync(path.join(import.meta.dirname, '..', '..', 'node_modules', '.bin', 'esbuild'), [
-    path.join(import.meta.dirname, '..', '..', 'src', 'update.ts'), '--bundle', '--platform=node', '--format=cjs',
-    '--define:__LIBRARIAN_VERSION__="v1.0.0"', `--outfile=${bundle}`,
-  ], { encoding: 'utf8' });
-  assert.equal(build.status, 0, build.stderr);
+  // Resolve esbuild as a module, not as a repo-relative `.bin` path: a git worktree has no
+  // node_modules of its own, and buildSync throws on failure so the status check goes too.
+  // logLevel silences the pre-existing `import.meta` in CJS warning the CLI sent to stderr.
+  buildSync({
+    entryPoints: [path.join(import.meta.dirname, '..', '..', 'src', 'update.ts')],
+    bundle: true, platform: 'node', format: 'cjs',
+    define: { __LIBRARIAN_VERSION__: '"v1.0.0"' },
+    outfile: bundle,
+    logLevel: 'silent',
+  });
   const runPassive = () => spawnSync(process.execPath, ['-e', `Object.defineProperty(process.stderr, 'isTTY', { value: true }); require(${JSON.stringify(bundle)}).passiveUpdateCheck()`], {
     encoding: 'utf8', env: { ...process.env, LIBRARIAN_TAGS_URL: process.env.LIBRARIAN_TAGS_URL },
   });
