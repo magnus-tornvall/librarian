@@ -15,13 +15,17 @@
     "test": "node --import ./tests/setup-home.ts --test \"tests/**/*.test.ts\"",
     "test:binary": "LIBRARIAN_BINARY_TEST=1 node --import ./tests/setup-home.ts --test tests/cli/update.binary.test.ts",
     "qualify": "node --import ./tests/setup-home.ts --test tests/distill/providerQualification.test.ts",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "arch": "likec4 validate docs/architecture",
+    "arch:dev": "likec4 start docs/architecture",
+    "arch:build": "likec4 build -o build/architecture docs/architecture"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.7.0",
+    "likec4": "1.59.2",
     "postject": "^1.0.0-alpha.6",
     "typescript": "^5",
     "typescript-eslint": "^8.64.0"

@@ -1,0 +1,1124 @@
+/**
+ * Librarian — architecture as code (LikeC4).
+ *
+ * SCOPE RULE — AGENTS.md's routing test: does this fact outlive the unit it describes?
+ * This model carries only durable facts: structure, settled decisions, structural
+ * invariants, and the named triggers that gate deferred work. It carries NO status:
+ * no "in progress", no issue state, no roadmap position. Status lives on GitHub
+ * issues and the Project board. This file is a lens on the spec
+ * (docs/specs/librarian-design-consolidated.md), not a fourth tracking home.
+ *
+ * Two kinds of "trigger" appear below, pointing in opposite directions:
+ *   runtimeEvent — an event that STARTS a flow (session start, prompt, session end, tool call)
+ *   gate         — a named condition the design WAITS FOR before building something (§15)
+ *
+ * Components are named after the code that implements them, so drift is checkable:
+ * every `technology` string is a real path under src/.
+ */
+specification {
+
+  element actor {
+    style {
+      shape person
+      color secondary
+    }
+  }
+
+  element system {
+    style {
+      color secondary
+    }
+  }
+
+  element component {
+    style {
+      shape component
+      color primary
+    }
+  }
+
+  element store {
+    style {
+      shape storage
+      color gray
+    }
+  }
+
+  element runtimeEvent {
+    style {
+      shape queue
+      color green
+    }
+  }
+
+  element gate {
+    style {
+      shape queue
+      color amber
+    }
+  }
+
+  element decision {
+    style {
+      shape document
+      color muted
+    }
+  }
+
+  // Storage classes (§4) — retention semantics, not folders.
+  tag sacred
+  tag derived
+  tag deletable
+
+  // Value paths (§1, §6) — the two ways memory reaches a model.
+  tag push
+  tag pull
+
+  tag write-path
+  tag hot-path
+
+  // Decision state (§5). `superseded` text is kept, never deleted.
+  tag settled
+  tag superseded
+  tag invariant
+
+  // The design frontier: deliberately not built yet (§15).
+  tag waiting
+
+  relationship constrains {
+    line dotted
+    color muted
+  }
+
+  relationship gates {
+    line dashed
+    color amber
+  }
+
+  relationship rejects {
+    line dashed
+    color red
+  }
+}
+
+model {
+
+  // ─── Outside the boundary ────────────────────────────────────────────────
+
+  human = actor 'The human' {
+    description '
+      Author, curator, and the second distiller (§5). The only authority that can
+      revise any note by explicit id, flag one, or tombstone it.
+    '
+  }
+
+  codingAgent = system 'Instrumented coding agent' {
+    description '
+      Claude Code or OpenCode. The only surfaces librarian both reads from and
+      writes into — §1 write-side asymmetry: readable everywhere, learns only from
+      instrumented surfaces and from the human.
+    '
+  }
+
+  mcpHost = system 'Any MCP host' {
+    description '
+      Codex, Cursor, ChatGPT, Claude.ai. Read-only, and nothing is built per host:
+      a config entry spawns `librarian mcp` (§14). This is the universal floor that
+      delivers the cross-vendor promise.
+    '
+  }
+
+  inference = system 'Inference provider' {
+    description '
+      `claude -p` or `opencode run` — pure completion, no tool loop (§3). A swappable
+      seam: a 100%-local configuration must remain possible (§2).
+    '
+    technology 'src/distill/{claude,opencode}Provider.ts'
+  }
+
+  embedder = system 'Embedding endpoint' {
+    description '
+      OpenAI-compatible /v1/embeddings (Ollama, qwen3-embedding:0.6b). Optional by
+      construction: absent or slow ⇒ recall degrades to BM25-only, never breaks (§5).
+    '
+  }
+
+  // ─── Runtime events: what starts a flow ──────────────────────────────────
+
+  evSessionStart = runtimeEvent 'Session start' {
+    description 'Turn-1 brief + prefs — the stable prefix that never mutates mid-session (§6)'
+  }
+
+  evPrompt = runtimeEvent 'User prompt' {
+    description 'Per-prompt recall, spliced adjacent to the latest user message (volatile suffix, §6)'
+  }
+
+  evToolUse = runtimeEvent 'Tool use' {
+    description 'ToolEvent + outcome — the distiller sees failure, not just intent (§7)'
+  }
+
+  evSessionEnd = runtimeEvent 'Session end' {
+    description 'Lazy, detached distill trigger. No daemon (§4)'
+  }
+
+  evModelSearch = runtimeEvent 'Model decides to search' {
+    description 'The pull path is model-initiated: it asked, so austerity rules do not apply (§6)'
+  }
+
+  // ─── The system ──────────────────────────────────────────────────────────
+
+  librarian = system 'Librarian' {
+    description '
+      A personal context layer that automatically provides the right parts of your
+      knowledge to any AI assistant. The product is not memory and not search — it is
+      eliminating repetition (§1).
+    '
+
+    wiring = component 'Host wiring' {
+      description 'Three host classes, three different integration physics (§14)'
+
+      ccPlugin = component 'Claude Code plugin' {
+        description '
+          Declarative manifest only — four hooks plus the stdio MCP server, zero code
+          shipped. Recall arrives through the `additionalContext` channel.
+        '
+        technology '.claude-plugin/plugin.json'
+      }
+
+      ocPlugin = component 'OpenCode plugin' {
+        description '
+          The one host that loads executable JS in-process, so recall must be spliced by
+          mutating OpenCode\'s own message array in place (return values are silently
+          dropped). One dependency-free file the wizard writes; the binary carries it as
+          a build asset.
+        '
+        technology 'adapters/opencode/plugin.ts'
+      }
+
+      hookShell = component 'Hook shell' {
+        description '
+          Per-host payload mapping lives here, behind the bin — which is what lets a
+          plugin be thin (§14). Maps native payloads → canonical events, and returns
+          rendered recall blocks to the host.
+        '
+        technology 'src/hook/ · librarian hook claude-code|opencode'
+      }
+    }
+
+    cli = component 'CLI' {
+      description '
+        The single registered bin every surface routes through (§14). collect · distill ·
+        drain · recall · inject · why · why-not · why-summary · stats · note · flag ·
+        supersede · doctor · mcp · hook. `drain` is the manual recovery tool — more
+        important than any daemon (§4).
+      '
+      technology 'src/cli.ts → single executable (SEA)'
+
+      wizard = component 'Setup wizard' {
+        description '
+          `librarian init` / `librarian config` — the universal engine across all surfaces.
+          An editor over the canonical config file, which stays hand-editable: that is the
+          answer to "a config menu betrays glass-box" (§14).
+        '
+        technology 'src/init.ts · src/config-menu.ts'
+      }
+    }
+
+    collector = component 'Collector' {
+      #write-path
+      description '
+        Library + CLI, no daemon: normalize → redact → validate → append (§4). Owns the
+        distill-skip heuristic and authoritative salience. Instrumentation stays dumb.
+      '
+      technology 'src/collector/'
+
+      redactor = component 'Redaction' {
+        description '
+          Runs BEFORE durable append — non-retrofittable, because a secret in an
+          append-only replayable log is immortal. Secrets → [REDACTED:token:sha256:…]
+          (correlation preserved); <private> → [PRIVATE] (no hash — the user asked for it
+          to not exist); $HOME → ~; <librarian-memory> stripped (memory-echo guard);
+          stdout/stderr capped head+tail at 64 KB.
+        '
+        technology 'src/redact.ts'
+      }
+
+      validator = component 'Event validation' {
+        description '
+          Schema check plus the poison-pill rule: a `record_class: "diagnostic"` record is
+          hard-rejected — quarantine-with-error, never a silent skip.
+        '
+        technology 'src/collector/validateEvent.ts'
+      }
+    }
+
+    distill = component 'Distiller' {
+      #write-path
+      description '
+        The narrow waist. Admission control, not compression: nothing enters the note log
+        without a named judge (§5). Exactly two distillers exist, and there is no generic
+        import path — not even for already-condensed machine content.
+      '
+      technology 'src/distill/distillRun.ts'
+
+      renderer = component 'Prompt renderer' {
+        description '
+          Owns every LLM-facing serialization; carries zero compatibility obligations
+          because prompts are ephemeral and never parsed back. Wins tokens by field
+          elision, which is only legal at the prompt boundary (§7).
+        '
+        technology 'src/render/distillPrompt.ts'
+      }
+
+      llmDistiller = component 'LLM distiller' {
+        description 'Cursor consumer of the event log, through the provider seam'
+        technology 'src/distill/llmDistiller.ts'
+      }
+
+      worthGate = component 'Worth gate' {
+        description '
+          Gate zero, and the cheapest of all: enumerated worth criteria plus an explicit
+          NOOP decline, inside the LLM call already being paid for. Vacuity is the one
+          admission failure novelty and faithfulness cannot catch — a vacuous note is
+          novel, faithful, and corroborated by the next mechanical session.
+        '
+      }
+
+      noveltyGate = component 'Novelty gate' {
+        description '
+          Deterministic BM25 near-duplicate check, episodic notes only. Cheap gate before
+          expensive gate: never pay a verify call for a note a duplicate check discards.
+        '
+        technology 'src/distill/noveltyGate.ts'
+      }
+
+      verifier = component 'Faithfulness verify' {
+        description '
+          Vetoes, never edits — a verifier that could "fix" a note would be a second
+          unverified writer. Its only concession is one re-distill with the reason fed back.
+        '
+        technology 'src/distill/verifyNote.ts'
+      }
+
+      humanDistiller = component 'Human distiller' {
+        description '
+          Curated Markdown → note records, body preserved verbatim, no LLM normalization.
+          `note edit` and MCP `revise_note` are the same authority through different
+          serialization mechanisms: identity follows the judgment, not the keyboard.
+        '
+        technology 'src/distill/humanDistiller.ts'
+      }
+    }
+
+    indexer = component 'Indexer' {
+      description '
+        A true incremental cursor consumer of the note log — never a rebuild. Derives
+        `search_text` by a fixed concatenation rule; indexes `origin` as a filterable
+        column and fail-closes on records missing it.
+      '
+      technology 'src/index/indexer.ts'
+    }
+
+    embedding = component 'Embedding seam' {
+      description '
+        Two budgets, because the callers have opposite latency semantics: 400ms on the
+        recall path (fail-soft to BM25) and 10s on the background index path (a cold
+        model load legitimately takes ~1.5s). Digest-pinned.
+      '
+      technology 'src/embedding/provider.ts'
+    }
+
+    recall = component 'Recall' {
+      #hot-path
+      description '
+        Read-only, deterministic, and O(query) — an injection performs zero index builds
+        and zero full-log reads (§4). Recall precision is the product surface: under
+        invisible injection, wrong context is worse than no context (§1).
+      '
+      technology 'src/recall/'
+
+      query = component 'Hybrid query' {
+        #hot-path
+        description '
+          Two channels into RRF (k=60): BM25 over FTS5 and exact brute-force KNN over
+          vec0. Exact KNN is a feature at note scale — the distill-only waist keeps N
+          small by construction, so there is zero ANN recall loss to trade away.
+        '
+        technology 'src/recall/query.ts'
+      }
+
+      scoring = component 'Deterministic scoring' {
+        description '
+          In code, never LLM-reasoned: project/global boost → recency decay exp(-age/90) →
+          origin × note-type weights → relevance floor. Loaded from config at every entry
+          point, and the loaded values are what the trace snapshots.
+        '
+        technology 'src/recall/scoring.ts'
+      }
+
+      inject = component 'Push injection' {
+        #push
+        description '
+          0–5 records per prompt, never force-filled, ~300–700 tokens. A low-relevance
+          note filling a slot is a distractor, and a distractor is worse than an empty
+          slot. Emits a tagged, provenance-bearing, non-authoritative block carrying its
+          injection_id.
+        '
+        technology 'src/recall/inject.ts'
+      }
+    }
+
+    mcp = component 'MCP server' {
+      #pull
+      description '
+        Local stdio server: `search` (compact index) → `get_notes` (bodies) →
+        `get_note --with-provenance` (verbatim events), plus `flag_note` and
+        `revise_note`. Different physics from push — the model chose to search, so ~10
+        results with full metadata is correct here. Do not "fix" this to obey push rules.
+      '
+      technology 'src/mcp/server.ts'
+    }
+
+    exporter = component 'Obsidian exporter' {
+      description '
+        Note-log consumer, idempotent by note_id. Writes only into the generated tree, and
+        never renders diagnostics into the vault.
+      '
+      technology 'src/export/obsidian.ts'
+    }
+
+    diagnostics = component 'Diagnostics' {
+      description '
+        Explainability of deterministic decisions, not request tracing: injection traces,
+        distill verdicts, and the `stats` self-evaluation report. Timings are deliberately
+        not logged — retrofittable and currently useless.
+      '
+      technology 'src/diagnostics/'
+    }
+
+    // ─── Stores librarian owns (~/.librarian/**) ───────────────────────────
+
+    eventLog = store 'Event log' {
+    #sacred
+    description '
+      ~/.librarian/data/events/<session>.ndjson — canonical, normalized, redacted-before-
+      append telemetry. Append-only, replayable, never deleted. Not "raw": the redaction
+      boundary is upstream of durability.
+    '
+  }
+
+  noteLog = store 'Note log' {
+    #sacred
+    description '
+      ~/.librarian/data/notes/{yyyy-mm}.ndjson, monthly segments, never rewritten. Its one
+      contract: everything in it was judged worth remembering, by a named judge, from a
+      named origin. The vault, the index, and recall are downstream conveniences of that.
+    '
+  }
+
+  notesDb = store 'Derived index' {
+    #derived
+    #hot-path
+    description '
+      ~/.librarian/index/notes.db — FTS5 + vec0 in ONE SQLite file. Vectors live beside
+      BM25 or not at all: a second store buys a sync subsystem. Rebuildable from the
+      sacred logs, so `rm -rf` is a documented safe recovery action.
+    '
+    technology 'better-sqlite3 + sqlite-vec'
+  }
+
+  diagLog = store 'Diagnostics log' {
+    #deletable
+    description '
+      ~/.librarian/diagnostics/ — outside the data root and outside the vault. Freely
+      deletable with zero replay consequences: the opposite retention story from the
+      sacred logs.
+    '
+  }
+
+    config = store 'Config' {
+      description '
+        ~/.librarian/config.json — one file, hand-editable, canonical. XDG rejected so that
+        `rm -rf ~/.librarian` still removes everything.
+      '
+    }
+  }
+
+  // ─── The vault: shared with the human, never canonical ───────────────────
+
+  vault = store 'Obsidian vault' {
+    description 'The human-facing view. Never canonical storage (§4)'
+
+    generated = store 'vault/generated/**' {
+      #derived
+      description 'Exporter-owned, deterministic paths, overwritten freely on every run'
+    }
+
+    curated = store 'vault/curated/**' {
+      description 'Human-owned, ingested by the human distiller, always origin: "human"'
+    }
+  }
+
+  // ─── Value path A: push (invisible injection) ────────────────────────────
+
+  evSessionStart -> ccPlugin 'SessionStart hook'
+  evPrompt -> ccPlugin 'UserPromptSubmit hook'
+  evToolUse -> ccPlugin 'PostToolUse hook'
+  evSessionEnd -> ccPlugin 'Stop hook'
+  evPrompt -> ocPlugin 'chat.message'
+  evSessionEnd -> ocPlugin 'session.idle'
+
+  codingAgent -> ccPlugin 'native hook payload'
+  codingAgent -> ocPlugin 'native hook payload (in-process)'
+  ccPlugin -> hookShell 'librarian hook claude-code'
+  ocPlugin -> hookShell 'librarian hook opencode'
+  hookShell -> redactor 'mapped canonical event'
+  hookShell -> inject 'recall request + session id'
+  inject -> hookShell 'rendered <librarian-memory> block'
+  hookShell -> ccPlugin 'additionalContext'
+  hookShell -> ocPlugin 'blocks to splice'
+  ccPlugin -> codingAgent 'injected context'
+  ocPlugin -> codingAgent 'message array mutated in place'
+
+  // ─── Value path B: pull (MCP, model-initiated) ───────────────────────────
+
+  evModelSearch -> mcpHost 'tool call'
+  mcpHost -> mcp 'search / get_notes / get_note'
+  codingAgent -> mcp 'same tools, same server'
+  mcp -> query 'scored query'
+  mcp -> noteLog 'bodies + provenance'
+  mcp -> humanDistiller 'revise_note (approved body)'
+  mcp -> noteLog 'flag_note (invalidation record)'
+  mcp -> mcpHost 'compact index → bodies → verbatim events'
+
+  // ─── Write path ──────────────────────────────────────────────────────────
+
+  redactor -> validator 'redacted record'
+  validator -> eventLog 'append'
+  validator -[rejects]-> diagLog 'quarantine with error'
+
+  cli -> collector 'collect'
+  cli -> distill 'distill | drain'
+  cli -> indexer 'drain'
+  cli -> exporter 'drain'
+  cli -> recall 'recall | inject | why-not'
+  cli -> diagnostics 'why | why-summary | stats'
+  cli -> humanDistiller 'note import-curated | note edit'
+  cli -> config 'doctor'
+  wizard -> config 'writes the canonical file'
+  human -> cli 'drain · flag · supersede · note edit · doctor'
+  human -> curated 'writes Markdown'
+  human -> generated 'reads in Obsidian'
+
+  eventLog -> llmDistiller 'delta past the cursor'
+  llmDistiller -> renderer 'events → indexed compact text'
+  renderer -> inference 'rendered prompt'
+  inference -> llmDistiller 'note JSON'
+  llmDistiller -> worthGate 'candidate'
+  worthGate -> noveltyGate 'worth remembering'
+  noveltyGate -> verifier 'novel'
+  noveltyGate -> notesDb 'BM25 candidates (read-only)'
+  verifier -> inference 'verdict call (may be a cheaper model)'
+  verifier -> noteLog 'faithful → stamp, append, advance cursor'
+  curated -> humanDistiller 'import (never via the LLM)'
+  humanDistiller -> noteLog 'verbatim body, distiller: human'
+
+  worthGate -[rejects]-> diagLog 'noop verdict'
+  noveltyGate -[rejects]-> diagLog 'duplicate verdict'
+  verifier -[rejects]-> diagLog 'unfaithful verdict'
+  distill -[rejects]-> diagLog 'skip verdict (salience gate)'
+
+  noteLog -> indexer 'cursor consumer'
+  indexer -> embedding 'embed note text (10s budget)'
+  indexer -> notesDb 'FTS5 rows + vec0 vectors'
+  noteLog -> exporter 'note revisions'
+  exporter -> generated 'idempotent by note_id'
+  embedding -> embedder 'POST /v1/embeddings'
+
+  // ─── Read path ───────────────────────────────────────────────────────────
+
+  query -> notesDb 'read-only: BM25 + KNN'
+  query -> embedding 'query vector (400ms budget)'
+  query -> scoring 'fused candidates'
+  scoring -> inject 'ranked, floored'
+  scoring -> mcp 'ranked, floored'
+  scoring -> config 'config-in-force'
+  inject -> diagLog 'injection trace (push)'
+  mcp -> diagLog 'injection trace (pull)'
+  diagnostics -> diagLog 'read-only replay'
+
+  // ─── Settled decisions and structural invariants ─────────────────────────
+
+  dDistillOnly = decision 'Distill-only ingestion' {
+    #settled
+    #invariant
+    description '
+      Nothing enters the note log without a distiller\'s judgment; exactly two distillers
+      exist (llm, human) and no generic import path exists — not even a side door for
+      "this is already a summary". One writer discipline, one quality gate, one narrow
+      waist. §5.
+    '
+  }
+
+  dDiagnosticsIsolation = decision 'Diagnostics isolation' {
+    #settled
+    #invariant
+    description '
+      Self-observation entering memory creates a reflexive loop that degrades quietly, so
+      isolation is enforced three ways: placement outside the data root, a poison-pill
+      record class every validator hard-rejects, and a standing fixture. Diagnostic
+      insights enter memory through exactly one door — a human writes a curated note. §8.
+    '
+  }
+
+  dGeneratedCurated = decision 'Generated / curated split' {
+    #settled
+    #invariant
+    description '
+      Two directories with opposite ownership, enforced by directory scope rather than
+      frontmatter inspection: the importer never walks the generated tree. No
+      mixed-ownership regions inside one Markdown file, ever — per-region ownership tags
+      buy a merge engine. §5.
+    '
+  }
+
+  dRedactBeforeAppend = decision 'Redaction before durable append' {
+    #settled
+    #invariant
+    description '
+      Non-retrofittable by nature. Covers pattern-detected secrets, user-declared
+      <private> spans, home paths, command output, and injected memory blocks — the last
+      one because otherwise injection re-enters the event log, gets distilled, and memory
+      begins citing itself. §5.
+    '
+  }
+
+  dHotPath = decision 'Hot-path contract' {
+    #settled
+    #invariant
+    description '
+      An injection performs zero index builds and zero full-log reads; cost is O(query),
+      never O(vault). The no-daemon principle\'s other half: no resident process AND no
+      per-invocation rebuild tax. The fixture asserts structure, never wall-clock. §4.
+    '
+  }
+
+  dOneIndex = decision 'One blessed index' {
+    #settled
+    description '
+      Vectors live in the same SQLite file as FTS5 or not at all — a second store buys a
+      sync subsystem, refused. The index is a derived artifact: deletion is safe and
+      self-healing. §4, §5.
+    '
+  }
+
+  dSemanticMvp = decision 'Semantic search is MVP scope' {
+    #settled
+    description '
+      Supersedes the BM25-only v1 ruling: the vault is bilingual (Swedish/English) and
+      BM25 is structurally blind across languages, so cross-language misses are a
+      guaranteed recurring class, not an edge case awaiting a trigger. BM25 remains the
+      always-on floor; embeddings are additive; zero-config stays BM25-only. §5.
+    '
+  }
+
+  dBm25Only = decision 'BM25-only v1' {
+    #superseded
+    description '
+      SUPERSEDED 2026-07-16 by the ruling above, and kept so the reasoning is auditable.
+      It was settled against a POC framing and an English-monolingual assumption; the
+      bilingual vault falsified the premise, not the logic. §5.
+    '
+  }
+
+  dEmbeddingsNeverDecide = decision 'Embeddings fetch candidates, never decide verdicts' {
+    #settled
+    description '
+      Embedding models score contradictions as highly similar — "we chose Kamal" and "we
+      abandoned Kamal" are near neighbours — so a cosine-threshold NOOP would silently eat
+      exactly the knowledge-update notes the design exists to protect. Hybrid may widen
+      the novelty gate\'s candidate fetch; the duplicate verdict stays deterministic. §5.
+    '
+  }
+
+  dFailClosed = decision 'Every rejection fails closed' {
+    #settled
+    description '
+      No note, a verdict to diagnostics, and the cursor advances; the events stay in the
+      sacred log for a manual re-distill. Losing a session\'s note is acceptable — a wrong
+      note injected invisibly later is not. The write-side twin of "an empty slot beats a
+      distractor". §5.
+    '
+  }
+
+  dPushAusterity = decision 'Push austerity: 0–5, never force-filled' {
+    #settled
+    description '
+      Injected notes compete with the task for a ~10–25-concept workspace bottleneck
+      rather than adding for free, and injected context is most causally potent on exactly
+      the flexible-reasoning tasks coding agents do. Do not grow the budget "to be safe". §6.
+    '
+  }
+
+  dPriorNotGuard = decision 'Authority labels are a prior, not a guard' {
+    #settled
+    description '
+      Models can fully represent a context property internally without causally using it,
+      so poisoning defence lives at admission — never credit the injected wording as the
+      mitigation. Only behavioural fixtures count as evidence the framing works. §6.
+    '
+  }
+
+  dPullDifferentPhysics = decision 'Pull is different physics' {
+    #settled
+    description '
+      The model chose to search and can follow up, so ~10 results in three layers
+      (compact index → bodies → verbatim provenance) is right. Push austerity rules are
+      push-path rules; do not port them to the MCP tools. §6.
+    '
+  }
+
+  dSingleExecutable = decision 'Distribution is a single executable' {
+    #settled
+    description '
+      npm-global presupposes Node and inherits the native-ABI breakage class:
+      better-sqlite3 is ABI-keyed, so a Node major switch either hides the install or
+      crashes it mid-session. A bundled runtime pins runtime+ABI together. npm stays
+      build/dev tooling only, never the user install path. §14.
+    '
+  }
+
+  dOneBin = decision 'All surfaces route through one bin' {
+    #settled
+    description '
+      Thin plugins, not self-contained ones: three bundled copies of dist/ would mean
+      three path regimes. Claude Code gets a declarative manifest, OpenCode one
+      dependency-free file, every other MCP host a config entry and nothing built. §14.
+    '
+  }
+
+  dLatestWins = decision 'Latest revision wins; a close binds only what it post-dates' {
+    #settled
+    description '
+      A newer revision re-opens a flagged or superseded note — otherwise the softest kill
+      (a flag) would be permanent while the strongest (a tombstone) stayed revivable, and
+      deterministic-ID notes that cannot be re-minted would die forever. §10.2.
+    '
+  }
+
+  dDistillOnly -[constrains]-> distill 'the only door into memory'
+  dDistillOnly -[constrains]-> noteLog 'no generic import path'
+  dDiagnosticsIsolation -[constrains]-> diagLog 'separate root, freely deletable'
+  dDiagnosticsIsolation -[constrains]-> validator 'poison-pill hard reject'
+  dDiagnosticsIsolation -[constrains]-> exporter 'never rendered into the vault'
+  dGeneratedCurated -[constrains]-> exporter 'writes generated/** only'
+  dGeneratedCurated -[constrains]-> humanDistiller 'reads curated/** only'
+  dRedactBeforeAppend -[constrains]-> redactor 'upstream of durability'
+  dRedactBeforeAppend -[constrains]-> eventLog 'nothing unredacted is durable'
+  dHotPath -[constrains]-> recall 'O(query), zero rebuilds'
+  dHotPath -[constrains]-> indexer 'incremental cursor consumer'
+  dOneIndex -[constrains]-> notesDb 'FTS5 + vec0, one file'
+  dSemanticMvp -[constrains]-> query 'BM25 floor + additive vectors'
+  dSemanticMvp -[constrains]-> embedding 'optional by construction'
+  dBm25Only -[constrains]-> query 'superseded premise'
+  dEmbeddingsNeverDecide -[constrains]-> noveltyGate 'deterministic verdict'
+  dFailClosed -[constrains]-> worthGate 'noop → cursor advances'
+  dFailClosed -[constrains]-> noveltyGate 'duplicate → cursor advances'
+  dFailClosed -[constrains]-> verifier 'veto → cursor advances'
+  dPushAusterity -[constrains]-> inject '0–5, floor, ~500 tokens'
+  dPriorNotGuard -[constrains]-> inject 'framing is a hypothesis'
+  dPriorNotGuard -[constrains]-> distill 'defence lives here instead'
+  dPullDifferentPhysics -[constrains]-> mcp '~10 results, three layers'
+  dSingleExecutable -[constrains]-> cli 'SEA, not npm i -g'
+  dOneBin -[constrains]-> wiring 'thin plugins'
+  dLatestWins -[constrains]-> indexer 'validity close by timestamp'
+
+  // ─── The frontier: where we are waiting for a trigger (§15) ──────────────
+
+  gNonAgentSource = gate 'Waiting: first non-agent source' {
+    #waiting
+    description '
+      Unlocks the ContentEvent shape and per-origin distiller profiles — the integration
+      contract for non-agent sources. The rule is settled; the mechanism is deferred until
+      one concrete source exists. Mode-system adoption shares this trigger: modes earn
+      their keep when a genuinely different context arrives (an email should not be
+      distilled with a coding vocabulary).
+    '
+  }
+
+  gSecondProvider = gate 'Waiting: first path proves out' {
+    #waiting
+    description '
+      Unlocks a second inference provider and the SQLite-mirror exporter. The mirror is
+      also the trigger for extracting an Exporter interface — shape it from the working
+      exportNoteToVault signature, not from imagination.
+    '
+  }
+
+  gDistractors = gate 'Waiting: negative fixtures show distractors' {
+    #waiting
+    description '
+      Unlocks a re-ranking pass — demoted behind hybrid, reversing the earlier ordering: a
+      cross-encoder costs an inference call in the hot path and is slower per query than
+      one embedding, so hybrid is the cheaper first response and re-ranking is the
+      escalation. Cheapest intervention first; fixtures decide.
+    '
+  }
+
+  gEndpointFriction = gate 'Waiting: endpoint friction proves real' {
+    #waiting
+    description '
+      Unlocks an in-process ONNX embedding provider — a user who will not run Ollama wants
+      hybrid. Costs a native onnxruntime dependency plus ~255MB of model cache in a
+      package that is currently daemon-free and dependency-light. Same seam, so flipping
+      the default later costs nothing in design.
+    '
+  }
+
+  gStatsDuplicates = gate 'Waiting: stats shows near-TTL duplicates' {
+    #waiting
+    description '
+      Unlocks corroboration-extends-TTL (parked, not closed): the complexity — new record
+      kind, session-id plumbing, self-citation join, indexer column, TTL seam change —
+      outweighs the value until measured. First response would be the lazy variant, not
+      the original design.
+    '
+  }
+
+  gSecondMachine = gate 'Waiting: second machine' {
+    #waiting
+    description '
+      Unlocks per-machine log segments and created_by_machine, together with the real
+      design work: two machines revising the same deterministic-ID note produce revisions
+      sharing a previous_revision_id, and latest-wins-by-ULID is silent last-write-wins.
+      Curated-vault sync collision likely fires first — people already sync vaults.
+    '
+  }
+
+  gSecondUser = gate 'Waiting: second user' {
+    #waiting
+    description '
+      Unlocks team memory, whose shape is already ruled: visibility is structural, not a
+      field — a separate shared store synced like a git remote, never a per-record
+      visibility flag a forgotten filter could leak past. Trust becomes per-peer recall
+      weights.
+    '
+  }
+
+  gSecretFound = gate 'Waiting: first secret found in the log' {
+    #waiting
+    description '
+      Unlocks `purge-event-range --rewrite-segment`. Append-only stays the default
+      invariant, but a false-negative redaction needs an honest recovery path: rare, loud,
+      deliberately breaks replay purity, audited outside memory.
+    '
+  }
+
+  gRendererChange = gate 'Waiting: first renderer change after real traces' {
+    #waiting
+    description '
+      Unlocks storing the rendered block (or a renderer version + hash) in the injection
+      trace. Today a renderer change makes old traces unreproducible; diagnostics are
+      deletable, so size is not the objection.
+    '
+  }
+
+  gSecondInProcessHost = gate 'Waiting: second host needing in-process code' {
+    #waiting
+    description '
+      Unlocks packaging the plugin file. Until a real Cursor/Zed/Aider plugin exists there
+      is one call site, and versioning one dependency-free file adds a CI job, tag-
+      namespace pollution, and a plugin↔binary skew that cannot exist today. Two call
+      sites, then generalise.
+    '
+  }
+
+  gExternalAdopter = gate 'Waiting: first external adopter' {
+    #waiting
+    description '
+      Unlocks cross-platform distribution: the per-OS/arch matrix, a public download
+      channel, code-signing and notarization, and a signature-verified release feed for
+      self-update.
+    '
+  }
+
+  gNonAgentSource -[gates]-> collector 'ContentEvent shape'
+  gNonAgentSource -[gates]-> distill 'per-origin profiles'
+  gSecondProvider -[gates]-> inference 'second provider'
+  gSecondProvider -[gates]-> exporter 'SQLite mirror + Exporter interface'
+  gDistractors -[gates]-> scoring 're-ranking pass'
+  gEndpointFriction -[gates]-> embedding 'in-process ONNX provider'
+  gStatsDuplicates -[gates]-> noveltyGate 'corroboration extends TTL'
+  gSecondMachine -[gates]-> noteLog 'per-machine segments'
+  gSecondMachine -[gates]-> curated 'sync collision rule'
+  gSecondUser -[gates]-> recall 'peer stores + per-peer weights'
+  gSecretFound -[gates]-> eventLog 'purge-event-range'
+  gRendererChange -[gates]-> diagnostics 'rendered block in the trace'
+  gSecondInProcessHost -[gates]-> ocPlugin 'plugin as a package'
+  gExternalAdopter -[gates]-> cli 'per-OS/arch matrix, signed feed'
+}
+
+views {
+
+  view index {
+    title 'Librarian — context'
+    description '
+      Start here. Who talks to librarian, and the one artifact it shares with the human.
+      Everything under ~/.librarian is inside the boundary; the vault is not.
+    '
+    autoLayout LeftRight
+
+    include
+      human, codingAgent, mcpHost, inference, embedder,
+      librarian, vault
+
+    style human, codingAgent, mcpHost, inference, embedder {
+      color secondary
+    }
+  }
+
+  view components of librarian {
+    title 'Librarian — components'
+    description '
+      Every component, named after the code that implements it. Flow:
+      collector → distill (narrow waist) → note log → indexer → recall → render → export.
+    '
+    autoLayout TopBottom
+
+    include
+      *,
+      human, codingAgent, mcpHost, inference, embedder,
+      eventLog, noteLog, notesDb, diagLog, vault, config
+  }
+
+  view writePath {
+    title 'Write path — capture to memory'
+    description '
+      The one door into memory. Redaction sits upstream of durability; the distiller sits
+      between the two sacred logs; every gate that rejects fails closed to diagnostics and
+      advances the cursor.
+    '
+    autoLayout TopBottom
+
+    include
+      codingAgent, human,
+      wiring, hookShell, ccPlugin, ocPlugin,
+      collector, redactor, validator,
+      distill, renderer, llmDistiller, worthGate, noveltyGate, verifier, humanDistiller,
+      inference,
+      eventLog, noteLog, notesDb, diagLog,
+      vault, curated,
+      indexer, embedding, embedder,
+      exporter, generated
+  }
+
+  view readPath {
+    title 'Read path — both value paths side by side'
+    description '
+      One recall engine, two very different physics. Push: invisible, 0–5 records, floor,
+      budget, no follow-up possible. Pull: model-initiated, ~10 results, three layers,
+      follow-up expected.
+    '
+    autoLayout TopBottom
+
+    include
+      codingAgent, mcpHost,
+      wiring, ccPlugin, ocPlugin, hookShell,
+      recall, query, scoring, inject,
+      mcp,
+      notesDb, noteLog, diagLog, config,
+      embedding, embedder
+
+    style inject, mcp {
+      color primary
+    }
+  }
+
+  view admission of distill {
+    title 'Admission gates'
+    description '
+      Cheap gate before expensive gate: worth (inside the call already paid for) → novelty
+      (a millisecond BM25 query) → faithfulness (a second LLM call). Red edges are the
+      rejections — the interesting half, and each one advances the cursor.
+    '
+    autoLayout TopBottom
+
+    include *, eventLog, noteLog, notesDb, diagLog, inference, curated
+  }
+
+  view hotPath {
+    title 'Hot path'
+    description '
+      What an injection is allowed to touch. Zero index builds, zero full-log reads: cost
+      is O(query), never O(vault).
+    '
+    autoLayout LeftRight
+
+    include
+      element.tag = #hot-path,
+      notesDb, config, embedding
+  }
+
+  view storageClasses {
+    title 'Storage classes'
+    description '
+      Three retention stories, enforced by directory placement rather than by naming
+      convention. Sacred: append-only, never deleted. Derived: rebuildable, safe to
+      delete. Deletable: freely discardable with zero replay consequences.
+    '
+    autoLayout LeftRight
+
+    include
+      eventLog, noteLog, notesDb, diagLog, vault, generated, curated, config,
+      collector, distill, indexer, exporter, diagnostics, recall
+  }
+
+  view decisionsWrite {
+    title 'Decisions — the write side'
+    description '
+      What holds the ingestion path in place. Dotted edges read "constrains". Four of
+      these are structural invariants: enforced by directory layout, record shape, or
+      validator — never by the good behaviour of future code.
+    '
+    autoLayout LeftRight
+
+    include
+      dDistillOnly, dRedactBeforeAppend, dDiagnosticsIsolation, dGeneratedCurated,
+      dFailClosed, dEmbeddingsNeverDecide, dLatestWins,
+      collector, redactor, validator,
+      distill, worthGate, noveltyGate, verifier, humanDistiller,
+      indexer, exporter,
+      eventLog, noteLog, diagLog
+  }
+
+  view decisionsRead {
+    title 'Decisions — the read side'
+    description '
+      What holds recall and injection in place, including the one superseded ruling —
+      kept visible on purpose, because the spec preserves superseded text so the
+      reasoning stays auditable.
+    '
+    autoLayout LeftRight
+
+    include
+      dHotPath, dOneIndex, dSemanticMvp, dBm25Only,
+      dPushAusterity, dPriorNotGuard, dPullDifferentPhysics,
+      recall, query, scoring, inject, mcp,
+      notesDb, embedding, distill
+  }
+
+  view decisionsDelivery {
+    title 'Decisions — how it ships'
+    description '
+      Why there is one bin and no npm package: native-ABI breakage makes npm-global the
+      wrong shape, and three bundled copies of dist/ would mean three path regimes.
+    '
+    autoLayout LeftRight
+
+    include
+      dSingleExecutable, dOneBin,
+      cli, wizard, wiring, ccPlugin, ocPlugin, hookShell,
+      mcpHost, codingAgent, config
+  }
+
+  view frontier {
+    title 'Frontier — where we are waiting for a trigger'
+    description '
+      Deliberate stopping points, not gaps. Each amber node is a named condition from the
+      spec\'s open items; the edge says what fires when it does. Nothing here carries
+      status — that lives on GitHub issues.
+    '
+    autoLayout LeftRight
+
+    include
+      element.kind = gate,
+      collector, distill, noveltyGate, scoring, embedding, recall,
+      exporter, inference, diagnostics, cli, ocPlugin,
+      eventLog, noteLog, curated
+  }
+
+  dynamic view pushFlow {
+    title 'Flow: push (invisible injection)'
+    description 'Session start and per-prompt recall — the premium path, available only where a hook point exists.'
+    autoLayout TopBottom
+
+    evPrompt -> ccPlugin 'UserPromptSubmit'
+    ccPlugin -> hookShell 'spawn: librarian hook claude-code'
+    hookShell -> inject 'query + session id'
+    inject -> query 'BM25 + KNN'
+    query -> embedding 'query vector, 400ms budget'
+    query -> notesDb 'read-only'
+    query -> scoring 'fused candidates'
+    scoring -> inject 'ranked, floored, 0–5'
+    inject -> diagLog 'injection trace with config snapshot'
+    inject -> hookShell '<librarian-memory injection_id=…>'
+    hookShell -> ccPlugin 'additionalContext'
+    ccPlugin -> codingAgent 'spliced beside the latest user message'
+  }
+
+  dynamic view pullFlow {
+    title 'Flow: pull (MCP, three layers)'
+    description 'The model chose to search, so depth is appropriate — and it can follow up, which push never can.'
+    autoLayout TopBottom
+
+    evModelSearch -> mcpHost 'the model calls a tool'
+    mcpHost -> mcp 'search(query, filters)'
+    mcp -> query 'scored query'
+    query -> notesDb 'BM25 + KNN → RRF'
+    query -> scoring 'weights, decay, floor'
+    scoring -> mcp 'up to ~10 candidates'
+    mcp -> mcpHost 'layer 1: compact index'
+    mcpHost -> mcp 'get_notes(ids the model actually wants)'
+    mcp -> noteLog 'bodies'
+    mcp -> mcpHost 'layer 2: full bodies'
+    mcpHost -> mcp 'get_note(with_provenance)'
+    mcp -> eventLog 'verbatim source events'
+    mcp -> mcpHost 'layer 3: provenance drill-down'
+  }
+
+  dynamic view distillFlow {
+    title 'Flow: distill on session end'
+    description 'The happy path. Every gate can instead reject — see the admission view for those edges.'
+    autoLayout TopBottom
+
+    evSessionEnd -> ocPlugin 'session.idle'
+    ocPlugin -> hookShell 'librarian hook opencode'
+    hookShell -> llmDistiller 'lazy, detached child'
+    llmDistiller -> indexer 'catch-up first: never judge against a stale index'
+    llmDistiller -> eventLog 'delta past the cursor'
+    llmDistiller -> renderer 'indexed compact text, field elision'
+    renderer -> inference 'rendered prompt'
+    inference -> worthGate 'candidate note'
+    worthGate -> noveltyGate 'worth remembering'
+    noveltyGate -> notesDb 'BM25 near-duplicate probe'
+    noveltyGate -> verifier 'novel'
+    verifier -> inference 'faithful to the events?'
+    verifier -> noteLog 'stamp provenance, append'
+    noteLog -> indexer 'incremental index'
+    noteLog -> exporter 'export'
+    exporter -> generated 'idempotent by note_id'
+  }
+
+  dynamic view valueStream {
+    title 'Value stream — eliminating repetition'
+    description '
+      The loop the product actually sells. Knowledge is created once in a session, judged
+      once at admission, and then arrives unasked in a later session — instead of being
+      re-explained. The human can correct it in flow without leaving the conversation.
+    '
+    autoLayout TopBottom
+
+    human -> codingAgent 'explains a decision once'
+    codingAgent -> collector 'session events (redacted)'
+    collector -> distill 'is any of this worth remembering?'
+    distill -> noteLog 'one note, judged, provenanced'
+    noteLog -> indexer 'becomes findable'
+    indexer -> recall 'later session, different day'
+    recall -> codingAgent 'arrives unasked — nothing re-explained'
+    codingAgent -> human 'acts on it'
+    human -> mcp 'that note is wrong: revise_note'
+    mcp -> humanDistiller 'approved body ⇒ distiller: human'
+    humanDistiller -> noteLog 'a newer revision wins'
+    noteLog -> exporter 'and the vault stays readable'
+  }
+}
