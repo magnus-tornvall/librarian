@@ -54,3 +54,7 @@ not fail a case; a change to a stable field would.
 | `03-git-commit-bash.json` | bash `git commit …`  | recategorized `vcs_commit`, raw command, vcs_commit hint. |
 | `04-git-push-bash.json`   | bash `git push …`    | recategorized `vcs_push`, raw command, no hint. |
 | `05-session-compact.json` | session compaction   | `SessionEvent` action compact. |
+| `06-bash-nonzero-exit.json` | bash, `metadata.exit: 1` | `outcome` carries the output and the exit code, hint `command_failed` — OpenCode's real failure signal. |
+| `07-read-tool-drops-outcome.json` | `read` tool carrying an outcome | outcome capture is confined to `command`/`vcs_*` — a read maps with **no `outcome`**. |
+| `08-bash-interrupted.json` | interrupted bash | the other failure signal → hint `command_failed`. |
+| `09-bash-zero-exit.json` | bash, `metadata.exit: 0` | `exit: 0` is recorded (the "remedy worked" half of the chain) and carries **no hint**. |

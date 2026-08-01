@@ -1,0 +1,63 @@
+{
+  "name": "bash-interrupted",
+  "description": "An interrupted bash tool is hinted possibly_salient with reason command_failed. `interrupted` is the only failure signal either adapter's payload carries; the rule is duplicated across the two pure mappers for the same reason GIT_SUBCOMMAND is, so it gets its own case here.",
+  "native": {
+    "kind": "tool",
+    "tool": "bash",
+    "command": "npm test",
+    "outcome": {
+      "stdout": "> librarian@ test\n",
+      "interrupted": true
+    }
+  },
+  "env": {
+    "event_id": "01J8X7QK48B5D9W2T6X0A4B8C5",
+    "ts": "2026-07-06T09:16:03.412Z",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 4,
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK48B5D9W2T6X0A4B8C5",
+    "ts": "2026-07-06T09:16:03.412Z",
+    "type": "tool",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 4,
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "bash",
+      "canonical_name": "bash",
+      "category": "command"
+    },
+    "command": "npm test",
+    "outcome": {
+      "stdout": "> librarian@ test\n",
+      "interrupted": true
+    },
+    "hints": {
+      "possibly_salient": true,
+      "reason": "command_failed"
+    }
+  }
+}

@@ -128,9 +128,9 @@ proves nothing about the plugin. Remove the legacy hooks first.
 | `UserPromptSubmit`                   | `PromptEvent`   | `prompt` shipped **raw** (collector redacts). |
 | `PostToolUse`                        | `ToolEvent`     | `tool.native_name` = Claude Code's `tool_name` (capitalized, e.g. `Bash`); `canonical_name` ∈ read/write/edit/bash/search/unknown; `category` ∈ file_read/file_write/command/search/vcs_commit/vcs_push/other. |
 | `PostToolUse` `Write`/`Edit`         | `ToolEvent`     | canonical write/edit + `category: file_write` + `files[]` (from `tool_input.file_path`); file writes get `hints.possibly_salient` (`reason: file_write`). |
-| `PostToolUse` `Read`                 | `ToolEvent`     | read / file_read; `files[]` action `read`; no hint. |
-| `PostToolUse` `Grep`/`Glob`          | `ToolEvent`     | search / search. |
-| `PostToolUse` `Bash`                 | `ToolEvent`     | bash / command, `command` populated from `tool_input.command`; `git commit` / `git push` detection sharpens the category to `vcs_commit` / `vcs_push`. |
+| `PostToolUse` `Read`                 | `ToolEvent`     | read / file_read; `files[]` action `read`; no hint. **No `outcome`** — its `tool_response` is the file's contents. |
+| `PostToolUse` `Grep`/`Glob`          | `ToolEvent`     | search / search. No `outcome` — a search is re-runnable in a second. |
+| `PostToolUse` `Bash`                 | `ToolEvent`     | bash / command, `command` populated from `tool_input.command`; `git commit` / `git push` detection sharpens the category to `vcs_commit` / `vcs_push`. `outcome` (`stdout`/`stderr`/`interrupted`) is lifted from `tool_response`, empty streams elided. `interrupted` — and only `interrupted` — sets `hints.possibly_salient` (`reason: command_failed`), which outranks the file_write/vcs_commit hints. **stderr is not a failure signal:** over 1217 real Bash results the payload had no exit code, never set `is_error`, and all 266 non-empty `stderr` values were Claude Code's own "Shell cwd was reset to …" notice while real failures printed to stdout. The distiller reads the captured output and judges for itself. Note the asymmetry: the **OpenCode** adapter lifts a real `metadata.exit` and does fire this hint. |
 | `PostToolUse` (any other tool)       | `ToolEvent`     | unknown / other. |
 | `SessionStart`                       | `SessionEvent`  | `action: "start"` (every source). |
 | `Stop`                               | `SessionEvent`  | `action: "stop"`. |

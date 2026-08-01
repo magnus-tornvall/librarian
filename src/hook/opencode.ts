@@ -38,6 +38,7 @@ import {
   type Context,
   type FileAction,
   type NativePayload,
+  type Outcome,
   type PromptPayload,
   type SessionPayload,
 } from './opencodeMap.ts';
@@ -203,8 +204,18 @@ function lowerChatMessage(output: Loose): PromptPayload | undefined {
  * (command line, filePath) are on `input.args` — the pinned signature is
  * `input: { tool, sessionID, callID, args }`, `output: { title, output, metadata }` (there
  * is no `output.args`).
+ *
+ * `output.output` is a single combined string — OpenCode does not split stdout from stderr,
+ * and never populates a `stderr` key — so it lowers to `outcome.stdout`.
+ *
+ * `output.metadata.exit` is the real exit code, and it is the reason OpenCode can honour
+ * `command_failed` where Claude Code cannot. Verified two ways: it is present on 3639 of
+ * 3673 persisted bash parts, and the hook receives the tool's own return value (opencode
+ * triggers `tool.execute.after` with the `{title, metadata, output}` object the tool
+ * returned, which is the same object later persisted as `state.metadata`) — so the field is
+ * there at hook time, not only after the write.
  */
-function lowerTool(input: Loose): NativePayload | undefined {
+function lowerTool(input: Loose, output: Loose): NativePayload | undefined {
   const tool = asString(input.tool);
   if (!tool) {
     return undefined;
@@ -213,11 +224,30 @@ function lowerTool(input: Loose): NativePayload | undefined {
   const args = asRecord(input.args) ?? {};
   const command = asString(args.command);
   const files = extractFiles(tool, args);
+  const printed = asString(output.output);
+  const metadata = asRecord(output.metadata) ?? {};
 
   const payload: NativePayload = { kind: 'tool', tool };
   if (command) {
     payload.command = command; // raw — collector redacts (§5)
   }
+
+  // The mapper drops the outcome for non-shell categories; this only assembles it.
+  const outcome: Outcome = {};
+  if (printed) {
+    outcome.stdout = printed; // raw — collector redacts (§5)
+  }
+  // 12 of 3673 real calls carried a null exit; only a number is lifted.
+  if (typeof metadata.exit === 'number') {
+    outcome.exit = metadata.exit;
+  }
+  if (metadata.interrupted === true) {
+    outcome.interrupted = true;
+  }
+  if (Object.keys(outcome).length > 0) {
+    payload.outcome = outcome;
+  }
+
   if (files) {
     payload.files = files;
   }
@@ -249,7 +279,7 @@ function lower(envelope: OpenCodeEnvelope): { payload: NativePayload; sessionId?
       return { payload, sessionId: asString(input.sessionID) ?? asString((asRecord(output.message) ?? {}).sessionID) };
     }
     case 'tool.execute.after': {
-      const payload = lowerTool(input);
+      const payload = lowerTool(input, output);
       return payload ? { payload, sessionId: asString(input.sessionID) } : undefined;
     }
     case 'experimental.session.compacting':

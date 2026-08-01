@@ -40,6 +40,7 @@ export type SessionAction = 'start' | 'stop' | 'compact' | 'checkpoint';
 export type HintReason =
   | 'file_write'
   | 'vcs_commit'
+  | 'command_failed'
   | 'cwd_change'
   | 'user_pushback'
   | 'manual';
@@ -76,10 +77,28 @@ interface EventBase {
 
 export type PromptEvent = EventBase & { type: 'prompt'; prompt: string };
 
+/**
+ * What a shell/VCS command actually did (schema/event.md). Empty streams are elided, so an
+ * `Outcome` is only present when there is something to say. Captured as the harness handed
+ * it over; the *render* truncates (§7) — the prompt budget must not dictate what the archive
+ * keeps.
+ *
+ * `exit` is OpenCode's own verdict, lifted from `output.metadata.exit`, and is present on
+ * 99% of its bash calls. It is kept even when zero: a successful exit is the third link in
+ * the failure → remedy → success chain, and the log has never recorded that either.
+ */
+export interface Outcome {
+  stdout?: string;
+  stderr?: string;
+  exit?: number;
+  interrupted?: boolean;
+}
+
 export type ToolEvent = EventBase & {
   type: 'tool';
   tool: { native_name: string; canonical_name: CanonicalName; category: ToolCategory };
   command?: string;
+  outcome?: Outcome;
   files?: Array<{ path: string; action: FileAction }>;
 };
 
@@ -118,6 +137,9 @@ export interface ToolPayload {
   tool: string;
   /** The bash command line, when the tool is a shell tool. Shipped raw (§5). */
   command?: string;
+  /** What the tool printed, when the shell lowered one out of the native payload. Shipped
+   *  raw (§5) and kept only for shell/VCS categories — see OUTCOME_CATEGORIES. */
+  outcome?: Outcome;
   /** File paths the tool touched, when it is a file tool. */
   files?: Array<{ path: string; action?: FileAction }>;
 }
@@ -193,6 +215,57 @@ function classifyTool(
   return base;
 }
 
+/**
+ * The only categories whose output is worth keeping: a command's output is a function of
+ * machine state at that instant and is gone the moment the session ends. A `file_read`'s
+ * result is a verbatim copy of a file on disk and a `search`'s is re-runnable in a second —
+ * capturing those would turn an append-only, never-deleted log into a second copy of the
+ * working tree.
+ */
+const OUTCOME_CATEGORIES: ReadonlySet<ToolCategory> = new Set(['command', 'vcs_commit', 'vcs_push']);
+
+/** Drop empty streams so a clean run carries nothing, and no outcome at all when nothing is
+ *  left. Keeps `{stdout: "", stderr: ""}` out of a log that is never deleted. `exit` is kept
+ *  whatever its value — zero is a fact worth recording, not an empty field. */
+function nonEmptyOutcome(outcome: Outcome | undefined): Outcome | undefined {
+  if (!outcome) {
+    return undefined;
+  }
+  const trimmed: Outcome = {};
+  if (outcome.stdout !== undefined && outcome.stdout.length > 0) trimmed.stdout = outcome.stdout;
+  if (outcome.stderr !== undefined && outcome.stderr.length > 0) trimmed.stderr = outcome.stderr;
+  if (typeof outcome.exit === 'number') trimmed.exit = outcome.exit;
+  if (outcome.interrupted === true) trimmed.interrupted = true;
+  return Object.keys(trimmed).length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Did the command fail? On OpenCode the harness says so itself: `output.metadata.exit` is a
+ * real exit code, present on 3639 of 3673 real bash calls, and every non-zero one arrived
+ * with `status: "completed"` so the hook fires for all of them.
+ *
+ * This is NOT the Claude Code rule, and deliberately so — that payload has no exit code at
+ * all, so it can only honour `interrupted`. The two mappers duplicate structure for the same
+ * reason GIT_SUBCOMMAND does (no shared runtime module), but the RULES differ because the
+ * payloads do. Claiming they are identical is what produced a fixture asserting a stderr
+ * stream OpenCode has never emitted.
+ *
+ * Reading `metadata.exit` stays inside §4's dumb-adapter contract: the adapter is reporting
+ * a verdict its harness already reached, not deriving one. Grepping stdout for `npm ERR!`
+ * would be the adapter manufacturing salience, and remains out of bounds.
+ *
+ * Known false-positive class (~15%): commands where non-zero is a negative answer rather
+ * than a failure — `grep` with no match, `git config --get` on an unset key. 39 of 258
+ * non-zero exits, 20 of which printed nothing at all. The distiller sees the command line
+ * and decides; a cheap hint that is right ~85% of the time is worth having.
+ */
+function commandFailed(outcome: Outcome | undefined): boolean {
+  if (outcome === undefined) {
+    return false;
+  }
+  return outcome.interrupted === true || (outcome.exit !== undefined && outcome.exit !== 0);
+}
+
 // ---------------------------------------------------------------------------
 // Mapping.
 // ---------------------------------------------------------------------------
@@ -228,6 +301,12 @@ function mapTool(payload: ToolPayload, env: MapEnv): ToolEvent {
     event.command = payload.command;
   }
 
+  // Raw output too — nobody marked it up, so the collector's patterns are its only guard.
+  const outcome = OUTCOME_CATEGORIES.has(category) ? nonEmptyOutcome(payload.outcome) : undefined;
+  if (outcome !== undefined) {
+    event.outcome = outcome;
+  }
+
   if (payload.files && payload.files.length > 0) {
     // Default a file tool's action from its category when the payload omits it, so
     // a `read`/`write`/`edit` tool yields the matching per-file action.
@@ -236,9 +315,13 @@ function mapTool(payload: ToolPayload, env: MapEnv): ToolEvent {
     event.files = payload.files.map((f) => ({ path: f.path, action: f.action ?? defaultAction }));
   }
 
-  // Non-authoritative salience hint on file writes and commits (§5). Nothing more —
-  // this is a cheap flag, not a salience engine (do-not-relitigate).
-  if (category === 'file_write') {
+  // Non-authoritative salience hint on failures, file writes and commits (§5). Nothing more
+  // — this is a cheap flag, not a salience engine (do-not-relitigate). Failure outranks the
+  // other two: hard-won knowledge is hard-won *because* something failed first, and a failed
+  // `git commit` is more worth reading than a successful one.
+  if (commandFailed(outcome)) {
+    event.hints = { possibly_salient: true, reason: 'command_failed' };
+  } else if (category === 'file_write') {
     event.hints = { possibly_salient: true, reason: 'file_write' };
   } else if (category === 'vcs_commit') {
     event.hints = { possibly_salient: true, reason: 'vcs_commit' };

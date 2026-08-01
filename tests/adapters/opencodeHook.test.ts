@@ -235,6 +235,98 @@ test('hook opencode: tool, compacting, and session.deleted envelopes each collec
   assert.equal(collected[2].action, 'stop');
 });
 
+test('hook opencode: a bash tool lowers output.output onto the event, a read tool does not', () => {
+  const repo = makeGitRepo();
+  const dataDir = tempDir('opencode-hook-outcome-');
+  const bin = makeLibrarianBin(dataDir, tempDir('d-'), tempDir('i-'));
+
+  const bash = runHook(
+    {
+      hook: 'tool.execute.after',
+      cwd: repo,
+      input: { tool: 'bash', sessionID: 'oc-outcome', callID: 'c1', args: { command: 'node -v' } },
+      output: { title: 'node -v', output: 'v24.18.0\n', metadata: {} },
+    },
+    repo,
+    bin,
+  );
+  assert.equal(bash.status, 0, `bash hook should exit 0; stderr: ${bash.stderr}`);
+
+  // A read's `output.output` is the file's contents. The plugin does not even forward it
+  // (see the `args.command` gate there), but the shell must drop it regardless — the two
+  // halves ship independently, so neither may rely on the other.
+  const read = runHook(
+    {
+      hook: 'tool.execute.after',
+      cwd: repo,
+      input: { tool: 'read', sessionID: 'oc-outcome', callID: 'c2', args: { filePath: '/repo/src/x.ts' } },
+      output: { title: 'x.ts', output: 'export const x = 1;\n', metadata: {} },
+    },
+    repo,
+    bin,
+  );
+  assert.equal(read.status, 0, `read hook should exit 0; stderr: ${read.stderr}`);
+
+  const collected = events(dataDir, 'oc-outcome');
+  assert.equal(collected.length, 2);
+  assert.deepEqual(collected[0].outcome, { stdout: 'v24.18.0\n' }, 'a command keeps what it printed');
+  assert.equal(collected[1].outcome, undefined, 'a file_read keeps nothing');
+});
+
+test('hook opencode: metadata.exit is lifted and drives the command_failed hint', () => {
+  const repo = makeGitRepo();
+  const dataDir = tempDir('opencode-hook-exit-');
+  const bin = makeLibrarianBin(dataDir, tempDir('d-'), tempDir('i-'));
+
+  // The exit code is OpenCode's own verdict, in the same `output` object the plugin already
+  // forwards. It is why this adapter can honour command_failed where Claude Code cannot.
+  const failed = runHook(
+    {
+      hook: 'tool.execute.after',
+      cwd: repo,
+      input: { tool: 'bash', sessionID: 'oc-exit', callID: 'c1', args: { command: 'npm test' } },
+      output: { title: 'npm test', output: 'ℹ fail 1\n', metadata: { exit: 1, truncated: false } },
+    },
+    repo,
+    bin,
+  );
+  assert.equal(failed.status, 0, `hook should exit 0; stderr: ${failed.stderr}`);
+
+  const passed = runHook(
+    {
+      hook: 'tool.execute.after',
+      cwd: repo,
+      input: { tool: 'bash', sessionID: 'oc-exit', callID: 'c2', args: { command: 'npm test' } },
+      output: { title: 'npm test', output: 'ℹ fail 0\n', metadata: { exit: 0, truncated: false } },
+    },
+    repo,
+    bin,
+  );
+  assert.equal(passed.status, 0, `hook should exit 0; stderr: ${passed.stderr}`);
+
+  // 12 of 3673 real calls carried a null exit; it must lower to no exit, not to NaN or 0.
+  const unknown = runHook(
+    {
+      hook: 'tool.execute.after',
+      cwd: repo,
+      input: { tool: 'bash', sessionID: 'oc-exit', callID: 'c3', args: { command: 'echo hi' } },
+      output: { title: 'echo hi', output: 'hi\n', metadata: { exit: null } },
+    },
+    repo,
+    bin,
+  );
+  assert.equal(unknown.status, 0, `hook should exit 0; stderr: ${unknown.stderr}`);
+
+  const collected = events(dataDir, 'oc-exit');
+  assert.equal(collected.length, 3);
+  assert.deepEqual(collected[0].outcome, { stdout: 'ℹ fail 1\n', exit: 1 });
+  assert.deepEqual(collected[0].hints, { possibly_salient: true, reason: 'command_failed' });
+  assert.deepEqual(collected[1].outcome, { stdout: 'ℹ fail 0\n', exit: 0 }, 'a zero exit is recorded too');
+  assert.equal(collected[1].hints, undefined, 'a zero exit is not a failure');
+  assert.deepEqual(collected[2].outcome, { stdout: 'hi\n' }, 'a null exit lowers to no exit at all');
+  assert.equal(collected[2].hints, undefined);
+});
+
 test('hook opencode: a file tool lowers filePath into files[] with the matching action', () => {
   const repo = makeGitRepo();
   const dataDir = tempDir('opencode-hook-file-');

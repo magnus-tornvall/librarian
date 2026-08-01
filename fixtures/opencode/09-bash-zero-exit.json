@@ -1,0 +1,59 @@
+{
+  "name": "bash-zero-exit",
+  "description": "A bash tool that exited zero records `exit: 0` and carries NO hint. The zero is kept on purpose: a successful exit is the third link in the failure → remedy → success chain, and the log has never recorded that either.",
+  "native": {
+    "kind": "tool",
+    "tool": "bash",
+    "command": "nvm use && npm test",
+    "outcome": {
+      "stdout": "Now using node v24.18.0\nℹ fail 0\n",
+      "exit": 0
+    }
+  },
+  "env": {
+    "event_id": "01J8X7QK49C7F1Y4V8Z2C6D0E7",
+    "ts": "2026-07-06T09:16:03.412Z",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 4,
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK49C7F1Y4V8Z2C6D0E7",
+    "ts": "2026-07-06T09:16:03.412Z",
+    "type": "tool",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 4,
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "bash",
+      "canonical_name": "bash",
+      "category": "command"
+    },
+    "command": "nvm use && npm test",
+    "outcome": {
+      "stdout": "Now using node v24.18.0\nℹ fail 0\n",
+      "exit": 0
+    }
+  }
+}

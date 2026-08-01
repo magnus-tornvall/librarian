@@ -1,0 +1,54 @@
+{
+  "name": "read-tool-drops-outcome",
+  "description": "A read tool whose payload carries an outcome maps to a ToolEvent with NO outcome field: capture is confined to command/vcs_commit/vcs_push, because a file_read's result is a verbatim copy of a file on disk and copying the working tree into an append-only, never-deleted log is a redaction surface with no upside.",
+  "native": {
+    "kind": "tool",
+    "tool": "read",
+    "outcome": {
+      "stdout": "export function refreshSession() {\n  // ...\n}\n"
+    },
+    "files": [{ "path": "/Users/magnus/dev/librarian/src/auth/session.ts" }]
+  },
+  "env": {
+    "event_id": "01J8X7QK47A3C7V0S4W8Y2Z6B3",
+    "ts": "2026-07-06T09:16:41.008Z",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 5,
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK47A3C7V0S4W8Y2Z6B3",
+    "ts": "2026-07-06T09:16:41.008Z",
+    "type": "tool",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 5,
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "read",
+      "canonical_name": "read",
+      "category": "file_read"
+    },
+    "files": [{ "path": "/Users/magnus/dev/librarian/src/auth/session.ts", "action": "read" }]
+  }
+}

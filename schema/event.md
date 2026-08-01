@@ -26,7 +26,8 @@ type EventBase = {
   };
   context: { session_id: string; turn?: number; cwd: string };
   hints?: { possibly_salient?: boolean;
-            reason?: "file_write" | "vcs_commit" | "cwd_change" | "user_pushback" | "manual" };
+            reason?: "file_write" | "vcs_commit" | "command_failed" | "cwd_change"
+                   | "user_pushback" | "manual" };
 };
 
 type PromptEvent = EventBase & { type: "prompt"; prompt: string };
@@ -38,6 +39,10 @@ type ToolEvent = EventBase & {
           category: "file_read" | "file_write" | "command" | "search"
                   | "vcs_commit" | "vcs_push" | "other" };
   command?: string;                                  // redacted before append
+  outcome?: { stdout?: string; stderr?: string; exit?: number; interrupted?: boolean };
+                                                     // shell/VCS categories only; empty streams
+                                                     // elided (exit kept even at 0); redacted
+                                                     // and 64 KB head+tail capped before append
   files?: Array<{ path: string; action: "read" | "write" | "edit" | "delete" }>;
 };
 
@@ -47,8 +52,22 @@ type SessionEvent = EventBase & { type: "session"; action: "start" | "stop" | "c
 ## Rules
 
 Redaction before append: `<private>...</private>` spans in prompt and command fields become
-`[PRIVATE]` without a hash, and injected `<librarian-memory>...</librarian-memory>` blocks are
-removed. `resource` stores facts, not authoritative identity; `project_slug` not on events;
+`[PRIVATE]` without a hash; injected `<librarian-memory>...</librarian-memory>` blocks are
+removed; and `outcome.stdout`/`outcome.stderr` are pattern-redacted like any other captured
+text (machine-generated output carries no `<private>` markup, so the patterns are its only
+guard, and an unclosed `<private>` in machine output does NOT fail closed — nothing was
+declared, so nothing is destroyed). `outcome` is captured for `command` / `vcs_commit` /
+`vcs_push` only: their output is a function of machine state at that instant and is gone,
+whereas a `file_read`'s result is a copy of a file on disk and a `search`'s is re-runnable.
+Streams are stored as the harness handed them over — itself already bounded, Claude Code
+hard-truncates at 30,000 characters — up to a further 64 KB head+tail cap per stream that
+names what it elided; the *render* truncates far harder (§7). **What earns
+`hints.reason: "command_failed"` is adapter-dependent, because the payloads differ**, and
+hints are non-authoritative precisely so this is allowed: OpenCode lifts a real exit code
+(`output.metadata.exit`, present on 3639 of 3673 real bash calls) and fires on non-zero;
+Claude Code has no exit code, never sets `is_error`, and its non-empty `stderr` is a harness
+notice rather than a failure (266 of 266 measured), so it can only honour `interrupted`.
+`exit` is recorded whatever its value — a zero is the "the remedy worked" half of the chain. `resource` stores facts, not authoritative identity; `project_slug` not on events;
 hints non-authoritative; partial lines ignored/quarantined; cursors advance after success;
 validators hard-reject `record_class: diagnostic`. **Provenance is
 collector-stamped, never LLM-authored:** the renderer presents events with ordinal indexes;

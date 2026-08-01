@@ -285,6 +285,38 @@ test('plugin forwards the raw native payload untouched — no mapping in the hos
   });
 });
 
+test('plugin forwards tool output for shell tools only — a read never pipes its file', async () => {
+  const cli = fakeBin();
+  await withEnv({ LIBRARIAN_BIN: cli.bin }, async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-plugin-output-'));
+    const hooks = await LibrarianPlugin({ directory: project });
+
+    await hooks['tool.execute.after'](
+      { tool: 'bash', sessionID: 's1', callID: 'c1', args: { command: 'node -v' } },
+      { title: 'node -v', output: 'v24.18.0\n', metadata: {} },
+    );
+    // A read's `output.output` IS the file. Forwarding it would serialize the whole file
+    // into a spawn's stdin on the hottest tool there is, for a field the collector drops.
+    await hooks['tool.execute.after'](
+      { tool: 'read', sessionID: 's1', callID: 'c2', args: { filePath: '/repo/src/x.ts' } },
+      { title: 'x.ts', output: 'SHOULD_NOT_BE_PIPED', metadata: {} },
+    );
+
+    const calls = readCalls(cli.callsPath);
+    assert.equal(calls.length, 2, 'both tool fires still reach the binary');
+    assert.deepEqual(
+      (calls[0].output as Record<string, unknown>).output,
+      'v24.18.0\n',
+      'a shell tool forwards what it printed',
+    );
+    assert.equal(calls[1].output, undefined, 'a read forwards no output at all');
+    assert.ok(
+      !JSON.stringify(calls[1]).includes('SHOULD_NOT_BE_PIPED'),
+      'the file contents never cross the pipe',
+    );
+  });
+});
+
 test('plugin skips assistant messages and repeated message ids without spawning', async () => {
   const cli = fakeBin();
   await withEnv({ LIBRARIAN_BIN: cli.bin }, async () => {

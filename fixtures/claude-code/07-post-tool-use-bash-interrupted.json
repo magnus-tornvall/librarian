@@ -1,6 +1,6 @@
 {
-  "name": "post-tool-use-bash-git-commit",
-  "description": "A Claude Code PostToolUse hook for the Bash tool whose tool_input.command is a `git commit` invocation is recategorized to vcs_commit (canonical_name stays bash), ships the raw command, lifts the command's outcome off tool_response (empty stderr and interrupted:false are elided, so only stdout survives), and carries a non-authoritative vcs_commit salience hint — the command succeeded, so it is not command_failed.",
+  "name": "post-tool-use-bash-interrupted",
+  "description": "A Claude Code PostToolUse hook for the Bash tool whose tool_response has interrupted:true is hinted possibly_salient with reason command_failed. `interrupted` is the ONLY failure signal the payload carries — there is no exit code, is_error is never set, and non-empty stderr is a harness notice rather than a failure (see 06). Failure outranks the file_write/vcs_commit hints.",
   "native": {
     "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
     "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
@@ -9,21 +9,22 @@
     "hook_event_name": "PostToolUse",
     "tool_name": "Bash",
     "tool_input": {
-      "command": "git commit -m \"fix: expire check before redirect\"",
-      "description": "Commit the redirect fix"
+      "command": "npm test",
+      "description": "Run the test suite"
     },
     "tool_response": {
-      "stdout": "[feat/claude-code-adapter 1a2b3c4] fix: expire check before redirect\n 1 file changed, 3 insertions(+)",
+      "stdout": "> librarian@ test\n> node --test \"tests/**/*.test.ts\"\n",
       "stderr": "",
-      "interrupted": false,
-      "isImage": false
+      "interrupted": true,
+      "isImage": false,
+      "noOutputExpected": false
     },
-    "tool_use_id": "toolu_01GHI789JKL012",
-    "duration_ms": 214
+    "tool_use_id": "toolu_01VWX234YZA567",
+    "duration_ms": 120000
   },
   "env": {
-    "event_id": "01J8X7QK42V5X9P2M6Q0R5S7VW",
-    "ts": "2026-07-06T09:14:59.887Z",
+    "event_id": "01J8X7QK45Y0A4T7Q1U5W9X3Z0",
+    "ts": "2026-07-06T09:18:11.229Z",
     "resource": {
       "agent": "claude-code",
       "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
@@ -39,8 +40,8 @@
   },
   "expected": {
     "schema_version": 1,
-    "event_id": "01J8X7QK42V5X9P2M6Q0R5S7VW",
-    "ts": "2026-07-06T09:14:59.887Z",
+    "event_id": "01J8X7QK45Y0A4T7Q1U5W9X3Z0",
+    "ts": "2026-07-06T09:18:11.229Z",
     "type": "tool",
     "resource": {
       "agent": "claude-code",
@@ -57,12 +58,13 @@
     "tool": {
       "native_name": "Bash",
       "canonical_name": "bash",
-      "category": "vcs_commit"
+      "category": "command"
     },
-    "command": "git commit -m \"fix: expire check before redirect\"",
+    "command": "npm test",
     "outcome": {
-      "stdout": "[feat/claude-code-adapter 1a2b3c4] fix: expire check before redirect\n 1 file changed, 3 insertions(+)"
+      "stdout": "> librarian@ test\n> node --test \"tests/**/*.test.ts\"\n",
+      "interrupted": true
     },
-    "hints": { "possibly_salient": true, "reason": "vcs_commit" }
+    "hints": { "possibly_salient": true, "reason": "command_failed" }
   }
 }
