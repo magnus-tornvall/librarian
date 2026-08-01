@@ -58,17 +58,33 @@ Three homes, no fourth. Never invent a tracking file.
   and mirror it with a `**Blocked by #N**` line in the body as a human-readable
   cue. Holds status, dependencies, per-unit why/why-not, and the agent
   instructions. This is what agents read to act; the spec is what you read to
-  understand the mind. Open the body with a **What / Why couplet** — one line for
-  the observable change this ships, one for the pain/value that justifies it (no
-  user-story persona; the user never varies). Use a job story
-  (`When <situation>, <capability>, so <outcome>`) only when the trigger is the
-  point. Every issue states its **success signal(s)** — one or more observable,
-  checkable conditions that tell an agent the work is done (a command that
-  passes, a behavior you can drive, an artifact that exists). No fuzzy "works
-  well"; if you can't name what to check, the issue isn't ready.
+  understand the mind. Shape below.
 - **GitHub Project v2** — the view engine over the issues (roadmap = helicopter,
   board/table grouped by epic = mid, open issue = zoom). Auto-add workflow, so new
   issues appear with no bookkeeping. Read-only lens — never hand-edited.
+
+### Issue shape
+
+Field order (mirrors `.github/ISSUE_TEMPLATE/{task,story}.yml`; issues created through the
+API follow the same contract): **Outcome** — the observable change this ships, declarative,
+no implementation steps · **Why** — the pain/value in one line (no user-story persona; the
+user never varies) · **Touchpoints** — expected files, `path:line` where known ·
+**Constraints** ≤5 — invariants and settled decisions *by pointer*, plus the non-goals ·
+**Success signals** ≤5 — runnable, checkable with no human judgment, ≥1 failing on `main`
+first (no fuzzy "works well"; if you can't name what to check, the issue isn't ready) ·
+**Context** — links only.
+
+Body budget **≤400 tokens** for a task, **≤700** for a story: the body is the execution
+contract, not the reasoning. Evidence, design forks and superseded approaches go to
+`docs/specs/` or `docs/research/` and are linked; issue history goes in a comment (the body
+is what an agent reads by default); code becomes a `path:line` pointer, which fetches the
+same bytes on demand and doesn't go stale.
+
+Split when touchpoints span more than ~3 files or cross a pipeline-stage seam, when there are
+more than 5 success signals, or when a schema change and its consumers both move (schema
+first, consumers `blocked by` it). Sibling touchpoint sets must be **disjoint** — overlap is a
+`blocked by` edge, and that disjointness is what lets siblings run in parallel. Full
+reasoning: `docs/research/agentic-issue-template.md`.
 
 ## The routing test (what to touch when we discuss things)
 

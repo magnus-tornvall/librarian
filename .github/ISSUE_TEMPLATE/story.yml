@@ -1,0 +1,90 @@
+name: Story
+description: A capability. Implemented directly if it fits one session, otherwise split into task sub-issues.
+title: "type(scope): "
+labels: ["story"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Body budget: ≤ 700 tokens.** If it doesn't fit, that is the split signal: break it into
+        `task` sub-issues and keep this body thin. Split also when touchpoints span > ~3 files or
+        cross a pipeline-stage boundary, when there are > 5 success signals, or when a schema change
+        and its consumers both move (schema first, consumers `blocked by` it).
+
+        **Do not deduplicate context into this parent.** A task agent must never have to read the
+        story to do the work — anything load-bearing lives in the child, or behind a link in the
+        child. Reasoning: `docs/research/agentic-issue-template.md`.
+
+  - type: input
+    id: blocked-by
+    attributes:
+      label: Blocked by
+      description: >
+        Issue numbers, e.g. `#151`. Also set the native **relationship** field (`blocked by`) —
+        that is the source of truth; this line is the human-readable cue.
+      placeholder: "#151"
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: >
+        The observable capability this ships, declaratively. 1–2 sentences. No implementation steps.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The pain or value, in one sentence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: touchpoints
+    attributes:
+      label: Touchpoints
+      description: >
+        Expected files, `path:line` where known. If this story has task children, their touchpoint
+        sets must be **disjoint** from each other — overlap is a `blocked by` edge, not a warning.
+        That disjointness is what lets the children run in parallel.
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: >
+        ≤ 5 bullets. Invariants, settled decisions in play **by pointer** (`spec §4`,
+        `docs/specs/structural-invariants.md` §2), deliberate non-goals. Links, not restated
+        argument.
+
+  - type: textarea
+    id: success-signals
+    attributes:
+      label: Success signals
+      description: >
+        ≤ 5, runnable, checkable with no human judgment. At least one must **fail on `main`** before
+        the work. If the story is split, these are the signals that hold once all children land —
+        each child still carries its own.
+      value: |
+        -
+        - `npm run build && npm test && npm run lint` green.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks
+      description: >
+        Child issue numbers, once they exist. Create them as native **sub-issues** — this list is the
+        human-readable cue, the hierarchy is the source of truth. Leave blank if implementing directly.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Links only — spec §, research doc, prior issue/PR.
