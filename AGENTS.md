@@ -52,6 +52,18 @@ Three homes, no fourth. Never invent a tracking file.
   invariants, why-not, the amendment log (why reasoning *changed*), and
   cross-cutting sequencing rationale. **No status lines. No `→ issue #NN` mapping
   ledger.** Those are friction and they move out.
+  - **Break the monolith up as you touch it.** `librarian-design-consolidated.md`
+    is being decomposed one section at a time: when a session substantively edits a
+    section, lift that section into its own file under `docs/specs/`, leave a stub
+    linking to it, and change nothing else about the text. Already out:
+    [`decisions.md`](docs/specs/decisions.md) (was §5),
+    [`triggers.md`](docs/specs/triggers.md) (was §15). Optimise the result for
+    agents, not for reading start-to-finish: one subject per file, stable ids,
+    greppable.
+  - **Durable ids.** Rulings are `D-nn` (`decisions.md`), the named conditions that
+    gate deferred work are `T-nn` (`triggers.md`). Add to the register first, then
+    reference it from code comments, the architecture model, or an issue. Never
+    renumber, never reuse — a superseded ruling keeps its id and its text.
 - **GitHub issues** — every unit of work. Typed by label (`epic` / `story` /
   `task`), nested via native **sub-issues** (Epic → Story → Task), linked via
   **blocked-by** — set the native GitHub issue **relationship** field (`blocked by`),
@@ -69,6 +81,14 @@ Three homes, no fourth. Never invent a tracking file.
 - **GitHub Project v2** — the view engine over the issues (roadmap = helicopter,
   board/table grouped by epic = mid, open issue = zoom). Auto-add workflow, so new
   issues appear with no bookkeeping. Read-only lens — never hand-edited.
+
+Not a fourth home: [`docs/architecture/librarian.c4`](docs/architecture/README.md) is
+a *lens* on the spec — the same structure, decisions, and triggers, drawn. It holds no
+status. **References run one way: issue → view → spec entry (`D-nn` / `T-nn`) →
+reasoning.** An issue links a view to say where it lands (`librarian.html#/view/<id>/`);
+a view links `decisions.md` / `triggers.md`. Nothing durable ever links forward to an
+issue — the issue closes and the link rots. View ids are an API: add freely, rename
+never.
 
 ## The routing test (what to touch when we discuss things)
 

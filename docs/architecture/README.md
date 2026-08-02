@@ -60,19 +60,44 @@ homes, no fourth"). This file is a lens on
 [`../specs/librarian-design-consolidated.md`](../specs/librarian-design-consolidated.md),
 not a fourth tracking home.
 
-## Two kinds of trigger
+## Events, decisions, triggers
 
-The word points in opposite directions, so the model uses two element kinds:
+Three annotations that are easy to conflate and shouldn't be:
 
-- **`runtimeEvent`** (green) — an event that *starts* a flow: session start, user
-  prompt, tool use, session end, a model deciding to search.
-- **`gate`** (amber) — a named condition the design *waits for*. Each gate mirrors one
-  row of the spec's [trigger register](../specs/librarian-design-consolidated.md)
-  (§15.1) and carries that row's id (T-01 … T-19) in its title. The register is the
-  durable home: **add a trigger there first, then mirror it here.**
+- **`event`** (green, queue) — part of a *flow*. Something happens and the pipeline
+  runs: session start, user prompt, tool use, session end, a model deciding to search.
+  Events fire every session; they live in the value-path and flow views.
+- **`decision`** (grey, document) — settled reasoning pinned to a place in the
+  architecture: *why it is shaped this way*. `D-01` … `D-16`.
+- **`trigger`** (amber, document) — the same kind of annotation in the other tense:
+  *what would enable, change, or block this*, if a named condition came true. `T-01` …
+  `T-19`. A trigger fires once in the project's life, if ever.
 
-So an issue can say *"blocked by T-10"* and the spec, the model, and the issue all mean
-the same thing — and `frontierScale` shows exactly which components T-10 touches.
+Decisions and triggers share a shape deliberately — they differ in state, not category.
+An event is neither.
+
+Neither annotation is *defined* here. Each mirrors an entry in a spec register and links
+back to it:
+
+| Kind | Register | Ids |
+|---|---|---|
+| decision | [`../specs/decisions.md`](../specs/decisions.md) | D-01 … D-16 |
+| trigger | [`../specs/triggers.md`](../specs/triggers.md) | T-01 … T-19 |
+
+**Add the entry to the register first, then mirror it here.** So an issue can say
+*"blocked by T-10"* and the spec, the model, and the issue all mean the same thing —
+and `frontierScale` shows exactly which components T-10 touches.
+
+## References run one way
+
+```
+issue  →  view  →  spec entry (D-nn / T-nn)  →  reasoning
+```
+
+An issue links a view to say where its work lands. A view links a register entry. **A
+view never links an issue**, and neither does the spec: an issue is a unit of work that
+closes, a view and a register entry outlive it, and a link from the durable thing to the
+disposable one rots by construction.
 
 ## Keeping it honest
 

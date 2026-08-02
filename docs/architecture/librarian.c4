@@ -2,23 +2,33 @@
  * Librarian — architecture as code (LikeC4).
  *
  * SCOPE RULE — AGENTS.md's routing test: does this fact outlive the unit it describes?
- * This model carries only durable facts: structure, settled decisions, structural
- * invariants, and the named triggers that gate deferred work. It carries NO status:
- * no "in progress", no issue state, no roadmap position. Status lives on GitHub
- * issues and the Project board. This file is a lens on the spec
- * (docs/specs/librarian-design-consolidated.md), not a fourth tracking home.
+ * This model carries only durable facts: structure, decisions, structural invariants,
+ * and triggers. It carries NO status — no "in progress", no issue state, no roadmap
+ * position — and it never points at an issue. Status lives on GitHub issues and the
+ * Project board; issues point at views here, never the reverse. Issues die; this does not.
  *
- * Two kinds of "trigger" appear below, pointing in opposite directions:
- *   runtimeEvent — an event that STARTS a flow (session start, prompt, session end, tool call)
- *   gate         — a named condition the design WAITS FOR before building something
+ * FOUR KINDS OF THING, and the difference matters:
  *
- * Gates are not defined here. Each one mirrors a row of the spec's trigger register
- * (§15.1) and carries that row's durable id (T-01 … T-19) in its title, so an issue,
- * the spec, and this model can all say "T-10" and mean the same thing. Add a trigger
- * to the register first, then mirror it here — never the other way round.
+ *   component / store — what exists, named after the code that implements it
+ *   event             — part of a flow: something happens and the pipeline runs
+ *   decision          — settled reasoning pinned to a place: why it is shaped this way
+ *   trigger           — the same kind of annotation, in the other tense: what would
+ *                       enable, change, or block this if a named condition came true
  *
- * Components are named after the code that implements them, so drift is checkable:
- * every `technology` string is a real path under src/.
+ * Decisions and triggers share a shape on purpose. An event is not a trigger: an event
+ * fires on every session, a trigger fires once in the project's life, if ever.
+ *
+ * Neither annotation is DEFINED here. Each mirrors an entry in the spec registers and
+ * carries its durable id and a link back:
+ *
+ *   ../specs/decisions.md   D-01 … D-16
+ *   ../specs/triggers.md    T-01 … T-19
+ *
+ * Add the entry to the register first, then mirror it here — never the other way round.
+ * Ids are permanent: "blocked by T-10" must mean the same thing in an issue, in the
+ * spec, and on this diagram.
+ *
+ * Every `technology` string is a real path under src/, so drift is checkable.
  */
 specification {
 
@@ -49,20 +59,18 @@ specification {
     }
   }
 
-  element runtimeEvent {
+  // An event is part of a flow: something happens, and the pipeline runs.
+  element event {
     style {
       shape queue
       color green
     }
   }
 
-  element gate {
-    style {
-      shape queue
-      color amber
-    }
-  }
-
+  // A decision and a trigger are the same kind of thing — an annotation pinned to a
+  // place in the architecture, saying why it is shaped this way (decision, settled)
+  // or what would reshape it (trigger, pending). Same shape on purpose; the colour
+  // is the only difference, because the difference is state, not category.
   element decision {
     style {
       shape document
@@ -70,24 +78,31 @@ specification {
     }
   }
 
-  // Storage classes (§4) — retention semantics, not folders.
+  element trigger {
+    style {
+      shape document
+      color amber
+    }
+  }
+
+  // Storage classes (spec §4) — retention semantics, not folders.
   tag sacred
   tag derived
   tag deletable
 
-  // Value paths (§1, §6) — the two ways memory reaches a model.
+  // Value paths (spec §1, §6) — the two ways memory reaches a model.
   tag push
   tag pull
 
   tag write-path
   tag hot-path
 
-  // Decision state (§5). `superseded` text is kept, never deleted.
+  // Decision state (../specs/decisions.md). Superseded text is kept, never deleted.
   tag settled
   tag superseded
   tag invariant
 
-  // The design frontier: deliberately not built yet (§15).
+  // The design frontier: deliberately not built yet (../specs/triggers.md).
   tag waiting
 
   relationship constrains {
@@ -95,7 +110,7 @@ specification {
     color muted
   }
 
-  relationship gates {
+  relationship unlocks {
     line dashed
     color amber
   }
@@ -148,25 +163,25 @@ model {
     '
   }
 
-  // ─── Runtime events: what starts a flow ──────────────────────────────────
+  // ─── Events: what starts a flow ──────────────────────────────────────────
 
-  evSessionStart = runtimeEvent 'Session start' {
+  evSessionStart = event 'Session start' {
     description 'Turn-1 brief + prefs — the stable prefix that never mutates mid-session (§6)'
   }
 
-  evPrompt = runtimeEvent 'User prompt' {
+  evPrompt = event 'User prompt' {
     description 'Per-prompt recall, spliced adjacent to the latest user message (volatile suffix, §6)'
   }
 
-  evToolUse = runtimeEvent 'Tool use' {
+  evToolUse = event 'Tool use' {
     description 'ToolEvent + outcome — the distiller sees failure, not just intent (§7)'
   }
 
-  evSessionEnd = runtimeEvent 'Session end' {
+  evSessionEnd = event 'Session end' {
     description 'Lazy, detached distill trigger. No daemon (§4)'
   }
 
-  evModelSearch = runtimeEvent 'Model decides to search' {
+  evModelSearch = event 'Model decides to search' {
     description 'The pull path is model-initiated: it asked, so austerity rules do not apply (§6)'
   }
 
@@ -554,9 +569,10 @@ model {
 
   // ─── Settled decisions and structural invariants ─────────────────────────
 
-  dDistillOnly = decision 'Distill-only ingestion' {
+  dDistillOnly = decision 'D-01 · Distill-only ingestion' {
     #settled
     #invariant
+    link ../specs/decisions.md#D-01 'D-01 in the decisions register'
     description '
       Nothing enters the note log without a distiller\'s judgment; exactly two distillers
       exist (llm, human) and no generic import path exists — not even a side door for
@@ -565,9 +581,10 @@ model {
     '
   }
 
-  dDiagnosticsIsolation = decision 'Diagnostics isolation' {
+  dDiagnosticsIsolation = decision 'D-03 · Diagnostics isolation' {
     #settled
     #invariant
+    link ../specs/decisions.md#D-03 'D-03 in the decisions register'
     description '
       Self-observation entering memory creates a reflexive loop that degrades quietly, so
       isolation is enforced three ways: placement outside the data root, a poison-pill
@@ -576,9 +593,10 @@ model {
     '
   }
 
-  dGeneratedCurated = decision 'Generated / curated split' {
+  dGeneratedCurated = decision 'D-04 · Generated / curated split' {
     #settled
     #invariant
+    link ../specs/decisions.md#D-04 'D-04 in the decisions register'
     description '
       Two directories with opposite ownership, enforced by directory scope rather than
       frontmatter inspection: the importer never walks the generated tree. No
@@ -587,9 +605,10 @@ model {
     '
   }
 
-  dRedactBeforeAppend = decision 'Redaction before durable append' {
+  dRedactBeforeAppend = decision 'D-02 · Redaction before durable append' {
     #settled
     #invariant
+    link ../specs/decisions.md#D-02 'D-02 in the decisions register'
     description '
       Non-retrofittable by nature. Covers pattern-detected secrets, user-declared
       <private> spans, home paths, command output, and injected memory blocks — the last
@@ -598,9 +617,10 @@ model {
     '
   }
 
-  dHotPath = decision 'Hot-path contract' {
+  dHotPath = decision 'D-08 · Hot-path contract' {
     #settled
     #invariant
+    link ../specs/decisions.md#D-08 'D-08 in the decisions register'
     description '
       An injection performs zero index builds and zero full-log reads; cost is O(query),
       never O(vault). The no-daemon principle\'s other half: no resident process AND no
@@ -608,8 +628,9 @@ model {
     '
   }
 
-  dOneIndex = decision 'One blessed index' {
+  dOneIndex = decision 'D-09 · One blessed index' {
     #settled
+    link ../specs/decisions.md#D-09 'D-09 in the decisions register'
     description '
       Vectors live in the same SQLite file as FTS5 or not at all — a second store buys a
       sync subsystem, refused. The index is a derived artifact: deletion is safe and
@@ -617,8 +638,9 @@ model {
     '
   }
 
-  dSemanticMvp = decision 'Semantic search is MVP scope' {
+  dSemanticMvp = decision 'D-10 · Semantic search is MVP scope' {
     #settled
+    link ../specs/decisions.md#D-10 'D-10 in the decisions register'
     description '
       Supersedes the BM25-only v1 ruling: the vault is bilingual (Swedish/English) and
       BM25 is structurally blind across languages, so cross-language misses are a
@@ -627,8 +649,9 @@ model {
     '
   }
 
-  dBm25Only = decision 'BM25-only v1' {
+  dBm25Only = decision 'D-11 · BM25-only v1' {
     #superseded
+    link ../specs/decisions.md#D-11 'D-11 in the decisions register'
     description '
       SUPERSEDED 2026-07-16 by the ruling above, and kept so the reasoning is auditable.
       It was settled against a POC framing and an English-monolingual assumption; the
@@ -636,8 +659,9 @@ model {
     '
   }
 
-  dEmbeddingsNeverDecide = decision 'Embeddings fetch candidates, never decide verdicts' {
+  dEmbeddingsNeverDecide = decision 'D-06 · Embeddings fetch candidates, never decide verdicts' {
     #settled
+    link ../specs/decisions.md#D-06 'D-06 in the decisions register'
     description '
       Embedding models score contradictions as highly similar — "we chose Kamal" and "we
       abandoned Kamal" are near neighbours — so a cosine-threshold NOOP would silently eat
@@ -646,8 +670,9 @@ model {
     '
   }
 
-  dFailClosed = decision 'Every rejection fails closed' {
+  dFailClosed = decision 'D-05 · Every rejection fails closed' {
     #settled
+    link ../specs/decisions.md#D-05 'D-05 in the decisions register'
     description '
       No note, a verdict to diagnostics, and the cursor advances; the events stay in the
       sacred log for a manual re-distill. Losing a session\'s note is acceptable — a wrong
@@ -656,8 +681,9 @@ model {
     '
   }
 
-  dPushAusterity = decision 'Push austerity: 0–5, never force-filled' {
+  dPushAusterity = decision 'D-12 · Push austerity: 0–5, never force-filled' {
     #settled
+    link ../specs/decisions.md#D-12 'D-12 in the decisions register'
     description '
       Injected notes compete with the task for a ~10–25-concept workspace bottleneck
       rather than adding for free, and injected context is most causally potent on exactly
@@ -665,8 +691,9 @@ model {
     '
   }
 
-  dPriorNotGuard = decision 'Authority labels are a prior, not a guard' {
+  dPriorNotGuard = decision 'D-13 · Authority labels are a prior, not a guard' {
     #settled
+    link ../specs/decisions.md#D-13 'D-13 in the decisions register'
     description '
       Models can fully represent a context property internally without causally using it,
       so poisoning defence lives at admission — never credit the injected wording as the
@@ -674,8 +701,9 @@ model {
     '
   }
 
-  dPullDifferentPhysics = decision 'Pull is different physics' {
+  dPullDifferentPhysics = decision 'D-14 · Pull is different physics' {
     #settled
+    link ../specs/decisions.md#D-14 'D-14 in the decisions register'
     description '
       The model chose to search and can follow up, so ~10 results in three layers
       (compact index → bodies → verbatim provenance) is right. Push austerity rules are
@@ -683,8 +711,9 @@ model {
     '
   }
 
-  dSingleExecutable = decision 'Distribution is a single executable' {
+  dSingleExecutable = decision 'D-15 · Distribution is a single executable' {
     #settled
+    link ../specs/decisions.md#D-15 'D-15 in the decisions register'
     description '
       npm-global presupposes Node and inherits the native-ABI breakage class:
       better-sqlite3 is ABI-keyed, so a Node major switch either hides the install or
@@ -693,8 +722,9 @@ model {
     '
   }
 
-  dOneBin = decision 'All surfaces route through one bin' {
+  dOneBin = decision 'D-16 · All surfaces route through one bin' {
     #settled
+    link ../specs/decisions.md#D-16 'D-16 in the decisions register'
     description '
       Thin plugins, not self-contained ones: three bundled copies of dist/ would mean
       three path regimes. Claude Code gets a declarative manifest, OpenCode one
@@ -702,8 +732,9 @@ model {
     '
   }
 
-  dLatestWins = decision 'Latest revision wins; a close binds only what it post-dates' {
+  dLatestWins = decision 'D-07 · Latest revision wins; a close binds only what it post-dates' {
     #settled
+    link ../specs/decisions.md#D-07 'D-07 in the decisions register'
     description '
       A newer revision re-opens a flagged or superseded note — otherwise the softest kill
       (a flag) would be permanent while the strongest (a tombstone) stayed revivable, and
@@ -737,15 +768,15 @@ model {
   dSingleExecutable -[constrains]-> cli 'SEA, not npm i -g'
   dOneBin -[constrains]-> wiring 'thin plugins'
   dLatestWins -[constrains]-> indexer 'validity close by timestamp'
-  // ─── The frontier: where we are waiting for a trigger ────────────────────
+  // ─── Triggers: what would enable, change, or block what exists ───────────
   //
-  // One gate per row of the spec's trigger register (§15.1). The id in the title
-  // IS the register id: an issue can say "blocked by T-10" and this model, the
-  // spec, and the issue all mean the same thing. Ids are durable — a trigger
-  // outlives whatever work it eventually unlocks — so never renumber them.
+  // One element per row of ../specs/triggers.md. A trigger is an annotation, not an
+  // event: it names a condition that has not happened and may never happen, and says
+  // what becomes correct to build when it does.
 
-  gNonAgentSource = gate 'T-01 · first non-agent source' {
+  tNonAgentSource = trigger 'T-01 · first non-agent source' {
     #waiting
+    link ../specs/triggers.md#T-01 'T-01 in the trigger register'
     description '
       Unlocks the ContentEvent shape and per-origin distiller profiles — the integration
       contract for non-agent sources. The rule is settled; the mechanism waits until one
@@ -757,8 +788,9 @@ model {
     }
   }
 
-  gDifferentContext = gate 'T-02 · a context a coding vocabulary would distil badly' {
+  tDifferentContext = trigger 'T-02 · a context a coding vocabulary would distil badly' {
     #waiting
+    link ../specs/triggers.md#T-02 'T-02 in the trigger register'
     description '
       Unlocks reconsidering the mode system. Librarian already has both halves
       automatically — note types are the observation vocabulary, worth criteria are the
@@ -771,8 +803,9 @@ model {
     }
   }
 
-  gFirstPathProves = gate 'T-03 · the first inference path proves out' {
+  tFirstPathProves = trigger 'T-03 · the first inference path proves out' {
     #waiting
+    link ../specs/triggers.md#T-03 'T-03 in the trigger register'
     description 'Unlocks a second inference provider and the SQLite-mirror exporter (roadmap item 10).'
     metadata {
       trigger 'T-03'
@@ -780,8 +813,9 @@ model {
     }
   }
 
-  gSqliteMirror = gate 'T-04 · the SQLite mirror lands' {
+  tSqliteMirror = trigger 'T-04 · the SQLite mirror lands' {
     #waiting
+    link ../specs/triggers.md#T-04 'T-04 in the trigger register'
     description '
       Unlocks extracting an Exporter interface — shaped from the working
       exportNoteToVault signature, not from imagination. Two implementations, then abstract.
@@ -792,8 +826,9 @@ model {
     }
   }
 
-  gExternalContributor = gate 'T-05 · first external contributor or first publish' {
+  tExternalContributor = trigger 'T-05 · first external contributor or first publish' {
     #waiting
+    link ../specs/triggers.md#T-05 'T-05 in the trigger register'
     description '
       Unlocks the contracts barrel (if it is not in the barrel, it is internal),
       docs/extending.md, and conformance helpers — plus the package.json metadata and
@@ -805,8 +840,9 @@ model {
     }
   }
 
-  gDistractors = gate 'T-06 · negative fixtures show distractors' {
+  tDistractors = trigger 'T-06 · negative fixtures show distractors' {
     #waiting
+    link ../specs/triggers.md#T-06 'T-06 in the trigger register'
     description '
       Unlocks a re-ranking pass — the escalation, not the first response. A cross-encoder
       costs an inference call in the hot path and is slower per query than one embedding,
@@ -818,8 +854,9 @@ model {
     }
   }
 
-  gEndpointFriction = gate 'T-07 · endpoint friction proves real' {
+  tEndpointFriction = trigger 'T-07 · endpoint friction proves real' {
     #waiting
+    link ../specs/triggers.md#T-07 'T-07 in the trigger register'
     description '
       Unlocks an in-process ONNX embedding provider — a user who will not run Ollama wants
       hybrid. Costs a native onnxruntime dependency plus ~255MB of model cache in a
@@ -832,8 +869,9 @@ model {
     }
   }
 
-  gStatsDuplicates = gate 'T-08 · stats shows near-TTL duplicates' {
+  tStatsDuplicates = trigger 'T-08 · stats shows near-TTL duplicates' {
     #waiting
+    link ../specs/triggers.md#T-08 'T-08 in the trigger register'
     description '
       Unlocks corroboration-extends-TTL (parked, not closed): the complexity — new record
       kind, session-id plumbing, self-citation join, indexer column, TTL seam change —
@@ -845,8 +883,9 @@ model {
     }
   }
 
-  gOutcomeSignal = gate 'T-09 · a note-granular outcome signal exists' {
+  tOutcomeSignal = trigger 'T-09 · a note-granular outcome signal exists' {
     #waiting
+    link ../specs/triggers.md#T-09 'T-09 in the trigger register'
     description '
       The only thing that reopens outcome-linked note worth (closed). Today no flowing,
       note-granular signal exists to calibrate against: session-level pushback cannot name
@@ -859,8 +898,9 @@ model {
     }
   }
 
-  gSecondMachine = gate 'T-10 · a second machine' {
+  tSecondMachine = trigger 'T-10 · a second machine' {
     #waiting
+    link ../specs/triggers.md#T-10 'T-10 in the trigger register'
     description '
       Unlocks per-machine log segments and created_by_machine, together with the real
       design work: two machines revising the same deterministic-ID note produce revisions
@@ -872,8 +912,9 @@ model {
     }
   }
 
-  gVaultCollision = gate 'T-11 · two importers ingest the same curated file' {
+  tVaultCollision = trigger 'T-11 · two importers ingest the same curated file' {
     #waiting
+    link ../specs/triggers.md#T-11 'T-11 in the trigger register'
     description '
       Likely fires before T-10 — people already sync Obsidian vaults over iCloud and
       Syncthing, so the curated-file collision arrives before a second event-log machine.
@@ -884,8 +925,9 @@ model {
     }
   }
 
-  gSecondUser = gate 'T-12 · a second user' {
+  tSecondUser = trigger 'T-12 · a second user' {
     #waiting
+    link ../specs/triggers.md#T-12 'T-12 in the trigger register'
     description '
       Unlocks team memory, whose shape is already ruled: visibility is structural, not a
       field — a separate shared store synced like a git remote, never a per-record
@@ -897,8 +939,9 @@ model {
     }
   }
 
-  gSecondInProcessHost = gate 'T-13 · a second host needing in-process code' {
+  tSecondInProcessHost = trigger 'T-13 · a second host needing in-process code' {
     #waiting
+    link ../specs/triggers.md#T-13 'T-13 in the trigger register'
     description '
       Unlocks packaging the plugin file. Until a real Cursor/Zed/Aider plugin exists there
       is one call site, and versioning one dependency-free file adds a CI job, tag-
@@ -910,8 +953,9 @@ model {
     }
   }
 
-  gExternalAdopter = gate 'T-14 · first external adopter' {
+  tExternalAdopter = trigger 'T-14 · first external adopter' {
     #waiting
+    link ../specs/triggers.md#T-14 'T-14 in the trigger register'
     description '
       Unlocks cross-platform distribution: the per-OS/arch matrix, a public download
       channel, code-signing and notarization, and a signature-verified release feed.
@@ -922,8 +966,9 @@ model {
     }
   }
 
-  gSecretFound = gate 'T-15 · a secret found in the event log' {
+  tSecretFound = trigger 'T-15 · a secret found in the event log' {
     #waiting
+    link ../specs/triggers.md#T-15 'T-15 in the trigger register'
     description '
       Unlocks purge-event-range --rewrite-segment. Append-only stays the default
       invariant, but a false-negative redaction needs an honest recovery path: rare, loud,
@@ -935,8 +980,9 @@ model {
     }
   }
 
-  gRendererChange = gate 'T-16 · first renderer change after real traces' {
+  tRendererChange = trigger 'T-16 · first renderer change after real traces' {
     #waiting
+    link ../specs/triggers.md#T-16 'T-16 in the trigger register'
     description '
       Unlocks storing the rendered block (or a renderer version + hash) in the injection
       trace. Today a renderer change makes old traces unreproducible; diagnostics are
@@ -948,8 +994,9 @@ model {
     }
   }
 
-  gTracingBackend = gate 'T-17 · wanting spans in an external backend' {
+  tTracingBackend = trigger 'T-17 · wanting spans in an external backend' {
     #waiting
+    link ../specs/triggers.md#T-17 'T-17 in the trigger register'
     description '
       Unlocks OTLP export and timing spans. The diagnostics log is already the API and a
       converter is a page of code, which is exactly why this waits: timings are
@@ -961,8 +1008,9 @@ model {
     }
   }
 
-  gDiskSize = gate 'T-18 · size on disk matters' {
+  tDiskSize = trigger 'T-18 · size on disk matters' {
     #waiting
+    link ../specs/triggers.md#T-18 'T-18 in the trigger register'
     description '
       Unlocks log compaction and gzip of closed segments. Defined already: consumers read
       canonical logs, and compaction must preserve replay semantics — so it changes
@@ -974,8 +1022,9 @@ model {
     }
   }
 
-  gObsidianEditing = gate 'T-19 · demand for editing in Obsidian specifically' {
+  tObsidianEditing = trigger 'T-19 · demand for editing in Obsidian specifically' {
     #waiting
+    link ../specs/triggers.md#T-19 'T-19 in the trigger register'
     description '
       Even then the shape is "vault edit detected → prompt to convert into a human
       revision", never silent region merging: the vault file is a view, and editing a view
@@ -987,27 +1036,27 @@ model {
     }
   }
 
-  gNonAgentSource -[gates]-> collector 'ContentEvent shape'
-  gNonAgentSource -[gates]-> distill 'per-origin profiles'
-  gDifferentContext -[gates]-> renderer 'mode-selected extraction prompt'
-  gFirstPathProves -[gates]-> inference 'second provider'
-  gFirstPathProves -[gates]-> exporter 'SQLite mirror'
-  gSqliteMirror -[gates]-> exporter 'Exporter interface'
-  gExternalContributor -[gates]-> cli 'contracts barrel, extending docs'
-  gDistractors -[gates]-> scoring 're-ranking pass'
-  gEndpointFriction -[gates]-> embedding 'in-process ONNX provider'
-  gStatsDuplicates -[gates]-> noveltyGate 'corroboration extends TTL'
-  gOutcomeSignal -[gates]-> scoring 'outcome-linked note worth'
-  gSecondMachine -[gates]-> noteLog 'per-machine segments'
-  gVaultCollision -[gates]-> curated 'sync collision rule'
-  gSecondUser -[gates]-> recall 'peer stores + per-peer weights'
-  gSecondInProcessHost -[gates]-> ocPlugin 'plugin as a package'
-  gExternalAdopter -[gates]-> cli 'per-OS/arch matrix, signed feed'
-  gSecretFound -[gates]-> eventLog 'purge-event-range'
-  gRendererChange -[gates]-> diagnostics 'rendered block in the trace'
-  gTracingBackend -[gates]-> diagnostics 'OTLP export, timing spans'
-  gDiskSize -[gates]-> eventLog 'compaction, gzip closed segments'
-  gObsidianEditing -[gates]-> exporter 'vault-edit → human revision'
+  tNonAgentSource -[unlocks]-> collector 'ContentEvent shape'
+  tNonAgentSource -[unlocks]-> distill 'per-origin profiles'
+  tDifferentContext -[unlocks]-> renderer 'mode-selected extraction prompt'
+  tFirstPathProves -[unlocks]-> inference 'second provider'
+  tFirstPathProves -[unlocks]-> exporter 'SQLite mirror'
+  tSqliteMirror -[unlocks]-> exporter 'Exporter interface'
+  tExternalContributor -[unlocks]-> cli 'contracts barrel, extending docs'
+  tDistractors -[unlocks]-> scoring 're-ranking pass'
+  tEndpointFriction -[unlocks]-> embedding 'in-process ONNX provider'
+  tStatsDuplicates -[unlocks]-> noveltyGate 'corroboration extends TTL'
+  tOutcomeSignal -[unlocks]-> scoring 'outcome-linked note worth'
+  tSecondMachine -[unlocks]-> noteLog 'per-machine segments'
+  tVaultCollision -[unlocks]-> curated 'sync collision rule'
+  tSecondUser -[unlocks]-> recall 'peer stores + per-peer weights'
+  tSecondInProcessHost -[unlocks]-> ocPlugin 'plugin as a package'
+  tExternalAdopter -[unlocks]-> cli 'per-OS/arch matrix, signed feed'
+  tSecretFound -[unlocks]-> eventLog 'purge-event-range'
+  tRendererChange -[unlocks]-> diagnostics 'rendered block in the trace'
+  tTracingBackend -[unlocks]-> diagnostics 'OTLP export, timing spans'
+  tDiskSize -[unlocks]-> eventLog 'compaction, gzip closed segments'
+  tObsidianEditing -[unlocks]-> exporter 'vault-edit → human revision'
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1017,7 +1066,14 @@ model {
 // issue points at (`docs/architecture/librarian.html#/view/<id>/`, see the
 // README). Renaming a view silently breaks every issue that references it, so
 // treat these ids the way you treat a public function name — add freely, rename
-// never. Three levels, matching AGENTS.md's helicopter / mid / zoom framing:
+// never.
+//
+// REFERENCES RUN ONE WAY: issue → view → spec entry (D-nn / T-nn) → reasoning.
+// A view never points back at an issue. An issue is a unit of work that closes;
+// a view and a spec entry outlive it, and a link from the durable thing to the
+// disposable one rots by construction.
+//
+// Three levels, matching AGENTS.md's helicopter / mid / zoom framing:
 //
 //   helicopter — index, map
 //   mid        — writePath, readPath, valueStream, storage, decisions*, frontier*
@@ -1054,8 +1110,8 @@ views {
 
     include *
     exclude element.kind = decision
-    exclude element.kind = gate
-    exclude element.kind = runtimeEvent
+    exclude element.kind = trigger
+    exclude element.kind = event
     exclude human, codingAgent, mcpHost, inference, embedder
   }
 
@@ -1071,6 +1127,7 @@ views {
     autoLayout TopBottom
 
     include
+      evToolUse, evSessionEnd,
       codingAgent, human,
       wiring, hookShell, ccPlugin, ocPlugin,
       collector, redactor, validator,
@@ -1092,6 +1149,7 @@ views {
     autoLayout TopBottom
 
     include
+      evSessionStart, evPrompt, evModelSearch,
       codingAgent, mcpHost,
       wiring, ccPlugin, ocPlugin, hookShell,
       recall, query, scoring, inject,
@@ -1241,8 +1299,8 @@ views {
     autoLayout LeftRight
 
     include
-      gNonAgentSource, gDifferentContext, gDistractors, gEndpointFriction,
-      gStatsDuplicates, gOutcomeSignal, gRendererChange, gTracingBackend,
+      tNonAgentSource, tDifferentContext, tDistractors, tEndpointFriction,
+      tStatsDuplicates, tOutcomeSignal, tRendererChange, tTracingBackend,
       collector, distill, renderer, noveltyGate, scoring, embedding, diagnostics
   }
 
@@ -1256,9 +1314,9 @@ views {
     autoLayout LeftRight
 
     include
-      gFirstPathProves, gSqliteMirror, gExternalContributor, gSecondMachine,
-      gVaultCollision, gSecondUser, gSecondInProcessHost, gExternalAdopter,
-      gSecretFound, gDiskSize, gObsidianEditing,
+      tFirstPathProves, tSqliteMirror, tExternalContributor, tSecondMachine,
+      tVaultCollision, tSecondUser, tSecondInProcessHost, tExternalAdopter,
+      tSecretFound, tDiskSize, tObsidianEditing,
       cli, ocPlugin, exporter, recall, inference, noteLog, eventLog, curated
   }
 
