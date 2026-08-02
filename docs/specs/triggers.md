@@ -42,7 +42,7 @@ in the spec or the model ever points forward at an issue — issues die, these d
 | <a id="T-19"></a>**T-19** | Demand for editing *in Obsidian* specifically | Vault-edit detected → prompt to convert into a human revision. Never silent region merging | [decisions](./decisions.md) |
 
 Each trigger appears in `docs/architecture/librarian.c4` as a `trigger` element carrying
-its id and a link back to this file, so the frontier views and this register cannot drift
+its id and a link back to this file, so the `triggers*` views and this register cannot drift
 apart without one of them being visibly wrong.
 
 ## The open items in full

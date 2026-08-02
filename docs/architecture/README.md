@@ -46,8 +46,8 @@ Add freely; rename never.
 | decisions | `decisionsWrite` | What holds the ingestion path in place |
 | decisions | `decisionsRead` | What holds recall and injection in place |
 | decisions | `decisionsDelivery` | Why one bin, no npm package |
-| frontier | `frontierMemory` | Triggers on memory quality (T-01, T-02, T-06 – T-09, T-16, T-17) |
-| frontier | `frontierScale` | Triggers on scale and distribution (T-03 – T-05, T-10 – T-15, T-18, T-19) |
+| triggers | `triggersMemory` | What would change memory quality (T-01, T-02, T-06 – T-09, T-16, T-17) |
+| triggers | `triggersScale` | What would change with scale or distribution (T-03 – T-05, T-10 – T-15, T-18, T-19) |
 | flow | `pushFlow` `pullFlow` `distillFlow` | Step-by-step, numbered |
 
 ## The scope rule
@@ -86,7 +86,7 @@ back to it:
 
 **Add the entry to the register first, then mirror it here.** So an issue can say
 *"blocked by T-10"* and the spec, the model, and the issue all mean the same thing —
-and `frontierScale` shows exactly which components T-10 touches.
+and `triggersScale` shows exactly which components T-10 touches.
 
 ## References run one way
 

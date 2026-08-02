@@ -102,7 +102,7 @@ specification {
   tag superseded
   tag invariant
 
-  // The design frontier: deliberately not built yet (../specs/triggers.md).
+  // Not built yet, and deliberately so (../specs/triggers.md).
   tag waiting
 
   relationship constrains {
@@ -1076,7 +1076,7 @@ model {
 // Three levels, matching AGENTS.md's helicopter / mid / zoom framing:
 //
 //   helicopter — index, map
-//   mid        — writePath, readPath, valueStream, storage, decisions*, frontier*
+//   mid        — writePath, readPath, valueStream, storage, decisions*, triggers*
 //   zoom       — zoom* (scoped to one component), *Flow (step-by-step)
 // ─────────────────────────────────────────────────────────────────────────────
 views {
@@ -1287,10 +1287,10 @@ views {
       mcpHost, codingAgent, config
   }
 
-  // ── The frontier, split so each half stays readable ───────────────────────
+  // ── Triggers, split so each half stays readable ───────────────────────────
 
-  view frontierMemory {
-    title 'Frontier — triggers on memory quality'
+  view triggersMemory {
+    title 'Triggers — memory quality'
     description '
       Where the memory loop deliberately stops: admission, ranking, embeddings, and
       self-observation. Every amber node is a row of the spec\'s trigger register (§15.1);
@@ -1304,8 +1304,8 @@ views {
       collector, distill, renderer, noveltyGate, scoring, embedding, diagnostics
   }
 
-  view frontierScale {
-    title 'Frontier — triggers on scale and distribution'
+  view triggersScale {
+    title 'Triggers — scale and distribution'
     description '
       Where growth deliberately stops: a second machine, a second user, a second host, a
       second exporter, an external adopter. All ruled in shape, none built — and each one
