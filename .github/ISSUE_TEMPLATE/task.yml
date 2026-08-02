@@ -6,30 +6,22 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Body budget: ≤ 400 tokens.** Over budget means *split*, not smaller font — see
-        `AGENTS.md` → "Issue shape". Durable reasoning (evidence, design forks, superseded
-        approaches) goes to `docs/specs/` or `docs/research/` and is linked from **Context**;
-        history goes in a comment. Reasoning for the whole plan:
-        `docs/research/agentic-issue-template.md`.
-
-        Title: `type(scope): imperative outcome`, ≤ 10 words. The argument belongs in **Outcome**.
+        Prefill only. **The contract is `AGENTS.md` → "Issue shape"** — the body budget, the split
+        rule, and what belongs in the body live there and nowhere else. If this form disagrees with
+        it, it wins and this form is the bug.
 
   - type: input
     id: blocked-by
     attributes:
       label: Blocked by
-      description: >
-        Issue numbers, e.g. `#178`. Also set the native **relationship** field (`blocked by`) —
-        that is the source of truth; this line is the human-readable cue.
+      description: Also set the native relationship field — that is the source of truth.
       placeholder: "#178"
 
   - type: textarea
     id: outcome
     attributes:
       label: Outcome
-      description: >
-        The observable change this ships, declaratively. 1–2 sentences. No implementation steps —
-        over-specified steps get either ignored or followed literally, and both degrade the result.
+      description: Declarative. No implementation steps.
       placeholder: "`git_root` is removed from `NoteRevision['scope']`, so a note carries only its derived `project_slug` and the portable `git_remote`."
     validations:
       required: true
@@ -38,9 +30,7 @@ body:
     id: why
     attributes:
       label: Why
-      description: >
-        The pain or value, in one sentence. Not decoration: it is what keeps the agent's
-        unavoidable judgment calls pointed the right way where the constraints under-determine.
+      description: One line.
     validations:
       required: true
 
@@ -48,12 +38,7 @@ body:
     id: touchpoints
     attributes:
       label: Touchpoints
-      description: >
-        Expected files, `path:line` where known. Expected, not binding. Two jobs: kill the opening
-        repo-wide search, and act as the disjointness key for parallel dispatch — sibling tasks must
-        not overlap, or one is `blocked by` the other. Watch the shared-file magnets (`src/cli.ts`,
-        `schema/*.md`, the spec, this file). "Unknown — investigation first" is legitimate, and means
-        this is a spike that needs its own success signal.
+      description: Expected files, `path:line` where known.
       placeholder: |
         - `src/note.ts:43`
         - `src/distill/llmDistiller.ts:145`
@@ -65,24 +50,18 @@ body:
     id: constraints
     attributes:
       label: Constraints
-      description: >
-        ≤ 5 bullets. Invariants that must hold, settled decisions in play **by pointer**
-        (`spec §4`, `docs/specs/structural-invariants.md` §2), and the deliberate non-goals. Links,
-        not restated argument. Negative constraints are cheap and prevent a whole class of
-        over-reach.
+      description: By pointer.
       placeholder: |
         - Event-side `git_root` (`src/hook/resource.ts:23`) is out of scope and must keep working.
-        - Structural invariants hold by construction — don't route around them.
+        - spec §4 — structural invariants hold by construction.
 
   - type: textarea
     id: success-signals
     attributes:
       label: Success signals
-      description: >
-        ≤ 5, runnable, checkable with no human judgment. At least one must **fail on `main`** before
-        the work — assert that, don't just assert green after. More than 5 means split.
+      description: Runnable, no human judgment.
       value: |
-        -
+        - (one that fails on `main` before the work)
         - `npm run build && npm test && npm run lint` green.
     validations:
       required: true
@@ -91,6 +70,4 @@ body:
     id: context
     attributes:
       label: Context
-      description: >
-        Links only — spec §, research doc, prior issue/PR. This is the layer the agent fetches only
-        if the constraints leave a real ambiguity.
+      description: Links only.

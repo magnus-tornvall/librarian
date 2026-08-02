@@ -237,9 +237,16 @@ schedulable, and neither shares a touchpoint with the fix — so all three can r
 Ordered, each step small enough to be its own issue. Steps 1–2 are parallel-safe (disjoint
 touchpoints); 3 depends on 1; 4 depends on 1.
 
-1. **`.github/ISSUE_TEMPLATE/task.yml` + `story.yml`** — forms encoding §5's field set and order, with
-   the budget stated in each field's description and the mandatory fields marked required. Epics stay
-   template-free (label + sub-issues; there is nothing for an agent to execute).
+1. **`.github/ISSUE_TEMPLATE/task.yml` + `story.yml`** — forms carrying §5's field set and order, with
+   the mandatory fields marked required. Epics stay template-free (label + sub-issues; there is
+   nothing for an agent to execute).
+   **Amended 2026-08-01, as built:** the first cut stated the budget and split rules in each field's
+   description. That is a second copy of normative text with nothing to reconcile it — the drift
+   risk is real, not theoretical, and it also plants tracker-specific files as an apparent source of
+   truth. Corrected: the forms are **prefill only** and state no rules; `AGENTS.md` → "Issue shape"
+   is the sole contract, and it is now split from a "Tracker bindings" subsection so the portable
+   part and the GitHub mechanisms are separable. The forms carry one header line saying the contract
+   wins if they disagree.
    *Success signal:* opening a new issue from the web UI yields the field set in order; a
    `github/issue-parser` run over the rendered body produces keys `outcome`, `why`, `touchpoints`,
    `constraints`, `success_signals`, `context`.
@@ -262,7 +269,12 @@ touchpoints); 3 depends on 1; 4 depends on 1.
 ## 11. Why-nots
 
 - **A YAML form alone.** Forms don't constrain API-created issues, and that is the dominant path here.
-  Hence step 3; the form is documentation-with-teeth for the human path, not the enforcement.
+  Hence step 3; the form is a prefill for the human path, not the enforcement.
+- **Stating the rules inside the form** (the first cut of step 1). Two copies of the budget, the split
+  rule and the disjointness rule, in two files, with nothing reconciling them — and the copy lives in
+  a tracker-specific directory, which quietly makes `.github/` look like the source of truth for
+  procedure. The contract belongs in `AGENTS.md`, which is not a GitHub artifact and travels between
+  repos on its own.
 - **One template for all three types.** An epic has no touchpoints and no success signals of its own;
   forcing the fields would produce filler, and filler is what the agent then has to read past.
 - **`<details>` blocks to "hide" the deep analysis.** Zero token saving for an agent; it hides the

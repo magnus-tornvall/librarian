@@ -52,27 +52,24 @@ Three homes, no fourth. Never invent a tracking file.
   invariants, why-not, the amendment log (why reasoning *changed*), and
   cross-cutting sequencing rationale. **No status lines. No `→ issue #NN` mapping
   ledger.** Those are friction and they move out.
-- **GitHub issues** — every unit of work. Typed by label (`epic` / `story` /
-  `task`), nested via native **sub-issues** (Epic → Story → Task), linked via
-  **blocked-by** — set the native GitHub issue **relationship** field (`blocked by`),
-  and mirror it with a `**Blocked by #N**` line in the body as a human-readable
-  cue. Holds status, dependencies, per-unit why/why-not, and the agent
-  instructions. This is what agents read to act; the spec is what you read to
-  understand the mind. Shape below.
+- **GitHub issues** — every unit of work. Holds status, dependencies, per-unit
+  why/why-not, and the agent instructions. This is what agents read to act; the
+  spec is what you read to understand the mind. Shape and bindings below.
 - **GitHub Project v2** — the view engine over the issues (roadmap = helicopter,
   board/table grouped by epic = mid, open issue = zoom). Auto-add workflow, so new
   issues appear with no bookkeeping. Read-only lens — never hand-edited.
 
 ### Issue shape
 
-Field order (mirrors `.github/ISSUE_TEMPLATE/{task,story}.yml`; issues created through the
-API follow the same contract): **Outcome** — the observable change this ships, declarative,
-no implementation steps · **Why** — the pain/value in one line (no user-story persona; the
-user never varies) · **Touchpoints** — expected files, `path:line` where known ·
-**Constraints** ≤5 — invariants and settled decisions *by pointer*, plus the non-goals ·
-**Success signals** ≤5 — runnable, checkable with no human judgment, ≥1 failing on `main`
-first (no fuzzy "works well"; if you can't name what to check, the issue isn't ready) ·
-**Context** — links only.
+Tracker-independent — nothing here depends on GitHub. The mechanisms that do are in
+"Tracker bindings" below.
+
+Field order: **Outcome** — the observable change this ships, declarative, no implementation
+steps · **Why** — the pain/value in one line (no user-story persona; the user never varies) ·
+**Touchpoints** — expected files, `path:line` where known · **Constraints** ≤5 — invariants
+and settled decisions *by pointer*, plus the non-goals · **Success signals** ≤5 — runnable,
+checkable with no human judgment, ≥1 failing on `main` first (no fuzzy "works well"; if you
+can't name what to check, the issue isn't ready) · **Context** — links only.
 
 Body budget **≤400 tokens** for a task, **≤700** for a story: the body is the execution
 contract, not the reasoning. Evidence, design forks and superseded approaches go to
@@ -82,9 +79,26 @@ same bytes on demand and doesn't go stale.
 
 Split when touchpoints span more than ~3 files or cross a pipeline-stage seam, when there are
 more than 5 success signals, or when a schema change and its consumers both move (schema
-first, consumers `blocked by` it). Sibling touchpoint sets must be **disjoint** — overlap is a
-`blocked by` edge, and that disjointness is what lets siblings run in parallel. Full
-reasoning: `docs/research/agentic-issue-template.md`.
+first, consumers blocked by it). Sibling touchpoint sets must be **disjoint** — overlap is a
+blocking dependency, and that disjointness is what lets siblings run in parallel. A parent may
+carry framing, but **a child must be executable without reading its parent** — anything
+load-bearing is repeated in the child or linked from it. Full reasoning:
+`docs/research/agentic-issue-template.md`.
+
+### Tracker bindings (GitHub)
+
+The shape above is the contract; this is only how it gets expressed here. Rewrite these five
+lines to move the procedure to another tracker.
+
+- **Type** → label: `epic` / `story` / `task`.
+- **Hierarchy** (Epic → Story → Task) → native **sub-issues**.
+- **Blocking dependency** → the native issue **relationship** field (`blocked by`), mirrored
+  with a `**Blocked by #N**` body line as a human-readable cue. The relationship field is the
+  source of truth.
+- **View** → GitHub Project v2 (above). Read-only lens, never hand-edited.
+- **Authoring aid** → `.github/ISSUE_TEMPLATE/{task,story}.yml`. **Prefill only** — the forms
+  state no rules, and they constrain nothing created through the API, which is the dominant
+  authoring path. If a form and this section disagree, this section wins and the form is the bug.
 
 ## The routing test (what to touch when we discuss things)
 
@@ -98,7 +112,7 @@ can't tell you:
 
 | When we decide…                      | Do this (not what the rule already implies)                            |
 |--------------------------------------|------------------------------------------------------------------------|
-| A dependency emerges                 | Set the native GitHub **relationship** field (`blocked by`) on the issue; mirror with a `**Blocked by #N**` body line. Not prose-only. |
+| A dependency emerges                 | Record it as a blocking dependency per "Tracker bindings", not as prose. Then check the sibling touchpoint sets. |
 | A decision is revoked/superseded     | Spec: mark superseded, keep old text + why. Then reconcile affected issues. |
 | A decision is challenged, unresolved | Spec open-items as a live question. No issue until it becomes work.    |
 
