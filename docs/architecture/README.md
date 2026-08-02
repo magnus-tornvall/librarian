@@ -27,8 +27,9 @@ resolves on a machine that has run `arch:single`, which is the V1 trade: no 4.7 
 committed on every diagram change. Publishing it (GitHub Pages) is the natural V2 and
 turns the same fragment into a URL anyone can open.
 
-**View ids are an API.** Renaming a view silently breaks every issue pointing at it.
-Add freely; rename never.
+Which links are legal, and in which direction, is in
+[`../conventions.md`](../conventions.md) — the short version is that **view ids are an
+API** (add freely, rename never) and a view never links back at an issue.
 
 | Level | View id | What it answers |
 |---|---|---|
@@ -50,54 +51,26 @@ Add freely; rename never.
 | triggers | `triggersScale` | What would change with scale or distribution (T-03 – T-05, T-10 – T-15, T-18, T-19) |
 | flow | `pushFlow` `pullFlow` `distillFlow` | Step-by-step, numbered |
 
-## The scope rule
+## The three annotation kinds, and how they're drawn
 
-This model carries **only facts that outlive the unit they describe**: structure,
-settled decisions, structural invariants, and the named triggers that gate deferred
-work. It carries **no status** — no "in progress", no issue state, no roadmap
-position. Status lives on GitHub issues and the Project board (AGENTS.md, "three
-homes, no fourth"). This file is a lens on
-[`../specs/librarian-design-consolidated.md`](../specs/librarian-design-consolidated.md),
-not a fourth tracking home.
+The model is a lens: it holds structure, and it holds no status. What each annotation
+*means* — and the register-first rule — is in [`../conventions.md`](../conventions.md);
+what differs here is how they are drawn, because the shapes carry the distinction.
 
-## Events, decisions, triggers
-
-Three annotations that are easy to conflate and shouldn't be:
-
-- **`event`** (green, queue) — part of a *flow*. Something happens and the pipeline
-  runs: session start, user prompt, tool use, session end, a model deciding to search.
-  Events fire every session; they live in the value-path and flow views.
-- **`decision`** (grey, document) — settled reasoning pinned to a place in the
-  architecture: *why it is shaped this way*. `D-01` … `D-16`.
-- **`trigger`** (amber, document) — the same kind of annotation in the other tense:
-  *what would enable, change, or block this*, if a named condition came true. `T-01` …
-  `T-19`. A trigger fires once in the project's life, if ever.
+| Kind | Drawn as | Means | Defined in |
+|---|---|---|---|
+| `event` | green queue | Part of a *flow*: something happens and the pipeline runs. Fires every session, so it lives in the value-path and flow views | this model |
+| `decision` | grey document | Settled reasoning pinned to a place: *why it is shaped this way* | [`../specs/decisions.md`](../specs/decisions.md), `D-01` … `D-16` |
+| `trigger` | amber document | The same annotation in the other tense: *what would enable, change, or block this*. Fires once in the project's life, if ever | [`../specs/triggers.md`](../specs/triggers.md), `T-01` … `T-19` |
 
 Decisions and triggers share a shape deliberately — they differ in state, not category.
-An event is neither.
+An event is neither, and giving it a queue rather than a document is the whole point:
+an event is part of the machine, an annotation is a note about the machine.
 
-Neither annotation is *defined* here. Each mirrors an entry in a spec register and links
-back to it:
-
-| Kind | Register | Ids |
-|---|---|---|
-| decision | [`../specs/decisions.md`](../specs/decisions.md) | D-01 … D-16 |
-| trigger | [`../specs/triggers.md`](../specs/triggers.md) | T-01 … T-19 |
-
-**Add the entry to the register first, then mirror it here.** So an issue can say
-*"blocked by T-10"* and the spec, the model, and the issue all mean the same thing —
-and `triggersScale` shows exactly which components T-10 touches.
-
-## References run one way
-
-```
-issue  →  view  →  spec entry (D-nn / T-nn)  →  reasoning
-```
-
-An issue links a view to say where its work lands. A view links a register entry. **A
-view never links an issue**, and neither does the spec: an issue is a unit of work that
-closes, a view and a register entry outlive it, and a link from the durable thing to the
-disposable one rots by construction.
+Every decision and trigger element carries a `link` back to its register entry, clickable
+in the generated site. So an issue can say *"blocked by T-10"* and the spec, the model,
+and the issue all mean the same thing — and `triggersScale` shows exactly which
+components T-10 touches.
 
 ## Keeping it honest
 
