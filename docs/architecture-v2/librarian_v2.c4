@@ -110,17 +110,19 @@ model {
         without that judgment — this is the one door into memory.
       '
 
-      draft = path 'Draft a note' {
+      enough = path 'Enough happened?' {
         description '
-          Reads what happened since it last looked and proposes one note: what was
-          learned, and what it was learned from.
+          A free, local look at the session before anything is paid for: no sign that
+          anything was learned, nothing written, barely a conversation — then there is
+          nothing to draft, and the model is never called.
         '
       }
 
-      worth = path 'Worth keeping?' {
+      draft = path 'Draft a note, or decline' {
         description '
-          The cheapest gate, and the first: most sessions teach nothing durable, and
-          saying so out loud is free — it happens inside the call already being paid for.
+          One call, and it can come back either way: here is the note, or nothing here
+          was worth remembering. Judging worth inside the call already being paid for is
+          what makes the cheapest gate free.
         '
       }
 
@@ -172,12 +174,12 @@ model {
   hosts -> recall 'search, read-only'
   human -> librarian 'the CLI when something needs fixing'
 
-  capture -> draft 'what happened, already redacted'
+  capture -> enough 'what happened, already redacted'
   distill -> export 'notes'
 
-  draft -> models 'proposes a note'
-  draft -> worth 'a candidate'
-  worth -> novelty 'yes — worth keeping'
+  enough -> draft 'enough signal to be worth a call'
+  draft -> models 'one call: a note, or nothing here'
+  draft -> novelty 'a note it says is worth keeping'
   novelty -> faithful 'new'
   faithful -> models 'is this true to what happened?'
   faithful -> recall 'kept — and now findable'
@@ -233,10 +235,12 @@ views {
   view distillInside of distill {
     title 'Distill — the one door into memory'
     description '
-      Two ways in, and only one of them is negotiable. A proposed note has to pass three
-      questions in increasing order of cost — worth, then new, then true — and failing any
-      of them means it is simply not kept. What you wrote by hand walks straight past all
-      three, because you already made the judgment they exist to make.
+      Two ways in, and only one of them is negotiable. The questions are asked cheapest
+      first: was there any signal at all (free, local), is there a note in it and is that
+      note worth keeping (one call, both answers), is it already known (a search), is it
+      true to what happened (a second call). Any no means it is simply not kept. What you
+      wrote by hand walks past all of them, because you already made the judgment they
+      exist to make.
     '
     autoLayout TopBottom
 

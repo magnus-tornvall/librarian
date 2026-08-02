@@ -13,7 +13,7 @@ npm run arch:single:v2   # → docs/architecture-v2/librarian_v2.html (one self-
 |---|---|---|
 | helicopter | `index` | Who is involved, and what librarian sits between |
 | inside | `librarianInside` | What librarian can do: capture, distill, recall, export |
-| detail | `distillInside` | The two ways a note gets written, and the three gates one of them passes |
+| detail | `distillInside` | The two ways a note gets written, and what a drafted one has to pass |
 
 Clicking an element navigates into its view — automatic for any element a view is declared
 `of`. Capture, Recall, and Export have no view yet, so zoom stops on them; each is one
