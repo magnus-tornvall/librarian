@@ -19,7 +19,10 @@
     "arch": "likec4 validate docs/architecture",
     "arch:dev": "likec4 start docs/architecture",
     "arch:build": "likec4 build -o build/architecture docs/architecture",
-    "arch:single": "likec4 build --output-single-file --use-hash-history -t Librarian -o build/arch-single docs/architecture && cp build/arch-single/index.html docs/architecture/librarian.html"
+    "arch:single": "likec4 build --output-single-file --use-hash-history -t Librarian -o build/arch-single docs/architecture && cp build/arch-single/index.html docs/architecture/librarian.html",
+    "arch:v2": "likec4 validate docs/architecture-v2",
+    "arch:dev:v2": "likec4 start docs/architecture-v2",
+    "arch:single:v2": "likec4 build --output-single-file --use-hash-history -t 'Librarian v2' -o build/arch-single-v2 docs/architecture-v2 && cp build/arch-single-v2/index.html docs/architecture-v2/librarian_v2.html"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

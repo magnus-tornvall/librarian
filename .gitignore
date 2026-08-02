@@ -3,3 +3,4 @@ dist/
 build/
 .opencode/plugins/
 docs/architecture/librarian.html
+docs/architecture-v2/librarian_v2.html

@@ -1,0 +1,248 @@
+/**
+ * Librarian — architecture as code, v2.
+ *
+ * V2 is a NAVIGATION model, not a reference model. The rule that shapes it: one
+ * question per view, and the answer is a picture you can read in ten seconds.
+ * Detail is reached by zooming, never by including.
+ *
+ * Three levels exist today:
+ *
+ *   index            — helicopter. Who is involved, and what librarian sits between.
+ *   librarianInside  — one click down on the binary: what it can do, four boxes.
+ *   distillInside    — one click down on Distill: the two writers and the gate chain.
+ *
+ * Clicking an element navigates into its view — LikeC4 wires that automatically for
+ * any element a view is scoped `of`. Capture, Recall, and Export have no view yet, so
+ * zoom stops on them; each is one `view of <element>` away, added when a question
+ * needs it rather than for symmetry.
+ *
+ * OUTSIDE THINGS COME BACK AS YOU DESCEND. The helicopter view shows who is involved;
+ * `librarianInside` hides all of them, because "which capability" is the only question
+ * there; `distillInside` shows the models and the vault again, because at that depth
+ * what a step calls out to IS the answer. Externals are not clutter or not-clutter in
+ * general — they are relevant at exactly one altitude.
+ *
+ * Deliberately absent (this is what v1 got wrong, not something missing here):
+ * decisions, triggers, events, file paths, retention tags. Those are durable facts and
+ * they live in ../specs/. The model links to them; it does not mirror them.
+ *
+ * VIEW IDS ARE AN API — issues deep-link `librarian_v2.html#/view/<id>/`.
+ * Add freely, rename never.
+ */
+specification {
+
+  element actor {
+    style {
+      shape person
+      color secondary
+    }
+  }
+
+  element system {
+    style {
+      color secondary
+    }
+  }
+
+  // One path through librarian. Not a file, not a module — an answer to "what does
+  // it do". The code behind each one is a zoom level that does not exist yet.
+  element path {
+    style {
+      shape component
+      color primary
+    }
+  }
+
+  element store {
+    style {
+      shape storage
+      color gray
+    }
+  }
+}
+
+model {
+
+  human = actor 'The human' {
+    description '
+      Author, curator, and the only authority that can revise, flag, or retire a note.
+    '
+  }
+
+  agents = system 'Instrumented coding agents' {
+    description '
+      Claude Code and OpenCode. The only surfaces librarian both reads from and writes
+      into — everything else is read-only.
+    '
+  }
+
+  hosts = system 'Any other MCP host' {
+    description '
+      Codex, Cursor, ChatGPT. Read-only, and nothing is built per host: a config entry
+      spawns the same binary.
+    '
+  }
+
+  models = system 'Local model runtime' {
+    description '
+      Completion for distilling, embeddings for search. Swappable, and a fully local
+      setup stays possible.
+    '
+  }
+
+  librarian = system 'Librarian' {
+    description '
+      A personal context layer that gives any AI assistant the right parts of your
+      knowledge, unasked. The product is not memory and not search — it is not having
+      to explain the same thing twice.
+    '
+
+    capture = path 'Capture' {
+      description '
+        Watches the sessions you are already having. Secrets and private spans are
+        stripped before anything is written down.
+      '
+    }
+
+    distill = path 'Distill' {
+      description '
+        Decides what was worth remembering, and writes it as a note. Nothing is kept
+        without that judgment — this is the one door into memory.
+      '
+
+      draft = path 'Draft a note' {
+        description '
+          Reads what happened since it last looked and proposes one note: what was
+          learned, and what it was learned from.
+        '
+      }
+
+      worth = path 'Worth keeping?' {
+        description '
+          The cheapest gate, and the first: most sessions teach nothing durable, and
+          saying so out loud is free — it happens inside the call already being paid for.
+        '
+      }
+
+      novelty = path 'Already known?' {
+        description '
+          A search against what is already remembered. Cheap check before an expensive
+          one: never pay for a second opinion on a note that is a duplicate.
+        '
+      }
+
+      faithful = path 'True to what happened?' {
+        description '
+          A second opinion that can only veto, never edit — a checker allowed to fix a
+          note would be a second unchecked writer.
+        '
+      }
+
+      handwritten = path 'Take it verbatim' {
+        description '
+          What you wrote by hand skips every gate: you already judged it. Your words are
+          kept exactly as you wrote them.
+        '
+      }
+    }
+
+    recall = path 'Recall' {
+      description '
+        Brings the few notes that matter into whatever you are working in, without being
+        asked for them.
+      '
+    }
+
+    export = path 'Export' {
+      description '
+        Publishes everything as Markdown, so the knowledge stays readable with librarian
+        uninstalled.
+      '
+    }
+  }
+
+  vault = store 'Obsidian vault' {
+    description 'Shared with the human, and never the canonical copy.'
+  }
+
+  // Level 1 edges are derived from these — LikeC4 rolls child relations up to the parent.
+
+  agents -> capture 'session activity'
+  recall -> agents 'notes, spliced in unasked'
+  hosts -> recall 'search, read-only'
+  human -> librarian 'the CLI when something needs fixing'
+
+  capture -> draft 'what happened, already redacted'
+  distill -> export 'notes'
+
+  draft -> models 'proposes a note'
+  draft -> worth 'a candidate'
+  worth -> novelty 'yes — worth keeping'
+  novelty -> faithful 'new'
+  faithful -> models 'is this true to what happened?'
+  faithful -> recall 'kept — and now findable'
+  handwritten -> recall 'kept as written'
+
+  recall -> models 'embed the query'
+
+  export -> vault 'generated notes'
+  human -> vault 'writes notes by hand'
+  vault -> handwritten 'markdown you wrote'
+}
+
+views {
+
+  view index {
+    title 'Librarian — context'
+    description '
+      Start here, then pick where to look. Librarian sits between the tools you already
+      work in and the knowledge you would otherwise re-explain. Click Librarian to go
+      one level in.
+    '
+    autoLayout LeftRight
+
+    include human, agents, hosts, models, librarian, vault
+
+    // Distill and recall both call out; at this altitude that is one arrow, not two.
+    include librarian -> models with {
+      title 'writes notes, embeds queries'
+    }
+  }
+
+  view librarianInside of librarian {
+    title 'Librarian — inside'
+    description '
+      What librarian can do, and nothing else. No stores, no plumbing, and nothing from
+      outside the binary — who calls a capability and what it calls out to only becomes
+      interesting one level further down, so it stays hidden until then. Knowledge goes
+      one way: captured, judged, then handed back or published.
+    '
+    autoLayout TopBottom
+
+    // `include *` is one level only, so Distill's own steps stay behind its box —
+    // and their relations still roll up into the arrows drawn here.
+    include *
+    exclude human, agents, hosts, models, vault
+
+    // Both of Distill's exits land in Recall; at this altitude that is one arrow.
+    include distill -> recall with {
+      title 'notes, now findable'
+    }
+  }
+
+  view distillInside of distill {
+    title 'Distill — the one door into memory'
+    description '
+      Two ways in, and only one of them is negotiable. A proposed note has to pass three
+      questions in increasing order of cost — worth, then new, then true — and failing any
+      of them means it is simply not kept. What you wrote by hand walks straight past all
+      three, because you already made the judgment they exist to make.
+    '
+    autoLayout TopBottom
+
+    include *, capture, recall, models, vault
+
+    // Recall calls the models too; that is recall's business, not this view's.
+    exclude recall -> models
+  }
+}
