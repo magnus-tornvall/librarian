@@ -10,7 +10,12 @@
  *
  * Two kinds of "trigger" appear below, pointing in opposite directions:
  *   runtimeEvent — an event that STARTS a flow (session start, prompt, session end, tool call)
- *   gate         — a named condition the design WAITS FOR before building something (§15)
+ *   gate         — a named condition the design WAITS FOR before building something
+ *
+ * Gates are not defined here. Each one mirrors a row of the spec's trigger register
+ * (§15.1) and carries that row's durable id (T-01 … T-19) in its title, so an issue,
+ * the spec, and this model can all say "T-10" and mean the same thing. Add a trigger
+ * to the register first, then mirror it here — never the other way round.
  *
  * Components are named after the code that implements them, so drift is checkable:
  * every `technology` string is a real path under src/.
@@ -732,40 +737,88 @@ model {
   dSingleExecutable -[constrains]-> cli 'SEA, not npm i -g'
   dOneBin -[constrains]-> wiring 'thin plugins'
   dLatestWins -[constrains]-> indexer 'validity close by timestamp'
+  // ─── The frontier: where we are waiting for a trigger ────────────────────
+  //
+  // One gate per row of the spec's trigger register (§15.1). The id in the title
+  // IS the register id: an issue can say "blocked by T-10" and this model, the
+  // spec, and the issue all mean the same thing. Ids are durable — a trigger
+  // outlives whatever work it eventually unlocks — so never renumber them.
 
-  // ─── The frontier: where we are waiting for a trigger (§15) ──────────────
-
-  gNonAgentSource = gate 'Waiting: first non-agent source' {
+  gNonAgentSource = gate 'T-01 · first non-agent source' {
     #waiting
     description '
       Unlocks the ContentEvent shape and per-origin distiller profiles — the integration
-      contract for non-agent sources. The rule is settled; the mechanism is deferred until
-      one concrete source exists. Mode-system adoption shares this trigger: modes earn
-      their keep when a genuinely different context arrives (an email should not be
-      distilled with a coding vocabulary).
+      contract for non-agent sources. The rule is settled; the mechanism waits until one
+      concrete source exists.
     '
+    metadata {
+      trigger 'T-01'
+      spec '§5 deleted/deferred · §12 item 11'
+    }
   }
 
-  gSecondProvider = gate 'Waiting: first path proves out' {
+  gDifferentContext = gate 'T-02 · a context a coding vocabulary would distil badly' {
     #waiting
     description '
-      Unlocks a second inference provider and the SQLite-mirror exporter. The mirror is
-      also the trigger for extracting an Exporter interface — shape it from the working
-      exportNoteToVault signature, not from imagination.
+      Unlocks reconsidering the mode system. Librarian already has both halves
+      automatically — note types are the observation vocabulary, worth criteria are the
+      extraction prompt — and the missing piece is a user-declared switch, which
+      contradicts the automatic goal. An email source is the case that changes that.
     '
+    metadata {
+      trigger 'T-02'
+      spec '§5'
+    }
   }
 
-  gDistractors = gate 'Waiting: negative fixtures show distractors' {
+  gFirstPathProves = gate 'T-03 · the first inference path proves out' {
+    #waiting
+    description 'Unlocks a second inference provider and the SQLite-mirror exporter (roadmap item 10).'
+    metadata {
+      trigger 'T-03'
+      spec '§12'
+    }
+  }
+
+  gSqliteMirror = gate 'T-04 · the SQLite mirror lands' {
     #waiting
     description '
-      Unlocks a re-ranking pass — demoted behind hybrid, reversing the earlier ordering: a
-      cross-encoder costs an inference call in the hot path and is slower per query than
-      one embedding, so hybrid is the cheaper first response and re-ranking is the
-      escalation. Cheapest intervention first; fixtures decide.
+      Unlocks extracting an Exporter interface — shaped from the working
+      exportNoteToVault signature, not from imagination. Two implementations, then abstract.
     '
+    metadata {
+      trigger 'T-04'
+      spec '§15'
+    }
   }
 
-  gEndpointFriction = gate 'Waiting: endpoint friction proves real' {
+  gExternalContributor = gate 'T-05 · first external contributor or first publish' {
+    #waiting
+    description '
+      Unlocks the contracts barrel (if it is not in the barrel, it is internal),
+      docs/extending.md, and conformance helpers — plus the package.json metadata and
+      directory layout deliberately deferred at repo bootstrap.
+    '
+    metadata {
+      trigger 'T-05'
+      spec '§14 · §15'
+    }
+  }
+
+  gDistractors = gate 'T-06 · negative fixtures show distractors' {
+    #waiting
+    description '
+      Unlocks a re-ranking pass — the escalation, not the first response. A cross-encoder
+      costs an inference call in the hot path and is slower per query than one embedding,
+      so hybrid gets the first attempt and fixtures decide whether more is needed.
+    '
+    metadata {
+      trigger 'T-06'
+      spec '§5 · §15'
+    }
+  }
+
+  gEndpointFriction = gate 'T-07 · endpoint friction proves real' {
     #waiting
     description '
       Unlocks an in-process ONNX embedding provider — a user who will not run Ollama wants
@@ -773,91 +826,203 @@ model {
       package that is currently daemon-free and dependency-light. Same seam, so flipping
       the default later costs nothing in design.
     '
+    metadata {
+      trigger 'T-07'
+      spec '§15'
+    }
   }
 
-  gStatsDuplicates = gate 'Waiting: stats shows near-TTL duplicates' {
+  gStatsDuplicates = gate 'T-08 · stats shows near-TTL duplicates' {
     #waiting
     description '
       Unlocks corroboration-extends-TTL (parked, not closed): the complexity — new record
       kind, session-id plumbing, self-citation join, indexer column, TTL seam change —
-      outweighs the value until measured. First response would be the lazy variant, not
-      the original design.
+      outweighs the value until measured. First response is the lazy variant.
     '
+    metadata {
+      trigger 'T-08'
+      spec '§5'
+    }
   }
 
-  gSecondMachine = gate 'Waiting: second machine' {
+  gOutcomeSignal = gate 'T-09 · a note-granular outcome signal exists' {
+    #waiting
+    description '
+      The only thing that reopens outcome-linked note worth (closed). Today no flowing,
+      note-granular signal exists to calibrate against: session-level pushback cannot name
+      which note was wrong, and ranking derived from deletable diagnostics would make
+      recall depend on telemetry retention.
+    '
+    metadata {
+      trigger 'T-09'
+      spec '§5'
+    }
+  }
+
+  gSecondMachine = gate 'T-10 · a second machine' {
     #waiting
     description '
       Unlocks per-machine log segments and created_by_machine, together with the real
       design work: two machines revising the same deterministic-ID note produce revisions
       sharing a previous_revision_id, and latest-wins-by-ULID is silent last-write-wins.
-      Curated-vault sync collision likely fires first — people already sync vaults.
     '
+    metadata {
+      trigger 'T-10'
+      spec '§15'
+    }
   }
 
-  gSecondUser = gate 'Waiting: second user' {
+  gVaultCollision = gate 'T-11 · two importers ingest the same curated file' {
+    #waiting
+    description '
+      Likely fires before T-10 — people already sync Obsidian vaults over iCloud and
+      Syncthing, so the curated-file collision arrives before a second event-log machine.
+    '
+    metadata {
+      trigger 'T-11'
+      spec '§15'
+    }
+  }
+
+  gSecondUser = gate 'T-12 · a second user' {
     #waiting
     description '
       Unlocks team memory, whose shape is already ruled: visibility is structural, not a
       field — a separate shared store synced like a git remote, never a per-record
-      visibility flag a forgotten filter could leak past. Trust becomes per-peer recall
-      weights.
+      visibility flag a forgotten filter could leak past. Trust becomes per-peer weights.
     '
+    metadata {
+      trigger 'T-12'
+      spec '§15'
+    }
   }
 
-  gSecretFound = gate 'Waiting: first secret found in the log' {
+  gSecondInProcessHost = gate 'T-13 · a second host needing in-process code' {
     #waiting
     description '
-      Unlocks `purge-event-range --rewrite-segment`. Append-only stays the default
+      Unlocks packaging the plugin file. Until a real Cursor/Zed/Aider plugin exists there
+      is one call site, and versioning one dependency-free file adds a CI job, tag-
+      namespace pollution, and a plugin↔binary skew that cannot exist today.
+    '
+    metadata {
+      trigger 'T-13'
+      spec '§14'
+    }
+  }
+
+  gExternalAdopter = gate 'T-14 · first external adopter' {
+    #waiting
+    description '
+      Unlocks cross-platform distribution: the per-OS/arch matrix, a public download
+      channel, code-signing and notarization, and a signature-verified release feed.
+    '
+    metadata {
+      trigger 'T-14'
+      spec '§15'
+    }
+  }
+
+  gSecretFound = gate 'T-15 · a secret found in the event log' {
+    #waiting
+    description '
+      Unlocks purge-event-range --rewrite-segment. Append-only stays the default
       invariant, but a false-negative redaction needs an honest recovery path: rare, loud,
       deliberately breaks replay purity, audited outside memory.
     '
+    metadata {
+      trigger 'T-15'
+      spec '§15'
+    }
   }
 
-  gRendererChange = gate 'Waiting: first renderer change after real traces' {
+  gRendererChange = gate 'T-16 · first renderer change after real traces' {
     #waiting
     description '
       Unlocks storing the rendered block (or a renderer version + hash) in the injection
       trace. Today a renderer change makes old traces unreproducible; diagnostics are
       deletable, so size is not the objection.
     '
+    metadata {
+      trigger 'T-16'
+      spec '§15'
+    }
   }
 
-  gSecondInProcessHost = gate 'Waiting: second host needing in-process code' {
+  gTracingBackend = gate 'T-17 · wanting spans in an external backend' {
     #waiting
     description '
-      Unlocks packaging the plugin file. Until a real Cursor/Zed/Aider plugin exists there
-      is one call site, and versioning one dependency-free file adds a CI job, tag-
-      namespace pollution, and a plugin↔binary skew that cannot exist today. Two call
-      sites, then generalise.
+      Unlocks OTLP export and timing spans. The diagnostics log is already the API and a
+      converter is a page of code, which is exactly why this waits: timings are
+      retrofittable, so logging them now would be cost with no reader.
     '
+    metadata {
+      trigger 'T-17'
+      spec '§5 · §15'
+    }
   }
 
-  gExternalAdopter = gate 'Waiting: first external adopter' {
+  gDiskSize = gate 'T-18 · size on disk matters' {
     #waiting
     description '
-      Unlocks cross-platform distribution: the per-OS/arch matrix, a public download
-      channel, code-signing and notarization, and a signature-verified release feed for
-      self-update.
+      Unlocks log compaction and gzip of closed segments. Defined already: consumers read
+      canonical logs, and compaction must preserve replay semantics — so it changes
+      nothing for consumers when it lands.
     '
+    metadata {
+      trigger 'T-18'
+      spec '§15'
+    }
+  }
+
+  gObsidianEditing = gate 'T-19 · demand for editing in Obsidian specifically' {
+    #waiting
+    description '
+      Even then the shape is "vault edit detected → prompt to convert into a human
+      revision", never silent region merging: the vault file is a view, and editing a view
+      is never durable.
+    '
+    metadata {
+      trigger 'T-19'
+      spec '§5'
+    }
   }
 
   gNonAgentSource -[gates]-> collector 'ContentEvent shape'
   gNonAgentSource -[gates]-> distill 'per-origin profiles'
-  gSecondProvider -[gates]-> inference 'second provider'
-  gSecondProvider -[gates]-> exporter 'SQLite mirror + Exporter interface'
+  gDifferentContext -[gates]-> renderer 'mode-selected extraction prompt'
+  gFirstPathProves -[gates]-> inference 'second provider'
+  gFirstPathProves -[gates]-> exporter 'SQLite mirror'
+  gSqliteMirror -[gates]-> exporter 'Exporter interface'
+  gExternalContributor -[gates]-> cli 'contracts barrel, extending docs'
   gDistractors -[gates]-> scoring 're-ranking pass'
   gEndpointFriction -[gates]-> embedding 'in-process ONNX provider'
   gStatsDuplicates -[gates]-> noveltyGate 'corroboration extends TTL'
+  gOutcomeSignal -[gates]-> scoring 'outcome-linked note worth'
   gSecondMachine -[gates]-> noteLog 'per-machine segments'
-  gSecondMachine -[gates]-> curated 'sync collision rule'
+  gVaultCollision -[gates]-> curated 'sync collision rule'
   gSecondUser -[gates]-> recall 'peer stores + per-peer weights'
-  gSecretFound -[gates]-> eventLog 'purge-event-range'
-  gRendererChange -[gates]-> diagnostics 'rendered block in the trace'
   gSecondInProcessHost -[gates]-> ocPlugin 'plugin as a package'
   gExternalAdopter -[gates]-> cli 'per-OS/arch matrix, signed feed'
+  gSecretFound -[gates]-> eventLog 'purge-event-range'
+  gRendererChange -[gates]-> diagnostics 'rendered block in the trace'
+  gTracingBackend -[gates]-> diagnostics 'OTLP export, timing spans'
+  gDiskSize -[gates]-> eventLog 'compaction, gzip closed segments'
+  gObsidianEditing -[gates]-> exporter 'vault-edit → human revision'
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// VIEW IDS ARE AN API.
+//
+// Every view below is named, and that name is its id: it is the deep link an
+// issue points at (`docs/architecture/librarian.html#/view/<id>/`, see the
+// README). Renaming a view silently breaks every issue that references it, so
+// treat these ids the way you treat a public function name — add freely, rename
+// never. Three levels, matching AGENTS.md's helicopter / mid / zoom framing:
+//
+//   helicopter — index, map
+//   mid        — writePath, readPath, valueStream, storage, decisions*, frontier*
+//   zoom       — zoom* (scoped to one component), *Flow (step-by-step)
+// ─────────────────────────────────────────────────────────────────────────────
 views {
 
   view index {
@@ -877,19 +1042,24 @@ views {
     }
   }
 
-  view components of librarian {
-    title 'Librarian — components'
+  view map of librarian {
+    title 'Librarian — map'
     description '
-      Every component, named after the code that implements it. Flow:
-      collector → distill (narrow waist) → note log → indexer → recall → render → export.
+      One level deep: every part of the system and nothing else. This is the navigation
+      hub — pick a component here and open its zoom view. Deliberately excludes externals,
+      sub-components, decisions, and gates; the wall it replaces was three levels plus
+      every annotation in one picture.
     '
     autoLayout TopBottom
 
-    include
-      *,
-      human, codingAgent, mcpHost, inference, embedder,
-      eventLog, noteLog, notesDb, diagLog, vault, config
+    include *
+    exclude element.kind = decision
+    exclude element.kind = gate
+    exclude element.kind = runtimeEvent
+    exclude human, codingAgent, mcpHost, inference, embedder
   }
+
+  // ── Mid: the paths ────────────────────────────────────────────────────────
 
   view writePath {
     title 'Write path — capture to memory'
@@ -934,18 +1104,6 @@ views {
     }
   }
 
-  view admission of distill {
-    title 'Admission gates'
-    description '
-      Cheap gate before expensive gate: worth (inside the call already paid for) → novelty
-      (a millisecond BM25 query) → faithfulness (a second LLM call). Red edges are the
-      rejections — the interesting half, and each one advances the cursor.
-    '
-    autoLayout TopBottom
-
-    include *, eventLog, noteLog, notesDb, diagLog, inference, curated
-  }
-
   view hotPath {
     title 'Hot path'
     description '
@@ -959,7 +1117,7 @@ views {
       notesDb, config, embedding
   }
 
-  view storageClasses {
+  view storage {
     title 'Storage classes'
     description '
       Three retention stories, enforced by directory placement rather than by naming
@@ -969,9 +1127,59 @@ views {
     autoLayout LeftRight
 
     include
-      eventLog, noteLog, notesDb, diagLog, vault, generated, curated, config,
+      eventLog, noteLog, notesDb, diagLog, config, vault, generated, curated,
       collector, distill, indexer, exporter, diagnostics, recall
   }
+
+  // ── Zoom: one component at a time ─────────────────────────────────────────
+
+  view zoomWiring of wiring {
+    title 'Zoom — host wiring'
+    description '
+      Three host classes, three integration physics. Claude Code ships a declarative
+      manifest; OpenCode ships one file because it is the only host that loads JS
+      in-process; every other MCP host builds nothing at all.
+    '
+    autoLayout TopBottom
+
+    include *, codingAgent, mcpHost, cli, mcp, inject, collector
+  }
+
+  view zoomCollector of collector {
+    title 'Zoom — collector'
+    description '
+      normalize → redact → validate → append, with no daemon anywhere in it. Redaction is
+      upstream of durability because an append-only log makes every miss immortal.
+    '
+    autoLayout TopBottom
+
+    include *, hookShell, cli, eventLog, diagLog
+  }
+
+  view admission of distill {
+    title 'Zoom — distiller and its admission gates'
+    description '
+      Cheap gate before expensive gate: worth (inside the call already paid for) → novelty
+      (a millisecond BM25 query) → faithfulness (a second LLM call). Red edges are the
+      rejections — the interesting half, and each one advances the cursor.
+    '
+    autoLayout TopBottom
+
+    include *, eventLog, noteLog, notesDb, diagLog, inference, curated
+  }
+
+  view zoomRecall of recall {
+    title 'Zoom — recall'
+    description '
+      Two channels into RRF, then deterministic scoring, then the two exits: an austere
+      push block or a generous pull response. Read-only throughout.
+    '
+    autoLayout TopBottom
+
+    include *, notesDb, embedding, config, diagLog, mcp, hookShell
+  }
+
+  // ── Decisions and constraints ─────────────────────────────────────────────
 
   view decisionsWrite {
     title 'Decisions — the write side'
@@ -1021,21 +1229,40 @@ views {
       mcpHost, codingAgent, config
   }
 
-  view frontier {
-    title 'Frontier — where we are waiting for a trigger'
+  // ── The frontier, split so each half stays readable ───────────────────────
+
+  view frontierMemory {
+    title 'Frontier — triggers on memory quality'
     description '
-      Deliberate stopping points, not gaps. Each amber node is a named condition from the
-      spec\'s open items; the edge says what fires when it does. Nothing here carries
-      status — that lives on GitHub issues.
+      Where the memory loop deliberately stops: admission, ranking, embeddings, and
+      self-observation. Every amber node is a row of the spec\'s trigger register (§15.1);
+      the edge says what fires when the condition is met.
     '
     autoLayout LeftRight
 
     include
-      element.kind = gate,
-      collector, distill, noveltyGate, scoring, embedding, recall,
-      exporter, inference, diagnostics, cli, ocPlugin,
-      eventLog, noteLog, curated
+      gNonAgentSource, gDifferentContext, gDistractors, gEndpointFriction,
+      gStatsDuplicates, gOutcomeSignal, gRendererChange, gTracingBackend,
+      collector, distill, renderer, noveltyGate, scoring, embedding, diagnostics
   }
+
+  view frontierScale {
+    title 'Frontier — triggers on scale and distribution'
+    description '
+      Where growth deliberately stops: a second machine, a second user, a second host, a
+      second exporter, an external adopter. All ruled in shape, none built — and each one
+      cheap to start precisely because the shape is already decided.
+    '
+    autoLayout LeftRight
+
+    include
+      gFirstPathProves, gSqliteMirror, gExternalContributor, gSecondMachine,
+      gVaultCollision, gSecondUser, gSecondInProcessHost, gExternalAdopter,
+      gSecretFound, gDiskSize, gObsidianEditing,
+      cli, ocPlugin, exporter, recall, inference, noteLog, eventLog, curated
+  }
+
+  // ── Flows ─────────────────────────────────────────────────────────────────
 
   dynamic view pushFlow {
     title 'Flow: push (invisible injection)'

@@ -18,7 +18,8 @@
     "lint": "eslint src",
     "arch": "likec4 validate docs/architecture",
     "arch:dev": "likec4 start docs/architecture",
-    "arch:build": "likec4 build -o build/architecture docs/architecture"
+    "arch:build": "likec4 build -o build/architecture docs/architecture",
+    "arch:single": "likec4 build --output-single-file --use-hash-history -t Librarian -o build/arch-single docs/architecture && cp build/arch-single/index.html docs/architecture/librarian.html"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
