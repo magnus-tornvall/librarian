@@ -5,17 +5,18 @@
  * question per view, and the answer is a picture you can read in ten seconds.
  * Detail is reached by zooming, never by including.
  *
- * Four levels exist today:
+ * The views that exist today:
  *
  *   index            — helicopter. Who is involved, and what librarian sits between.
  *   librarianInside  — one click down on the binary: what it can do, four boxes.
+ *   captureInside    — one click down on Capture: one record, then the irreversible strip.
  *   distillInside    — one click down on Distill: the two writers and the gate chain.
  *   recallInside     — one click down on Recall: one engine, two ways of being asked.
+ *   exportInside     — one click down on Export: what leaves, and what it is marked with.
  *
  * Clicking an element navigates into its view — LikeC4 wires that automatically for
- * any element a view is scoped `of`. Capture and Export have no view yet, so zoom stops
- * on them; each is one `view of <element>` away, added when a question needs it rather
- * than for symmetry.
+ * any element a view is scoped `of`. A capability without a view is one
+ * `view of <element>` away, added when a question needs it rather than for symmetry.
  *
  * OUTSIDE THINGS COME BACK AS YOU DESCEND. The helicopter view shows who is involved;
  * `librarianInside` hides all of them, because "which capability" is the only question
@@ -104,6 +105,37 @@ model {
         Watches the sessions you are already having. Secrets and private spans are
         stripped before anything is written down.
       '
+
+      mapped = path 'Whatever the host calls it' {
+        description '
+          Every agent fires its own hook points with its own payload shape. A thin mapper
+          per host turns them into one record — after this point nothing knows, or needs
+          to know, which agent it came from.
+        '
+      }
+
+      redacted = path 'Strip it before it is written' {
+        description '
+          Secrets, the spans you marked private, your home path. This has to happen here
+          and not later: nothing that reaches the log can be taken back out of it, so a
+          miss on this side of the line is permanent.
+        '
+      }
+
+      checked = path 'Is this a real event?' {
+        description '
+          A shape check, and one refusal it will not soften: a record that came out of
+          librarian is never let back in as something that happened. Anything malformed is
+          set aside loudly rather than dropped quietly.
+        '
+      }
+
+      sessionLog = store 'What happened' {
+        description '
+          Appended to, never rewritten — so a note can always be traced back to the
+          session it came from, and a bad judgment can be made again from scratch.
+        '
+      }
     }
 
     distill = path 'Distill' {
@@ -194,24 +226,68 @@ model {
         Publishes everything as Markdown, so the knowledge stays readable with librarian
         uninstalled.
       '
+
+      sinceLast = path 'What is new since last time?' {
+        description '
+          Picks up where the last pass stopped, so a run over an unchanged library writes
+          nothing at all. Publishing has to be something you can do again at any moment
+          without wondering what it will touch.
+        '
+      }
+
+      winner = path 'What is the note now?' {
+        description '
+          A note is the last thing said about it. The current version is what gets
+          published — and a note you retired has its page taken away, because a copy that
+          keeps what you retracted is worse than no copy.
+        '
+      }
+
+      written = path 'Write it where it stays readable' {
+        description '
+          Plain Markdown, and every page says on its face that librarian wrote it. That
+          mark is what keeps the two halves apart: the vault is also where you write by
+          hand, and a generated page must never come back in as something you wrote.
+        '
+      }
     }
   }
 
   vault = store 'Obsidian vault' {
     description 'Shared with the human, and never the canonical copy.'
+
+    // The seam. Two halves, one owner each, and nothing crosses — held by
+    // construction rather than convention (../specs/structural-invariants.md).
+    generated = store 'Librarian wrote this half' {
+      description '
+        Every page says so on its face. That mark is the whole mechanism: it is what lets
+        the other half be read back in without librarian ever re-reading its own output.
+      '
+    }
+
+    curated = store 'You wrote this half' {
+      description '
+        Yours, and export never touches it. Not a rule anyone has to remember — the
+        exporter has no path that reaches here.
+      '
+    }
   }
 
   // Level 1 edges are derived from these — LikeC4 rolls child relations up to the parent.
 
-  agents -> capture 'session activity'
+  agents -> mapped 'session activity'
   agents -> lookup 'whatever it is working on right now'
   unasked -> agents 'notes, spliced in unasked'
   hosts -> lookup 'search, read-only'
   search -> hosts 'results, and room to follow up'
   human -> librarian 'the CLI when something needs fixing'
 
-  capture -> enough 'what happened, already redacted'
-  distill -> export 'notes'
+  distill -> sinceLast 'notes, as they were written'
+
+  mapped -> redacted 'one record, whatever fired it'
+  redacted -> checked 'nothing secret left in it'
+  checked -> sessionLog 'appended, never rewritten'
+  sessionLog -> enough 'what happened, already redacted'
 
   enough -> draft 'enough signal to be worth a call'
   draft -> models 'one call: a note, or nothing here'
@@ -226,9 +302,12 @@ model {
   ranking -> unasked 'the few above the line'
   ranking -> search 'the best matches'
 
-  export -> vault 'generated notes'
-  human -> vault 'writes notes by hand'
-  vault -> handwritten 'markdown you wrote'
+  sinceLast -> winner 'the notes that changed'
+  winner -> written 'the version that survived'
+  winner -> generated 'retired — its page is taken away'
+  written -> generated 'a Markdown page, marked as generated'
+  human -> curated 'writes notes by hand'
+  curated -> handwritten 'markdown you wrote'
 }
 
 views {
@@ -281,6 +360,20 @@ views {
     }
   }
 
+  view captureInside of capture {
+    title 'Capture — nothing is polled, and secrets never land'
+    description '
+      The agents do the noticing: each one fires its own hook points, and a mapper per host
+      is all it takes to make them one record. Then the only irreversible step in librarian
+      — strip the secrets, the private spans, the home path — because what reaches the log
+      stays there. What survives is what happened, appended and never rewritten, so any note
+      can be traced back to it and any judgment can be made again.
+    '
+    autoLayout TopBottom
+
+    include *, agents, distill
+  }
+
   view distillInside of distill {
     title 'Distill — the one door into memory'
     description '
@@ -311,5 +404,25 @@ views {
     autoLayout TopBottom
 
     include *, agents, hosts, models
+  }
+
+  view exportInside of export {
+    title 'Export — the copy that outlives librarian'
+    description '
+      Publishing is something you can do again at any moment: it resumes where it stopped,
+      so an unchanged library writes nothing. What goes out is the note as it stands now,
+      and a note you retired loses its page — a copy that keeps what you retracted is worse
+      than no copy. Then the seam: the vault is shared, so it is halved. Export can only
+      reach its own half, and marks every page it leaves there. What you wrote by hand sits
+      in the other half, which export has no path to at all.
+    '
+    autoLayout TopBottom
+
+    include *, distill, vault, vault.*
+
+    // The curated half is also what the human distiller reads — true, and not this
+    // view's question. Drawn here it reads as export feeding back into distill, which
+    // is the one thing the seam exists to prevent.
+    exclude curated -> distill
   }
 }
