@@ -39,15 +39,15 @@ function normalizeHomePaths(value: unknown): unknown {
   return value;
 }
 
-export function appendEvent(logFilePath: string, event: Record<string, unknown>): void {
+export async function appendEvent(logFilePath: string, event: Record<string, unknown>): Promise<void> {
   const normalized = event; // ponytail: normalize is a no-op until instrumentation adapters exist
 
   const redacted = normalizeHomePaths(normalized) as Record<string, unknown>;
   if (typeof redacted.command === 'string') {
-    redacted.command = redact(redacted.command);
+    redacted.command = await redact(redacted.command);
   }
   if (typeof redacted.prompt === 'string') {
-    redacted.prompt = redact(redacted.prompt);
+    redacted.prompt = await redact(redacted.prompt);
   }
   // Command output arrives with no `<private>` markup — nobody tagged it — so the patterns
   // are the only guard it gets, on the same non-retrofittable boundary. `redactOutput` is
@@ -58,7 +58,7 @@ export function appendEvent(logFilePath: string, event: Record<string, unknown>)
     for (const stream of ['stdout', 'stderr'] as const) {
       const text = outcome[stream];
       if (typeof text === 'string') {
-        outcome[stream] = capStream(redactOutput(text));
+        outcome[stream] = capStream(await redactOutput(text));
       }
     }
   }

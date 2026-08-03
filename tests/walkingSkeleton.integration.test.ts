@@ -77,7 +77,7 @@ test('walking skeleton: fixture events → distill → note log → export → i
 
   // 2. Append each event to a temp event log via appendEvent() (015).
   for (const event of fixtureEvents) {
-    appendEvent(t.eventLog, event);
+    await appendEvent(t.eventLog, event);
   }
   assert.ok(fs.existsSync(t.eventLog), 'stage 2 (appendEvent): event log file should exist after appends');
 
