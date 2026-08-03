@@ -5,22 +5,24 @@
  * question per view, and the answer is a picture you can read in ten seconds.
  * Detail is reached by zooming, never by including.
  *
- * Three levels exist today:
+ * Four levels exist today:
  *
  *   index            — helicopter. Who is involved, and what librarian sits between.
  *   librarianInside  — one click down on the binary: what it can do, four boxes.
  *   distillInside    — one click down on Distill: the two writers and the gate chain.
+ *   recallInside     — one click down on Recall: one engine, two ways of being asked.
  *
  * Clicking an element navigates into its view — LikeC4 wires that automatically for
- * any element a view is scoped `of`. Capture, Recall, and Export have no view yet, so
- * zoom stops on them; each is one `view of <element>` away, added when a question
- * needs it rather than for symmetry.
+ * any element a view is scoped `of`. Capture and Export have no view yet, so zoom stops
+ * on them; each is one `view of <element>` away, added when a question needs it rather
+ * than for symmetry.
  *
  * OUTSIDE THINGS COME BACK AS YOU DESCEND. The helicopter view shows who is involved;
  * `librarianInside` hides all of them, because "which capability" is the only question
- * there; `distillInside` shows the models and the vault again, because at that depth
- * what a step calls out to IS the answer. Externals are not clutter or not-clutter in
- * general — they are relevant at exactly one altitude.
+ * there; `distillInside` and `recallInside` show the models, the vault, and the callers
+ * again, because at that depth what a step calls out to — or is called by — IS the
+ * answer. Externals are not clutter or not-clutter in general — they are relevant at
+ * exactly one altitude.
  *
  * Deliberately absent (this is what v1 got wrong, not something missing here):
  * decisions, triggers, events, file paths, retention tags. Those are durable facts and
@@ -153,6 +155,38 @@ model {
         Brings the few notes that matter into whatever you are working in, without being
         asked for them.
       '
+
+      lookup = path 'Two ways of matching' {
+        description '
+          The same question asked twice: which notes use these words, and which notes
+          mean this. Neither way alone is enough — one finds the note you phrased
+          differently, the other finds the note whose exact term you forgot.
+        '
+      }
+
+      ranking = path 'Which few actually matter?' {
+        description '
+          Arithmetic, never a model opinion: yours outranks borrowed, this project
+          outranks the others, recent outranks stale, and a decision never goes stale.
+          Whatever lands under the line is dropped rather than used to fill a slot.
+        '
+      }
+
+      unasked = path 'Hand a few back, unasked' {
+        description '
+          A handful at most, small enough to go unnoticed, and always marked as maybe
+          relevant rather than as instructions. Nothing above the line means nothing is
+          sent: when the guess would be wrong, silence is the better answer.
+        '
+      }
+
+      search = path 'Answer a search' {
+        description '
+          Someone typed the question on purpose, so the answer can afford to be generous:
+          more results, and the follow-ups — read the note, read what it was drawn from —
+          are expected rather than avoided.
+        '
+      }
     }
 
     export = path 'Export' {
@@ -170,8 +204,10 @@ model {
   // Level 1 edges are derived from these — LikeC4 rolls child relations up to the parent.
 
   agents -> capture 'session activity'
-  recall -> agents 'notes, spliced in unasked'
-  hosts -> recall 'search, read-only'
+  agents -> lookup 'whatever it is working on right now'
+  unasked -> agents 'notes, spliced in unasked'
+  hosts -> lookup 'search, read-only'
+  search -> hosts 'results, and room to follow up'
   human -> librarian 'the CLI when something needs fixing'
 
   capture -> enough 'what happened, already redacted'
@@ -185,7 +221,10 @@ model {
   faithful -> recall 'kept — and now findable'
   handwritten -> recall 'kept as written'
 
-  recall -> models 'embed the query'
+  lookup -> models 'embed the question'
+  lookup -> ranking 'everything either way of matching turned up'
+  ranking -> unasked 'the few above the line'
+  ranking -> search 'the best matches'
 
   export -> vault 'generated notes'
   human -> vault 'writes notes by hand'
@@ -209,6 +248,16 @@ views {
     include librarian -> models with {
       title 'writes notes, embeds queries'
     }
+
+    // An agent is read from and written back into; at this altitude the reading is one
+    // arrow, whether librarian is listening or answering.
+    include agents -> librarian with {
+      title 'session activity'
+    }
+
+    // A read-only host asks and is answered — one interaction, so one arrow. The
+    // answer coming back only becomes a thing of its own inside Recall.
+    exclude librarian -> hosts
   }
 
   view librarianInside of librarian {
@@ -248,5 +297,19 @@ views {
 
     // Recall calls the models too; that is recall's business, not this view's.
     exclude recall -> models
+  }
+
+  view recallInside of recall {
+    title 'Recall — one engine, two ways of being asked'
+    description '
+      Nobody asks for the left-hand path and everybody asks for the right-hand one, and
+      that single difference decides how much is allowed back. The middle is shared: match
+      twice, because words and meaning each find notes the other misses, then rank in plain
+      arithmetic and draw a line. Uninvited, only a handful crosses it and an empty answer
+      is a fine answer. Asked outright, the same list can afford to be generous.
+    '
+    autoLayout TopBottom
+
+    include *, agents, hosts, models
   }
 }
