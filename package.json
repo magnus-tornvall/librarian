@@ -18,7 +18,6 @@
     "lint": "eslint src"
   },
   "devDependencies": {
-    "@secretlint/secretlint-rule-aws": "^13.0.4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.0",
     "esbuild": "^0.28.1",

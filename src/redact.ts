@@ -10,15 +10,29 @@ const SECRET_PATTERNS: RegExp[] = [
 
 // Values secretlint's shape-based rules can never cover: this machine's own configured
 // credentials. Checked before any pattern so a value with no recognizable shape (an internal
-// token, a plain password) is still caught by what it IS, not what it looks like. Scoped to
-// credential-named env vars, not every env var — matching on name keeps a long but ordinary
-// value (PATH, npm_config_user_agent) from being flagged as a secret by coincidence.
-const CREDENTIAL_ENV_NAME = /token|api[_-]?key|secret|password|passwd|credential|auth/i;
+// token, a plain password) is still caught by what it IS, not what it looks like. Matched by
+// name SUFFIX, not substring — `AUTH_MODE`, `FIREBASE_AUTH_DOMAIN`, `SSH_AUTH_SOCK` are
+// ordinary config/identity, not a credential, and a substring match on "auth" would destroy
+// them from every future log line, permanently, on this same non-retrofittable boundary.
+const CREDENTIAL_ENV_NAME = /(?:^|_)(?:TOKEN|API[_-]?KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL)$/i;
+// A value that reads as a path or a domain is config/identity, not a secret — redacting it
+// would be the same irreversible loss the suffix match above is trying to avoid.
+const LOOKS_LIKE_PATH_OR_DOMAIN = /^(?:[a-z]+:\/\/|[./~]|[A-Za-z0-9.-]+\.[a-z]{2,})/i;
+const MIN_CREDENTIAL_VALUE_LENGTH = 12;
 
 function knownSecretValues(): string[] {
   return Object.entries(process.env)
-    .filter(([name, value]) => CREDENTIAL_ENV_NAME.test(name) && typeof value === 'string' && value.length >= 8)
-    .map(([, value]) => value as string);
+    .filter(
+      ([name, value]) =>
+        CREDENTIAL_ENV_NAME.test(name) &&
+        typeof value === 'string' &&
+        value.length >= MIN_CREDENTIAL_VALUE_LENGTH &&
+        !LOOKS_LIKE_PATH_OR_DOMAIN.test(value),
+    )
+    .map(([, value]) => value as string)
+    // Longest first: a shorter secret that happens to be a prefix of a longer one must not
+    // consume it and leave the longer secret's tail in clear.
+    .sort((a, b) => b.length - a.length);
 }
 
 function tagFor(secret: string): string {
@@ -71,12 +85,18 @@ function redactPatterns(text: string): string {
  * keys, connection strings, and more) on top of the hand-rolled patterns above. secretlint's
  * `aws` rule only matches the secret-access-key shape — it walks past a bare `AKIA…` key ID —
  * so `SECRET_PATTERNS` runs first and stays; this is an added layer, not a replacement (#178).
- * `lintSource` returns byte ranges into `text`, so masking is a substring replace against
- * those ranges, not a second regex derivation.
+ * `lintSource` returns character ranges into `text` (`String.prototype.slice` offsets, not
+ * bytes), so masking is a substring replace against those ranges, not a second regex derivation.
+ *
+ * `ext: '.json'` is required for the `gcp` rule specifically — it is the only rule in the
+ * preset that dispatches on `source.ext` (measured against the bundled preset source), and
+ * without it a GCP service-account key never reports. Every other rule is unaffected by the
+ * ext (measured: anthropic/github/etc. still fire); the gcp rule's own `JSON.parse` is inside
+ * a try/catch, so non-JSON content just costs a caught throw, not a false positive.
  */
 async function redactSecretlint(text: string): Promise<string> {
   const result = await lintSource({
-    source: { content: text, filePath: 'event', contentType: 'text' },
+    source: { content: text, filePath: 'event', ext: '.json', contentType: 'text' },
     options: {
       config: {
         rules: [

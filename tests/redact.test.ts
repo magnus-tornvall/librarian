@@ -153,6 +153,56 @@ test('redacts a value present in the process environment even though it matches 
   }
 });
 
+test('redacts a GCP service-account key — the ext-dispatched rule the naive integration misses', async () => {
+  // secretlint's gcp rule dispatches on source.ext (".json"/".p12") — a bare filePath with no
+  // ext, the naive way to call lintSource, reports zero hits on real service-account JSON.
+  const privateKeyBody = 'A'.repeat(200);
+  const serviceAccountJson = JSON.stringify({
+    type: 'service_account',
+    project_id: 'my-project',
+    private_key_id: 'abc123',
+    private_key: `-----BEGIN PRIVATE KEY-----\n${privateKeyBody}\n-----END PRIVATE KEY-----\n`,
+    client_email: 'sa@my-project.iam.gserviceaccount.com',
+  });
+  const result = await redact(serviceAccountJson);
+  assert.ok(!result.includes(privateKeyBody));
+  assert.match(result, /\[REDACTED:token:sha256:[0-9a-f]{8}\]/);
+});
+
+test('does not redact an env var whose value merely looks ordinary because its name loosely mentions auth', async () => {
+  const before = { AUTH_MODE: process.env.AUTH_MODE, FIREBASE_AUTH_DOMAIN: process.env.FIREBASE_AUTH_DOMAIN };
+  process.env.AUTH_MODE = 'production';
+  process.env.FIREBASE_AUTH_DOMAIN = 'myapp.firebaseapp.com';
+  try {
+    const modeResult = await redact('deploy to production and run tests');
+    assert.equal(modeResult, 'deploy to production and run tests', 'AUTH_MODE is config, not a credential');
+
+    const domainResult = await redact('using myapp.firebaseapp.com for auth');
+    assert.equal(domainResult, 'using myapp.firebaseapp.com for auth', 'a domain-shaped value is not a credential');
+  } finally {
+    if (before.AUTH_MODE === undefined) delete process.env.AUTH_MODE;
+    else process.env.AUTH_MODE = before.AUTH_MODE;
+    if (before.FIREBASE_AUTH_DOMAIN === undefined) delete process.env.FIREBASE_AUTH_DOMAIN;
+    else process.env.FIREBASE_AUTH_DOMAIN = before.FIREBASE_AUTH_DOMAIN;
+  }
+});
+
+test('a shorter known env value does not consume a longer one that shares its prefix', async () => {
+  const before = { A_TOKEN: process.env.A_TOKEN, B_TOKEN: process.env.B_TOKEN };
+  process.env.A_TOKEN = 'abcdefghijkl';
+  process.env.B_TOKEN = 'abcdefghijklMNOPQRST';
+  try {
+    const result = await redact('value abcdefghijklMNOPQRST here');
+    assert.ok(!result.includes('MNOPQRST'), 'the longer secret\'s tail must not survive in clear');
+    assert.match(result, /^value \[REDACTED:token:sha256:[0-9a-f]{8}\] here$/);
+  } finally {
+    if (before.A_TOKEN === undefined) delete process.env.A_TOKEN;
+    else process.env.A_TOKEN = before.A_TOKEN;
+    if (before.B_TOKEN === undefined) delete process.env.B_TOKEN;
+    else process.env.B_TOKEN = before.B_TOKEN;
+  }
+});
+
 test('a git commit message, a file path, and a git SHA survive redaction unchanged', async () => {
   const text = 'git commit -m "fix: normalize paths" -- src/collector/append.ts a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
   assert.equal(await redact(text), text);
