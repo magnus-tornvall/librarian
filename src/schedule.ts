@@ -27,6 +27,20 @@ const SYSTEMD_SERVICE = 'librarian-drain.service';
 /** The handle that makes a crontab line ours to remove — cron has no other identity. */
 const CRON_MARKER = '# librarian-drain';
 const DEFAULT_INTERVAL_MINUTES = 60;
+/** A day. Beyond this launchd's StartInterval overflows into float notation and the plist stops parsing. */
+const MAX_INTERVAL_MINUTES = 1440;
+
+// Cron and systemd both express "repeat" as a step inside one calendar field, so an interval that
+// does not divide its field evenly fires unevenly — `*/45` is a 45-minute gap then a 15-minute one.
+// Snapping to a divisor is what makes the cadence we print the cadence that actually runs; we snap
+// on launchd too so the number means the same thing on every platform.
+const MINUTE_STEPS = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30];
+const HOUR_STEPS = [1, 2, 3, 4, 6, 8, 12, 24];
+
+function snapInterval(minutes: number): number {
+  if (minutes < 60) return MINUTE_STEPS.filter((step) => step <= minutes).at(-1)!;
+  return 60 * HOUR_STEPS.filter((step) => step <= Math.floor(minutes / 60)).at(-1)!;
+}
 
 /** The drain log. Under `~/.librarian/`, never in the vault — the vault is notes only (§8). */
 const LOG_PATH = path.join(LIBRARIAN_ROOT, 'logs', 'drain.log');
@@ -59,8 +73,10 @@ function parseArgs(argv: string[]): Options {
       options.uninstall = true;
     } else if (arg === '--interval') {
       const value = argv[index += 1];
-      if (value === undefined || !/^[0-9]+$/.test(value) || Number(value) === 0) {
-        throw new Error(`invalid --interval: expected a positive whole number of minutes, got ${value ?? '(nothing)'}`);
+      if (value === undefined || !/^[0-9]+$/.test(value) || Number(value) === 0 || Number(value) > MAX_INTERVAL_MINUTES) {
+        throw new Error(
+          `invalid --interval: expected a whole number of minutes from 1 to ${MAX_INTERVAL_MINUTES}, got ${value ?? '(nothing)'}`,
+        );
       }
       options.intervalMinutes = Number(value);
     } else if (arg === '--vault') {
@@ -118,9 +134,16 @@ ${args}
 `;
 }
 
-/** systemd splits ExecStart on whitespace unless the arguments are quoted. */
+/**
+ * systemd splits ExecStart on whitespace unless the arguments are quoted — and then eats four
+ * characters inside those quotes: `%` starts a specifier (an unknown one fails the unit load),
+ * `$` starts a variable expansion, and `\`/`"` are the escape and the quote themselves.
+ * A vault path is user-supplied, so all four must survive verbatim.
+ */
 function systemdExecStart(argv: string[]): string {
-  return argv.map((arg) => `"${arg}"`).join(' ');
+  const quote = (arg: string): string =>
+    `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '$$$$').replace(/%/g, '%%')}"`;
+  return argv.map(quote).join(' ');
 }
 
 function serviceBody(argv: string[]): string {
@@ -135,13 +158,24 @@ StandardError=append:${LOG_PATH}
 `;
 }
 
+/**
+ * A wall-clock calendar, not `OnUnitActiveSec=`. Monotonic timers run on CLOCK_MONOTONIC, which
+ * does not advance while the machine is suspended, and `Persistent=` applies only to `OnCalendar=`
+ * (systemd.timer(5)) — so the "slept through a firing, catch up on wake" case this command exists
+ * for is only delivered by a calendar timer plus Persistent=true.
+ */
+function systemdCalendar(intervalMinutes: number): string {
+  if (intervalMinutes < 60) return `*:0/${intervalMinutes}`;
+  const hours = intervalMinutes / 60;
+  return hours === 24 ? '00:00' : `0/${hours}:00`;
+}
+
 function timerBody(intervalMinutes: number): string {
   return `[Unit]
 Description=Librarian drain on an interval
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=${intervalMinutes}min
+OnCalendar=${systemdCalendar(intervalMinutes)}
 Persistent=true
 
 [Install]
@@ -149,17 +183,22 @@ WantedBy=timers.target
 `;
 }
 
-// ponytail: cron granularity ceiling — a sub-hour interval becomes a step in the minute field,
-//           anything else rounds to a whole-hour step (capped at 23, cron's field limit). Cron
-//           has no "every 90 minutes"; whoever needs one wants systemd or launchd.
 function cronSchedule(intervalMinutes: number): string {
   if (intervalMinutes < 60) return `*/${intervalMinutes} * * * *`;
-  return `0 */${Math.min(Math.round(intervalMinutes / 60), 23)} * * *`;
+  const hours = intervalMinutes / 60;
+  return hours === 24 ? '0 0 * * *' : `0 */${hours} * * *`;
 }
 
+/**
+ * Cron hands the line to `/bin/sh`, so every argument is single-quoted — unconditionally, because
+ * the "does it need quoting" test is the bug: an embedded apostrophe closes the quote it opened.
+ * Then cron itself, before the shell ever sees it, turns an unescaped `%` into a newline and
+ * truncates the command there — hence `\%`, which cron consumes back down to a literal `%`.
+ */
 function cronLine(argv: string[], intervalMinutes: number): string {
-  const command = argv.map((arg) => (/[\s"']/.test(arg) ? `'${arg}'` : arg)).join(' ');
-  return `${cronSchedule(intervalMinutes)} ${command} >> ${LOG_PATH} 2>&1 ${CRON_MARKER}`;
+  const quote = (arg: string): string => `'${arg.replace(/'/g, `'\\''`)}'`;
+  const command = `${argv.map(quote).join(' ')} >> ${quote(LOG_PATH)} 2>&1`;
+  return `${cronSchedule(intervalMinutes)} ${command.replace(/%/g, '\\%')} ${CRON_MARKER}`;
 }
 
 type Printer = (text: string) => void;
@@ -261,7 +300,11 @@ export function installScheduleCommand(argv: string[]): void {
   const uid = String(os.userInfo().uid);
   fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
 
-  out(`librarian install-schedule (every ${options.intervalMinutes} min)`);
+  const interval = snapInterval(options.intervalMinutes);
+  out(`librarian install-schedule (every ${interval} min)`);
+  if (interval !== options.intervalMinutes) {
+    out(`  ${options.intervalMinutes} min does not divide the clock evenly — using ${interval} min so the gaps stay equal`);
+  }
   out(`  drain command: ${drain.join(' ')}`);
   if (vault === undefined) {
     out('  no vault configured — the timer will distill but export nothing. Set one with `librarian config`.');
@@ -271,7 +314,7 @@ export function installScheduleCommand(argv: string[]): void {
   switch (platform()) {
     case 'darwin': {
       const plist = launchAgentPath();
-      write(plist, plistBody(drain, options.intervalMinutes), out);
+      write(plist, plistBody(drain, interval), out);
       // Bootout first so a re-run replaces the loaded agent; it fails when nothing is loaded,
       // which is the normal first-install case, so its failure is not an error.
       activate(out, 'launchctl', ['bootout', `gui/${uid}/${LAUNCHD_LABEL}`], true);
@@ -281,13 +324,13 @@ export function installScheduleCommand(argv: string[]): void {
     case 'linux': {
       if (hasSystemdUser()) {
         write(path.join(systemdDir(), SYSTEMD_SERVICE), serviceBody(drain), out);
-        write(path.join(systemdDir(), SYSTEMD_TIMER), timerBody(options.intervalMinutes), out);
+        write(path.join(systemdDir(), SYSTEMD_TIMER), timerBody(interval), out);
         activate(out, 'systemctl', ['--user', 'daemon-reload']);
         activate(out, 'systemctl', ['--user', 'enable', '--now', SYSTEMD_TIMER]);
         break;
       }
       out('  systemctl --user does not resolve here — falling back to cron');
-      const line = cronLine(drain, options.intervalMinutes);
+      const line = cronLine(drain, interval);
       const kept = readCrontab().split('\n').filter((existing) => !existing.includes(CRON_MARKER) && existing.trim().length > 0);
       writeCrontab([...kept, line]);
       out(`  installed crontab line: ${line}`);
@@ -299,5 +342,5 @@ export function installScheduleCommand(argv: string[]): void {
       );
   }
 
-  out(`  drains every ${options.intervalMinutes} min from now on. Remove it with \`librarian install-schedule --uninstall\`.`);
+  out(`  drains every ${interval} min from now on. Remove it with \`librarian install-schedule --uninstall\`.`);
 }

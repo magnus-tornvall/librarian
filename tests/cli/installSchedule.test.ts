@@ -10,23 +10,29 @@ import path from 'node:path';
 // `launchctl`/`systemctl`/`crontab` are bash stubs on a prepended PATH that log their argv.
 // That keeps the whole thing observable without registering a timer on the dev machine.
 //
+// All three stubs exist in every test, always, and a test that wants a mechanism *absent* gives
+// its stub exit 1. Deciding a branch by what the host happens not to have installed is how you
+// get a suite that reconfigures the developer's real systemd and rewrites their real crontab.
+//
 // HOME and XDG_CONFIG_HOME are set explicitly per test because the unit paths derive from
 // os.homedir(): tests/setup-home.ts isolates this process, not the child's launchd dir.
 
 const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
+const SCHEDULER_BINS = ['launchctl', 'systemctl', 'crontab'];
 
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-/** A bash stub per name that appends `<name> <argv...>` (and any stdin) to one log file. */
-function stubBin(root: string, names: string[]): { binDir: string; log: string } {
+/** A bash stub per scheduler binary that appends `<name> <argv...>` (and any stdin) to one log. */
+function stubBin(root: string, failing: string[]): { binDir: string; log: string } {
   const binDir = path.join(root, 'bin');
   const log = path.join(root, 'invocations.log');
   fs.mkdirSync(binDir, { recursive: true });
-  for (const name of names) {
+  for (const name of SCHEDULER_BINS) {
     const stub = path.join(binDir, name);
-    fs.writeFileSync(stub, `#!/bin/bash\necho "${name} $*" >> ${JSON.stringify(log)}\ncat >> ${JSON.stringify(log)} 2>/dev/null\nexit 0\n`);
+    const status = failing.includes(name) ? 1 : 0;
+    fs.writeFileSync(stub, `#!/bin/bash\necho "${name} $*" >> ${JSON.stringify(log)}\ncat >> ${JSON.stringify(log)} 2>/dev/null\nexit ${status}\n`);
     fs.chmodSync(stub, 0o755);
   }
   return { binDir, log };
@@ -34,16 +40,16 @@ function stubBin(root: string, names: string[]): { binDir: string; log: string }
 
 type Env = { home: string; binDir: string; log: string; platform?: string };
 
-function makeEnv(prefix: string, stubs: string[], platform?: string): Env {
+function makeEnv(prefix: string, platform?: string, failing: string[] = []): Env {
   const root = tempDir(prefix);
   const home = path.join(root, 'home');
   fs.mkdirSync(home, { recursive: true });
-  const { binDir, log } = stubBin(root, stubs);
+  const { binDir, log } = stubBin(root, failing);
   return { home, binDir, log, platform };
 }
 
 function runSchedule(env: Env, args: string[]): ReturnType<typeof spawnSync> {
-  return spawnSync('node', [CLI, 'install-schedule', ...args], {
+  return spawnSync(process.execPath, [CLI, 'install-schedule', ...args], {
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -67,19 +73,30 @@ function systemdUnit(env: Env, name: string): string {
   return path.join(env.home, '.config', 'systemd', 'user', name);
 }
 
-/** The absolute-path assertions every generated unit owes us, whatever the mechanism. */
-function assertUnitInvokesDrain(body: string, vault: string): void {
+function firstMatch(body: string, pattern: RegExp, what: string): string {
+  const match = pattern.exec(body);
+  assert.ok(match, `could not find ${what} in:\n${body}`);
+  return match[1]!;
+}
+
+/** The thing the mechanism actually execs — the first argument, before any of ours. */
+const plistProgram = (body: string): string => firstMatch(body, /<array>\s*<string>([^<]*)<\/string>/, 'ProgramArguments[0]');
+const systemdProgram = (body: string): string => firstMatch(body, /^ExecStart="((?:[^"\\]|\\.)*)"/m, 'the ExecStart program');
+const cronProgram = (line: string): string => firstMatch(line, /^(?:\S+ ){5}'([^']*)'/, 'the cron command');
+
+/**
+ * The assertions every generated unit owes us, whatever the mechanism: it execs a real absolute
+ * path (a bare `librarian` would never resolve — no scheduler has our PATH) and it drains the vault.
+ */
+function assertUnitInvokesDrain(body: string, program: string, vault: string): void {
+  assert.ok(path.isAbsolute(program), `the unit must exec an absolute path, not \`${program}\``);
+  assert.ok(fs.existsSync(program), `the unit's program must exist on disk, got \`${program}\``);
   assert.match(body, /drain/, 'the unit must invoke drain');
-  assert.ok(body.includes(`--vault`) && body.includes(vault), `the unit must pass --vault ${vault}; got:\n${body}`);
-  assert.ok(
-    body.includes(process.execPath) || /["\s]\/[^"\s]*librarian/.test(body),
-    `the unit must name an absolute librarian path, never a bare \`librarian\`; got:\n${body}`,
-  );
-  assert.doesNotMatch(body, /(^|[\s"])librarian(\s|"|$)/m, 'a bare `librarian` would never resolve under a scheduler');
+  assert.ok(body.includes('--vault') && body.includes(vault), `the unit must pass --vault ${vault}; got:\n${body}`);
 }
 
 test('install-schedule (darwin): writes a launchd plist invoking drain with the vault and interval, and bootstraps it', { skip: process.platform !== 'darwin' ? 'darwin only' : false }, () => {
-  const env = makeEnv('cli-schedule-darwin-', ['launchctl']);
+  const env = makeEnv('cli-schedule-darwin-');
   const vault = path.join(env.home, 'vault');
 
   const result = runSchedule(env, ['--interval', '15', '--vault', vault]);
@@ -90,7 +107,7 @@ test('install-schedule (darwin): writes a launchd plist invoking drain with the 
   const body = fs.readFileSync(plist, 'utf8');
   assert.match(body, /<key>Label<\/key>\s*<string>com\.librarian\.drain<\/string>/);
   assert.match(body, /<key>StartInterval<\/key>\s*<integer>900<\/integer>/, '15 minutes must become 900 seconds');
-  assertUnitInvokesDrain(body, vault);
+  assertUnitInvokesDrain(body, plistProgram(body), vault);
   // The log must land under ~/.librarian, never in the vault.
   assert.ok(body.includes(path.join(env.home, '.librarian', 'logs', 'drain.log')));
   assert.equal(body.includes(`<string>${vault}/`), false, 'no log path may point into the vault');
@@ -104,7 +121,7 @@ test('install-schedule (darwin): writes a launchd plist invoking drain with the 
 });
 
 test('install-schedule (darwin): --uninstall removes the plist, boots it out, and is exit 0 with nothing installed', { skip: process.platform !== 'darwin' ? 'darwin only' : false }, () => {
-  const env = makeEnv('cli-schedule-darwin-rm-', ['launchctl']);
+  const env = makeEnv('cli-schedule-darwin-rm-');
 
   const empty = runSchedule(env, ['--uninstall']);
   assert.equal(empty.status, 0, 'uninstall with nothing installed must exit 0');
@@ -122,7 +139,7 @@ test('install-schedule (darwin): --uninstall removes the plist, boots it out, an
 });
 
 test('install-schedule (linux, systemd): writes service+timer, reloads, and enables the timer', () => {
-  const env = makeEnv('cli-schedule-systemd-', ['systemctl'], 'linux');
+  const env = makeEnv('cli-schedule-systemd-', 'linux');
   const vault = path.join(env.home, 'vault');
 
   const result = runSchedule(env, ['--interval', '30', '--vault', vault]);
@@ -130,9 +147,12 @@ test('install-schedule (linux, systemd): writes service+timer, reloads, and enab
 
   const service = fs.readFileSync(systemdUnit(env, 'librarian-drain.service'), 'utf8');
   assert.match(service, /Type=oneshot/);
-  assertUnitInvokesDrain(service, vault);
+  assertUnitInvokesDrain(service, systemdProgram(service), vault);
   const timer = fs.readFileSync(systemdUnit(env, 'librarian-drain.timer'), 'utf8');
-  assert.match(timer, /OnUnitActiveSec=30min/);
+  // A calendar timer, not OnUnitActiveSec: monotonic time does not advance across suspend, and
+  // Persistent= (the catch-up we promise) only applies to OnCalendar=.
+  assert.match(timer, /^OnCalendar=\*:0\/30$/m, '30 minutes must become a wall-clock half-hour calendar');
+  assert.doesNotMatch(timer, /OnUnitActiveSec|OnBootSec/, 'a monotonic trigger cannot catch up a missed firing');
   assert.match(timer, /Persistent=true/);
   assert.match(timer, /WantedBy=timers\.target/);
 
@@ -150,9 +170,9 @@ test('install-schedule (linux, systemd): writes service+timer, reloads, and enab
 });
 
 test('install-schedule (linux, no systemd): falls back to a marker-tagged crontab line, and --uninstall strips it', () => {
-  // No `systemctl` stub at all → `systemctl --user --version` fails → cron fallback. The
-  // crontab stub logs argv AND the piped stdin, which is the installed line itself.
-  const env = makeEnv('cli-schedule-cron-', ['crontab'], 'linux');
+  // `systemctl` is present but exits 1 — the stub, not the host, decides the branch. The crontab
+  // stub logs argv AND the piped stdin, which is the installed line itself.
+  const env = makeEnv('cli-schedule-cron-', 'linux', ['systemctl']);
   const vault = path.join(env.home, 'vault');
 
   const result = runSchedule(env, ['--interval', '20', '--vault', vault]);
@@ -165,7 +185,7 @@ test('install-schedule (linux, no systemd): falls back to a marker-tagged cronta
   const line = log.split('\n').find((l) => l.includes('# librarian-drain'));
   assert.ok(line !== undefined, `a marker-tagged line must be installed; log:\n${log}`);
   assert.match(line, /^\*\/20 \* \* \* \* /, '20 minutes must become a */20 minute field');
-  assertUnitInvokesDrain(line, vault);
+  assertUnitInvokesDrain(line, cronProgram(line), vault);
 
   // Nothing to remove: the stub's `crontab -l` prints nothing, so uninstall is a clean no-op.
   fs.rmSync(env.log, { force: true });
@@ -174,8 +194,61 @@ test('install-schedule (linux, no systemd): falls back to a marker-tagged cronta
   assert.match(removed.stdout, /nothing to remove/);
 });
 
+test('install-schedule: the vault comes from the config when --vault is absent', () => {
+  const env = makeEnv('cli-schedule-config-vault-', 'linux');
+  const vault = path.join(env.home, 'configured vault');
+  fs.mkdirSync(path.join(env.home, '.librarian'), { recursive: true });
+  fs.writeFileSync(
+    path.join(env.home, '.librarian', 'config.json'),
+    `${JSON.stringify({ inference: { provider: 'opencode' }, vault }, null, 2)}\n`,
+  );
+
+  const result = runSchedule(env, []);
+  assert.equal(result.status, 0, `install-schedule should exit 0; stderr: ${result.stderr}`);
+  assert.doesNotMatch(result.stdout, /no vault configured/);
+
+  const service = fs.readFileSync(systemdUnit(env, 'librarian-drain.service'), 'utf8');
+  assertUnitInvokesDrain(service, systemdProgram(service), vault);
+});
+
+// A vault path is user input, and cron and systemd each translate characters before anything runs:
+// cron turns a bare `%` into a newline (truncating the command) and hands the rest to /bin/sh, and
+// systemd reads `%` as a specifier and `$` as a variable inside the quotes it needs for whitespace.
+const HOSTILE_DIR = `Bob's "weird" 100%$vault dir`;
+
+test('install-schedule (systemd): a hostile vault path survives ExecStart quoting', () => {
+  const env = makeEnv('cli-schedule-systemd-hostile-', 'linux');
+  const vault = path.join(env.home, HOSTILE_DIR);
+
+  assert.equal(runSchedule(env, ['--vault', vault]).status, 0);
+  const service = fs.readFileSync(systemdUnit(env, 'librarian-drain.service'), 'utf8');
+  const escaped = `${env.home}/Bob's \\"weird\\" 100%%$$vault dir`;
+  assert.ok(
+    service.includes(`"--vault" "${escaped}"`),
+    `ExecStart must escape \\ " $ and %; expected "${escaped}", got:\n${service}`,
+  );
+  // The exact failures: a raw `"` ends the argument, `%$` is an unknown specifier (unit fails to
+  // load), and `$vault` would be expanded away.
+  assert.equal(service.includes(`100%$vault`), false, 'an unescaped %/$ would break the unit load');
+  assert.equal(service.includes(`"weird"`), false, 'an unescaped quote would end the argument early');
+});
+
+test('install-schedule (cron): a hostile vault path survives shell quoting and cron % translation', () => {
+  const env = makeEnv('cli-schedule-cron-hostile-', 'linux', ['systemctl']);
+  const vault = path.join(env.home, HOSTILE_DIR);
+
+  assert.equal(runSchedule(env, ['--vault', vault]).status, 0);
+  const line = invocations(env).split('\n').find((l) => l.includes('# librarian-drain'));
+  assert.ok(line !== undefined);
+  // '\'' closes, escapes, reopens — the only way an apostrophe survives single quotes. And every
+  // % is backslashed, or cron replaces it with a newline and the command ends there.
+  const quoted = `'${env.home}/Bob'\\''s "weird" 100\\%$vault dir'`;
+  assert.ok(line.includes(`'--vault' ${quoted}`), `expected ${quoted} in:\n${line}`);
+  assert.equal(/[^\\]%/.test(line), false, `every % must be backslash-escaped; got:\n${line}`);
+});
+
 test('install-schedule: an unknown platform fails loud and prints the command to schedule by hand', () => {
-  const env = makeEnv('cli-schedule-unknown-', [], 'sunos');
+  const env = makeEnv('cli-schedule-unknown-', 'sunos');
   const result = runSchedule(env, ['--vault', path.join(env.home, 'vault')]);
   assert.equal(result.status, 1, 'an unsupported platform must exit non-zero');
   assert.match(result.stderr, /sunos/, 'the error must name the platform');
@@ -183,8 +256,10 @@ test('install-schedule: an unknown platform fails loud and prints the command to
 });
 
 test('install-schedule: a garbage --interval fails loud and writes nothing', () => {
-  const env = makeEnv('cli-schedule-bad-interval-', ['launchctl', 'systemctl', 'crontab']);
-  for (const bad of ['0', '-5', 'soon', '1.5']) {
+  const env = makeEnv('cli-schedule-bad-interval-');
+  // 1441+ is rejected rather than clamped: launchd renders a huge StartInterval in float
+  // notation, which is a plist launchd cannot parse — and it would already be on disk.
+  for (const bad of ['0', '-5', 'soon', '1.5', '1441', '99999999999999999999']) {
     const result = runSchedule(env, ['--interval', bad]);
     assert.equal(result.status, 1, `--interval ${bad} must exit non-zero`);
     assert.match(result.stderr, /invalid --interval/);
@@ -192,4 +267,21 @@ test('install-schedule: a garbage --interval fails loud and writes nothing', () 
   assert.equal(runSchedule(env, ['--interval']).status, 1, 'a missing --interval value must fail too');
   assert.equal(fs.existsSync(launchAgent(env)), false, 'a rejected run must not write a unit');
   assert.equal(invocations(env), '', 'a rejected run must not activate anything');
+});
+
+test('install-schedule: an interval the calendar cannot express evenly is snapped, and the snap is what gets printed', () => {
+  const env = makeEnv('cli-schedule-snap-', 'linux');
+
+  // */45 fires at :00 and :45 — a 45-minute gap then a 15-minute one. 30 is the honest cadence.
+  const uneven = runSchedule(env, ['--interval', '45', '--vault', path.join(env.home, 'vault')]);
+  assert.equal(uneven.status, 0, uneven.stderr);
+  assert.match(uneven.stdout, /using 30 min/, 'the snap must be reported, not silent');
+  assert.match(uneven.stdout, /drains every 30 min/, 'the printed cadence must be the installed one');
+  assert.match(fs.readFileSync(systemdUnit(env, 'librarian-drain.timer'), 'utf8'), /^OnCalendar=\*:0\/30$/m);
+
+  // A whole day is the ceiling, and it is a daily calendar rather than a bogus 24-hour step.
+  const daily = runSchedule(env, ['--interval', '1440', '--vault', path.join(env.home, 'vault')]);
+  assert.equal(daily.status, 0, daily.stderr);
+  assert.match(daily.stdout, /drains every 1440 min/);
+  assert.match(fs.readFileSync(systemdUnit(env, 'librarian-drain.timer'), 'utf8'), /^OnCalendar=00:00$/m);
 });

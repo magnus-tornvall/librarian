@@ -977,8 +977,8 @@ async function distillCommand(flags: Map<string, string>): Promise<void> {
  * never reimplements locking (#59) or failure handling (#60).
  *
  *   1. Distill everything pending, under the distiller's own lock. A live lock
- *      holder is reported on stderr and does NOT abort the drain — the export
- *      step still runs over whatever notes already exist.
+ *      holder means another drain is doing this work right now: this one reports
+ *      it and yields, exit 0 (see the lock-held branch below for why).
  *   2. Export everything pending to `<vault>/generated/**` — skipped entirely
  *      when no vault resolves (neither `--vault` nor `config.vault`).
  *   3. Print a one-line-per-fact summary to stdout. "Nothing pending" prints
@@ -998,10 +998,15 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   // index pass that would re-run the work just to print a count.
   const distilled = await runDistill({ dataDir, diagnosticsDir, provider, indexDir, configPath: flags.get('config') });
   if (distilled.status === 'lock-held') {
-    // Another distiller holds the lock, so runDistill skipped its index pass —
-    // reconcile here so drain stays the manual recovery tool (§4), failing loud
-    // on a systemic embed failure like every other batch reconcile.
-    await updateIndex(indexDir, dataDir, flags.get('config'), { failLoudOnTotalFailure: true });
+    // A live lock holder is already doing all of this — its own distill pass reconciles the
+    // index inside the lock. Everything below here writes `index/notes.db`, and the lock does
+    // not cover those writes, so continuing would race the holder for the sqlite writer and
+    // exit 1 with "database is locked". That was survivable while overlap meant typing `drain`
+    // twice; with the boundary trigger and the timer both firing it (#170) it is routine, so
+    // the loser reports and yields. Nothing is lost: the holder mints the same notes, and the
+    // backlog is idempotent — the next drain sees whatever this one skipped.
+    process.stdout.write('Another drain holds the distiller lock; nothing to do.\n');
+    return;
   }
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
   const index = openIndexWrite(indexDir);

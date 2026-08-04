@@ -75,4 +75,5 @@ There is no separate recovery mode. After any crash — a rolled-back cursor, a 
 lock, a half-written run — just run `librarian drain` again. It recovers the stale
 lock, replays any un-committed delta, and the provenance guard keeps the note log free
 of duplicates. Two concurrent `drain`s over the same backlog also converge to exactly
-one set of notes.
+one set of notes: whichever loses the distiller lock reports it and yields, exit 0 — which
+is what makes the boundary trigger and the scheduled timer (#170) safe to overlap.

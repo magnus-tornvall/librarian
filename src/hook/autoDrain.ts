@@ -11,9 +11,10 @@
  *  - **Detached.** The child is `detached` + `stdio:'ignore'` + `unref()`'d, so the hook
  *    process exits immediately and the drain outlives it. A hook that waited on a distill
  *    (a provider call per session) would stall the host agent for seconds.
- *  - **Silent and unthrowing.** Hook-safety (§14): a spawn failure is one stderr line, never
- *    a throw, and nothing is ever written to stdout — Claude Code reads hook stdout as
- *    decision control.
+ *  - **Silent and unthrowing.** Hook-safety (§14): a spawn failure never propagates, and nothing
+ *    is ever written to stdout — Claude Code reads hook stdout as decision control. The failure
+ *    gets a stderr line only when this process is still alive to hear the async `error` event;
+ *    on a session-end hook it usually is not, and the scheduled drain is the recovery path.
  *  - **Liberal, but debounced.** #168 makes live sessions ineligible, so firing on a
  *    mid-session semantic boundary is a near-no-op for the active session while
  *    opportunistically draining any *other* session that has settled. The stamp file below
@@ -41,7 +42,11 @@ function stampPath(): string {
 
 function recentlyDrained(now: number): boolean {
   try {
-    return now - Number(fs.readFileSync(stampPath(), 'utf8')) < DEBOUNCE_MS;
+    const last = Number(fs.readFileSync(stampPath(), 'utf8'));
+    // A stamp in the future is a clock that jumped, not a recent drain. Trusting it would
+    // suppress every semantic boundary for the length of the skew — the same wedge the settle
+    // clock is forbidden to cause (structural invariants §4): a bad clock may delay, never wedge.
+    return last <= now && now - last < DEBOUNCE_MS;
   } catch {
     return false; // absent or unreadable: treat as never drained
   }

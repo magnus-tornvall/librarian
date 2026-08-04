@@ -68,14 +68,26 @@ function runHook(payload: Record<string, unknown>, home: string, bin: string): R
   });
 }
 
+/** Block this thread without a child process or a timer callback. */
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /** Poll until the predicate holds or the budget runs out — the child is asynchronous by design. */
 function waitFor(predicate: () => boolean, budgetMs = 10_000): boolean {
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     if (predicate()) return true;
-    spawnSync('sleep', ['0.1']);
+    sleep(100);
   }
   return predicate();
+}
+
+/** Plant the debounce stamp the hook reads, as a drain that ran `msAgo` milliseconds ago. */
+function writeStamp(home: string, msAgo: number): void {
+  const cache = path.join(home, '.librarian', 'cache');
+  fs.mkdirSync(cache, { recursive: true });
+  fs.writeFileSync(path.join(cache, 'last-drain'), String(Date.now() - msAgo));
 }
 
 test('auto-drain: a session-end boundary spawns a drain the hook does not wait for', () => {
@@ -115,8 +127,20 @@ test('auto-drain: a burst of semantic boundaries is debounced to one drain', () 
 
   assert.ok(waitFor(() => drainCount(stub.log) >= 1), 'the first boundary must trigger a drain');
   // Give any un-debounced sibling time to land before counting.
-  spawnSync('sleep', ['1']);
+  sleep(1_000);
   assert.equal(drainCount(stub.log), 1, 'four boundaries in quick succession must drain once, not four times');
+});
+
+test('auto-drain: a stamp from the future does not wedge the trigger', () => {
+  const home = tempDir('auto-drain-home-skew-');
+  const stub = makeStub();
+  // A clock that jumped forward and was corrected leaves a stamp ahead of now. Read naively it
+  // suppresses every semantic boundary until real time catches up — a wedge, not a debounce.
+  writeStamp(home, -24 * 60 * 60 * 1_000);
+
+  assert.equal(runHook(fixturePayload('03-post-tool-use-bash-git-commit.json'), home, stub.bin).status, 0);
+
+  assert.ok(waitFor(() => drainCount(stub.log) === 1), 'a future-dated stamp must not suppress the drain');
 });
 
 test('auto-drain: a terminal boundary bypasses the debounce', () => {

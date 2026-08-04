@@ -266,6 +266,33 @@ test('drain: two concurrent drains over one backlog converge to exactly one set 
   assertIdentical(vaultAfter, snapshot(vaultDir), 'vault');
 });
 
+test('drain: a live distiller lock makes the drain yield, exit 0, and touch nothing', () => {
+  // The deterministic half of the test above. Everything after the distill pass writes
+  // `index/notes.db`, and the distiller lock does not cover those writes — a drain that
+  // carried on past a live holder raced it for the sqlite writer and died with "database is
+  // locked". Now routine, since the boundary trigger and the timer both fire drain (#170).
+  const root = tempDir('cli-drain-lockheld-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const vaultDir = path.join(root, 'vault');
+  const goodFixture = writeFixture(root);
+
+  ingest(dataDir, eligibleEvents('sess-a'));
+  // This test process is a live, fresh holder as far as the lock's PID probe is concerned.
+  fs.mkdirSync(path.join(dataDir, 'locks'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dataDir, 'locks', 'distiller.lock'),
+    JSON.stringify({ pid: process.pid, token: 'held-by-the-test', acquired_at: new Date().toISOString() }),
+  );
+
+  const result = drain(dataDir, diagnosticsDir, goodFixture, vaultDir);
+
+  assert.equal(result.status, 0, `a held lock is not an error; stderr: ${result.stderr}`);
+  assert.match(result.stdout, /Another drain holds the distiller lock/, 'the yield must be reported, not silent');
+  assert.equal(noteRevisions(dataDir).length, 0, 'the yielding drain mints nothing');
+  assert.equal(generatedFiles(vaultDir).length, 0, 'and exports nothing');
+});
+
 test('drain: a quarantine-destined session does not block healthy sessions in the same run', () => {
   const root = tempDir('cli-drain-quarantine-');
   const dataDir = path.join(root, 'data');

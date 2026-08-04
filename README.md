@@ -156,7 +156,8 @@ process:
 1. **A boundary in the session.** When an adapter records a completion — the session ending, a
    successful commit, a todo list going all-green — the hook spawns a **detached**
    `librarian drain` and returns immediately. It never blocks your agent, never writes to its
-   stdout, and a failure to spawn is a stderr line rather than a broken session. Bursts are
+   stdout, and a drain that cannot even be spawned is dropped silently rather than breaking the
+   session — the timer below is what makes that recoverable. Bursts are
    debounced to one drain a minute (a session end always fires, since it is the one that owes
    you the note), and overlapping drains are safe by construction — the second one finds the
    distiller lock held and exits with nothing to do.
