@@ -1,6 +1,6 @@
 {
   "name": "post-tool-use-bash-git-commit",
-  "description": "A Claude Code PostToolUse hook for the Bash tool whose tool_input.command is a `git commit` invocation is recategorized to vcs_commit (canonical_name stays bash), ships the raw command, lifts the command's outcome off tool_response (empty stderr and interrupted:false are elided, so only stdout survives), and carries a non-authoritative vcs_commit salience hint — the command succeeded, so it is not command_failed.",
+  "description": "A Claude Code PostToolUse hook for the Bash tool whose tool_input.command is a `git commit` invocation is recategorized to vcs_commit (canonical_name stays bash), ships the raw command, lifts the command's outcome off tool_response (empty stderr and interrupted:false are elided, so only stdout survives), and carries a non-authoritative vcs_commit salience hint — the command succeeded, so it is not command_failed. It also carries a semantic boundary (`git_commit`): a commit that landed closes an arc of work, which is the strongest end-of-arc signal the tool stream offers short of the session ending — the session may well continue, so it is semantic rather than terminal. A commit that failed closed nothing and gets no boundary.",
   "native": {
     "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
     "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
@@ -63,6 +63,7 @@
     "outcome": {
       "stdout": "[feat/claude-code-adapter 1a2b3c4] fix: expire check before redirect\n 1 file changed, 3 insertions(+)"
     },
-    "hints": { "possibly_salient": true, "reason": "vcs_commit" }
+    "hints": { "possibly_salient": true, "reason": "vcs_commit" },
+    "boundary": { "kind": "semantic", "signal": "git_commit" }
   }
 }

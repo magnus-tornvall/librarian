@@ -51,10 +51,21 @@ not fail a case; a change to a stable field would.
 | ---- | ------------- | ------ |
 | `01-user-prompt.json`     | user prompt          | `PromptEvent`, raw prompt, full git resource. |
 | `02-file-write-tool.json` | `write` tool         | `ToolEvent` file_write, `files[]`, file_write hint. |
-| `03-git-commit-bash.json` | bash `git commit …`  | recategorized `vcs_commit`, raw command, vcs_commit hint. |
+| `03-git-commit-bash.json` | bash `git commit …`  | recategorized `vcs_commit`, raw command, vcs_commit hint, semantic `git_commit` boundary. |
 | `04-git-push-bash.json`   | bash `git push …`    | recategorized `vcs_push`, raw command, no hint. |
-| `05-session-compact.json` | session compaction   | `SessionEvent` action compact. |
+| `05-session-compact.json` | session compaction   | `SessionEvent` action compact + the `compaction` boundary — a recorded landmark, never a completion signal. |
 | `06-bash-nonzero-exit.json` | bash, `metadata.exit: 1` | `outcome` carries the output and the exit code, hint `command_failed` — OpenCode's real failure signal. |
 | `07-read-tool-drops-outcome.json` | `read` tool carrying an outcome | outcome capture is confined to `command`/`vcs_*` — a read maps with **no `outcome`**. |
 | `08-bash-interrupted.json` | interrupted bash | the other failure signal → hint `command_failed`. |
 | `09-bash-zero-exit.json` | bash, `metadata.exit: 0` | `exit: 0` is recorded (the "remedy worked" half of the chain) and carries **no hint**. |
+| `10-session-end.json` | `session.deleted` | `SessionEvent` action `end` + the `terminal` boundary — the same marker Claude Code's `SessionEnd` produces. |
+| `11-todowrite-all-complete.json` | `todowrite`, every todo `completed` | semantic `todos_complete` boundary on an otherwise unknown/other tool. |
+| `12-todowrite-partial.json` | `todowrite`, one todo `in_progress` | the contrast: a partial plan is **no boundary**. |
+
+## Boundary markers (issue #169)
+
+`boundary` is a stable field, so a fixture that omits it asserts its **absence** — that is what
+makes the `11`/`12` pair load-bearing. The near-miss cases a single-payload fixture cannot
+express (a `git commit-tree`, a commit with a non-zero `metadata.exit`, an empty todo list, a
+`cancelled` todo) are asserted inline in the runner instead, beside the classification tests
+they sharpen. See [`schema/event.md`](../../schema/event.md) for the marker contract.

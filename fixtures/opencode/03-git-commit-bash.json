@@ -1,6 +1,6 @@
 {
   "name": "git-commit-via-bash",
-  "description": "A bash tool whose command line is a `git commit` invocation is recategorized to vcs_commit (canonical_name stays bash), ships the raw command, and carries a non-authoritative vcs_commit salience hint.",
+  "description": "A bash tool whose command line is a `git commit` invocation is recategorized to vcs_commit (canonical_name stays bash), ships the raw command, and carries a non-authoritative vcs_commit salience hint. It also closes an arc, so it carries the semantic git_commit boundary — this commit reported no exit code and no interruption, so nothing says it failed; a non-zero `metadata.exit` would drop the boundary (issue #169).",
   "native": {
     "kind": "tool",
     "tool": "bash",
@@ -47,6 +47,7 @@
       "category": "vcs_commit"
     },
     "command": "git commit -m \"fix: expire check before redirect\"",
-    "hints": { "possibly_salient": true, "reason": "vcs_commit" }
+    "hints": { "possibly_salient": true, "reason": "vcs_commit" },
+    "boundary": { "kind": "semantic", "signal": "git_commit" }
   }
 }

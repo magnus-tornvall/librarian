@@ -35,7 +35,31 @@ export type ToolCategory =
 
 export type FileAction = 'read' | 'write' | 'edit' | 'delete';
 
-export type SessionAction = 'start' | 'stop' | 'compact' | 'checkpoint';
+export type SessionAction = 'start' | 'stop' | 'compact' | 'checkpoint' | 'end';
+
+/**
+ * How strong an end-of-arc signal a boundary event is (issue #169). Identical vocabulary to
+ * the Claude Code adapter's — the whole point is that a consumer reads ONE field regardless
+ * of which agent produced the event.
+ *
+ *   - `terminal`   — the session is over; nothing more is coming (`session.deleted`; OpenCode's
+ *                    `session.idle` repeats per turn and is deliberately not used).
+ *   - `semantic`   — an arc closed but the session may continue (a `git commit`, todos going
+ *                    all-complete).
+ *   - `compaction` — the context window filled up. Recorded as a landmark, never a completion
+ *                    signal: librarian keeps its own durable event log, so compaction destroys
+ *                    nothing and firing there would distill an unfinished arc.
+ */
+export type BoundaryKind = 'terminal' | 'semantic' | 'compaction';
+
+/** Which signal produced the boundary — agent-independent, so `session.deleted` and Claude
+ *  Code's `SessionEnd` both report `session_end` (`resource.agent` says which agent). */
+export type BoundarySignal = 'session_end' | 'compact' | 'git_commit' | 'todos_complete';
+
+export interface Boundary {
+  kind: BoundaryKind;
+  signal: BoundarySignal;
+}
 
 export type HintReason =
   | 'file_write'
@@ -73,6 +97,8 @@ interface EventBase {
   resource: Resource;
   context: Context;
   hints?: Hints;
+  /** Present only on the events that close an arc (issue #169) — absent otherwise. */
+  boundary?: Boundary;
 }
 
 export type PromptEvent = EventBase & { type: 'prompt'; prompt: string };
@@ -142,6 +168,10 @@ export interface ToolPayload {
   outcome?: Outcome;
   /** File paths the tool touched, when it is a file tool. */
   files?: Array<{ path: string; action?: FileAction }>;
+  /** The `todowrite` tool's list, as the host handed it over — the mapper decides whether
+   *  it means "the plan is done" (issue #169). Shape is intentionally loose: only `status`
+   *  is read. */
+  todos?: unknown;
 }
 
 export interface SessionPayload {
@@ -266,6 +296,33 @@ function commandFailed(outcome: Outcome | undefined): boolean {
   return outcome.interrupted === true || (outcome.exit !== undefined && outcome.exit !== 0);
 }
 
+/**
+ * Which session-level transitions are boundaries, and how strong (issue #169). Identical to
+ * the Claude Code adapter's table — `session.deleted` lands as `{terminal, session_end}` just
+ * as `SessionEnd` does. `start`/`stop`/`checkpoint` are absent: they close no arc.
+ */
+const SESSION_BOUNDARY: Partial<Record<SessionAction, Boundary>> = {
+  end: { kind: 'terminal', signal: 'session_end' },
+  compact: { kind: 'compaction', signal: 'compact' },
+};
+
+/**
+ * Did a `todowrite` call leave every todo complete? That transition is the closest thing an
+ * agent emits to "the plan is done" — a semantic arc boundary. Strict on purpose: an empty
+ * list is not a completion, and only `completed` counts (a `cancelled` todo means the work was
+ * dropped, not finished). A partial update is no boundary at all. Same rule as the Claude Code
+ * adapter's, duplicated for the same reason GIT_SUBCOMMAND is: no shared runtime module.
+ */
+function todosAllComplete(todos: unknown): boolean {
+  if (!Array.isArray(todos) || todos.length === 0) {
+    return false;
+  }
+  return todos.every((todo) => {
+    const record = typeof todo === 'object' && todo !== null ? (todo as Record<string, unknown>) : undefined;
+    return record?.status === 'completed';
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Mapping.
 // ---------------------------------------------------------------------------
@@ -327,11 +384,25 @@ function mapTool(payload: ToolPayload, env: MapEnv): ToolEvent {
     event.hints = { possibly_salient: true, reason: 'vcs_commit' };
   }
 
+  // Semantic arc boundaries off the tool stream (issue #169): a landed commit, or todos going
+  // all-complete. A commit that failed closed nothing — and here `commandFailed` can see a real
+  // exit code, so a non-zero `git commit` is correctly not a boundary.
+  if (category === 'vcs_commit' && !commandFailed(outcome)) {
+    event.boundary = { kind: 'semantic', signal: 'git_commit' };
+  } else if (payload.tool.toLowerCase() === 'todowrite' && todosAllComplete(payload.todos)) {
+    event.boundary = { kind: 'semantic', signal: 'todos_complete' };
+  }
+
   return event;
 }
 
 function mapSession(payload: SessionPayload, env: MapEnv): SessionEvent {
-  return { ...base(env), type: 'session', action: payload.action };
+  const event: SessionEvent = { ...base(env), type: 'session', action: payload.action };
+  const boundary = SESSION_BOUNDARY[payload.action];
+  if (boundary !== undefined) {
+    event.boundary = boundary;
+  }
+  return event;
 }
 
 /**

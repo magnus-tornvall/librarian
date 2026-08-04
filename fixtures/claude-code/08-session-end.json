@@ -1,0 +1,48 @@
+{
+  "name": "session-end",
+  "description": "A Claude Code SessionEnd hook payload maps to a SessionEvent with action 'end' and a TERMINAL boundary: the session is over, nothing more is coming. This is the genuine one-shot session boundary — unlike Stop, which fires once per assistant turn and is therefore no boundary at all. `reason` (clear/logout/prompt_input_exit/other) is recorded on the native payload, not remapped: the canonical SessionAction vocabulary has no per-reason variants and the dumb adapter does not editorialize (§4). A hard-killed terminal fires no SessionEnd, so the boundary is a fast path on top of the trigger's timeout, never the guarantee.",
+  "native": {
+    "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+    "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
+    "cwd": "/Users/magnus/dev/librarian",
+    "permission_mode": "default",
+    "hook_event_name": "SessionEnd",
+    "reason": "prompt_input_exit"
+  },
+  "env": {
+    "event_id": "01J8X7QK46Z1B5U8R2V6X0Y4A1",
+    "ts": "2026-07-06T09:20:00.000Z",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK46Z1B5U8R2V6X0Y4A1",
+    "ts": "2026-07-06T09:20:00.000Z",
+    "type": "session",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "action": "end",
+    "boundary": { "kind": "terminal", "signal": "session_end" }
+  }
+}

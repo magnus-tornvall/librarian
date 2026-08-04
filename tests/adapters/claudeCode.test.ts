@@ -29,7 +29,10 @@ import type { NoteRevision } from '../../src/note.ts';
  *
  * Beyond the fixtures, explicit assertions cover the remaining mapping rules (git push →
  * vcs_push, Grep/Glob → search, an unrecognized tool → unknown/other, Stop → stop, an
- * unrecognized hook event → no event). Then two end-to-end tests pipe mapped events
+ * unrecognized hook event → no event) and the boundary-marker negatives a fixture cannot
+ * carry (issue #169: `git commit-tree` and a failed commit closing nothing, an empty todo list
+ * not counting as a completion, Stop carrying no boundary, and validateEvent rejecting a bogus
+ * `boundary.kind`). Then two end-to-end tests pipe mapped events
  * through the REAL `librarian collect` (spawned, temp data dir) — one proving every event
  * lands on its per-session log, one proving a secret-bearing command lands REDACTED
  * (redaction is the collector's job at the append boundary, §5). Finally, a hook-safety
@@ -39,7 +42,7 @@ import type { NoteRevision } from '../../src/note.ts';
 
 const FIXTURE_ROOT = path.join(import.meta.dirname, '..', '..', 'fixtures', 'claude-code');
 const CLI = path.join(import.meta.dirname, '..', '..', 'src', 'cli.ts');
-// The plugin entry: the four Claude Code `command` hooks all invoke `librarian hook
+// The plugin entry: the six Claude Code `command` hooks all invoke `librarian hook
 // claude-code`, which drives runClaudeCodeHook() behind the bin.
 const HOOK_ARGS = [CLI, 'hook', 'claude-code'] as const;
 
@@ -248,7 +251,7 @@ test('claude-code mapping: an interrupted command is hinted command_failed even 
   assert.deepEqual(event.hints, { possibly_salient: true, reason: 'command_failed' });
 });
 
-test('claude-code mapping: an INTERRUPTED git commit is hinted command_failed, not vcs_commit', () => {
+test('claude-code mapping: an INTERRUPTED git commit is hinted command_failed, not vcs_commit, and carries NO boundary', () => {
   // Failure outranks the success hints — the commit that did not land is the one worth reading.
   const response = { stdout: '', stderr: '', interrupted: true };
   const [event] = map(
@@ -257,6 +260,65 @@ test('claude-code mapping: an INTERRUPTED git commit is hinted command_failed, n
   ) as [Record<string, unknown>];
   assert.equal((event.tool as Record<string, unknown>).category, 'vcs_commit');
   assert.deepEqual(event.hints, { possibly_salient: true, reason: 'command_failed' });
+  // A commit that did not land closed nothing, so it is no boundary either (issue #169) —
+  // the same precedence as the hints, one rung further: firing a distill on a failed commit
+  // would distill an arc that is still open.
+  assert.equal(event.boundary, undefined, 'a failed commit is not an arc boundary');
+});
+
+test('claude-code mapping: Bash `git commit-tree` is NOT a commit and carries NO boundary', () => {
+  // Regression guard on GIT_SUBCOMMAND's whole-token rule: `commit-tree` is a plumbing
+  // command that writes no ref, so misreading it as a commit would both mis-categorize the
+  // event and fabricate an arc boundary out of a no-op.
+  const [event] = map(
+    postToolUse('Bash', { command: 'git commit-tree 4b825dc -m "wip"' }, { stdout: 'a1b2c3\n' }),
+    inlineEnv(),
+  ) as [Record<string, unknown>];
+  assert.equal((event.tool as Record<string, unknown>).category, 'command', 'commit-tree is a plain command');
+  assert.equal(event.hints, undefined, 'no vcs_commit hint for commit-tree');
+  assert.equal(event.boundary, undefined, 'no boundary for commit-tree');
+  assert.doesNotThrow(() => validateEvent(event));
+});
+
+test('claude-code mapping: a TodoWrite with an EMPTY todos array is not a completion', () => {
+  // Strictness the fixtures cannot express: an empty list is vacuously "all completed" under a
+  // naive `.every()`, and clearing the todo list is exactly what starting fresh looks like.
+  const [event] = map(postToolUse('TodoWrite', { todos: [] }), inlineEnv()) as [Record<string, unknown>];
+  assert.equal((event.tool as Record<string, unknown>).native_name, 'TodoWrite');
+  assert.equal(event.boundary, undefined, 'an empty todo list closes nothing');
+  assert.doesNotThrow(() => validateEvent(event));
+});
+
+test('claude-code mapping: validateEvent accepts every boundary-bearing event and REJECTS a bogus kind', () => {
+  // `collect` reads NDJSON from anyone's stdin and the trigger downstream switches on
+  // `boundary.kind`, so the validator is the guard on what reaches an append-only log.
+  const session = (hook_event_name: string): NativePayload =>
+    ({ session_id: 'cc-inline-session', cwd: '/repo', hook_event_name }) as unknown as NativePayload;
+  const bearers: Array<[string, Record<string, unknown>]> = [
+    ['terminal/session_end', map(session('SessionEnd'), inlineEnv())[0] as Record<string, unknown>],
+    ['compaction/compact', map(session('PreCompact'), inlineEnv())[0] as Record<string, unknown>],
+    [
+      'semantic/git_commit',
+      map(postToolUse('Bash', { command: 'git commit -m "x"' }), inlineEnv())[0] as Record<string, unknown>,
+    ],
+    [
+      'semantic/todos_complete',
+      map(
+        postToolUse('TodoWrite', { todos: [{ content: 'x', status: 'completed', activeForm: 'Xing' }] }),
+        inlineEnv(),
+      )[0] as Record<string, unknown>,
+    ],
+  ];
+  for (const [label, event] of bearers) {
+    assert.ok(event.boundary, `${label}: the event must carry a boundary`);
+    assert.doesNotThrow(() => validateEvent(event), `${label}: must pass validateEvent`);
+    // A kind outside the vocabulary is rejected — garbage must not land in the log.
+    assert.throws(
+      () => validateEvent({ ...event, boundary: { kind: 'finished', signal: 'session_end' } }),
+      /boundary\.kind must be one of/,
+      `${label}: a bogus boundary.kind must be rejected`,
+    );
+  }
 });
 
 test('claude-code mapping: an unrecognized tool falls through to unknown/other (dumb by design)', () => {
@@ -283,7 +345,7 @@ test('claude-code mapping: Edit maps to edit/file_write with files[] action edit
   assert.doesNotThrow(() => validateEvent(event));
 });
 
-test('claude-code mapping: Stop maps to SessionEvent action stop', () => {
+test('claude-code mapping: Stop maps to SessionEvent action stop with NO boundary', () => {
   const native: NativePayload = {
     session_id: 'cc-inline-session',
     cwd: '/repo',
@@ -294,11 +356,15 @@ test('claude-code mapping: Stop maps to SessionEvent action stop', () => {
   const [event] = map(native, inlineEnv()) as [Record<string, unknown>];
   assert.equal(event.type, 'session');
   assert.equal(event.action, 'stop');
+  // Deliberately no boundary (issue #169): Stop fires once per assistant TURN, not once per
+  // session, so treating it as an end-of-arc marker would distill mid-session on every turn.
+  // SessionEnd is the one-shot terminal signal (08-session-end.json).
+  assert.equal(event.boundary, undefined, 'a per-turn signal is not a boundary');
   assert.doesNotThrow(() => validateEvent(event));
 });
 
 test('claude-code mapping: an unrecognized hook event maps to no canonical event', () => {
-  // Not one of the four mapped events — the mapper returns [] rather than throwing, so a
+  // Not one of the six mapped events — the mapper returns [] rather than throwing, so a
   // stray payload is a no-op (hook-safety, §14).
   const native = {
     session_id: 'cc-inline-session',
@@ -661,12 +727,12 @@ function pluginManifest(): { hooks: Record<string, HookMatcher[]>; mcpServers: R
   return JSON.parse(fs.readFileSync(PLUGIN_MANIFEST, 'utf8'));
 }
 
-test('plugin manifest declares exactly the four instrumented hook events, PostToolUse matched on *', () => {
+test('plugin manifest declares exactly the six instrumented hook events, PostToolUse matched on *', () => {
   const { hooks } = pluginManifest();
   assert.deepEqual(
     Object.keys(hooks).sort(),
-    ['PostToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit'],
-    'the four events the mapper handles must be the four the manifest declares',
+    ['PostToolUse', 'PreCompact', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit'],
+    'the six events the mapper handles must be the six the manifest declares',
   );
   // `*` is what makes instrumentation see every tool call; a narrower matcher would
   // silently drop tool events for tools not named in it.
@@ -683,7 +749,7 @@ test('plugin manifest declares exactly the four instrumented hook events, PostTo
 test('plugin manifest routes every hook through `librarian hook claude-code` guarded so the host never sees a non-zero exit', () => {
   const { hooks } = pluginManifest();
   const commands = Object.values(hooks).flatMap((matchers) => matchers.flatMap((m) => m.hooks.map((h) => h.command)));
-  assert.equal(commands.length, 4);
+  assert.equal(commands.length, 6);
   for (const command of commands) {
     // Bare `librarian` on PATH — the installed bin, not a path into this checkout (§14).
     assert.equal(command, 'librarian hook claude-code || true', 'unexpected hook command');

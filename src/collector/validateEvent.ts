@@ -7,6 +7,15 @@ export class DiagnosticRecordRejectedError extends Error {
 
 const EVENT_TYPES = ['prompt', 'tool', 'session'];
 
+/** Boundary strengths an adapter may claim (issue #169). Validated because `collect` reads
+ *  NDJSON from anyone's stdin, and the trigger downstream switches on this field — garbage
+ *  here would land in an append-only log that is never deleted. */
+const BOUNDARY_KINDS = ['terminal', 'semantic', 'compaction'];
+
+/** And which signals. Enum-checked like `kind`: a typo'd signal (`session_ended`) would land in
+ *  a log that is never deleted and no trigger would ever match it. */
+const BOUNDARY_SIGNALS = ['session_end', 'compact', 'git_commit', 'todos_complete'];
+
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null) {
     throw new Error(`${label} is required and must be an object`);
@@ -43,6 +52,16 @@ export function validateEvent(record: unknown): void {
   const context = asRecord(r.context, 'context');
   requireString(context, 'session_id', 'context.session_id');
   requireString(context, 'cwd', 'context.cwd');
+
+  if (r.boundary !== undefined) {
+    const boundary = asRecord(r.boundary, 'boundary');
+    if (typeof boundary.kind !== 'string' || !BOUNDARY_KINDS.includes(boundary.kind)) {
+      throw new Error(`boundary.kind must be one of ${BOUNDARY_KINDS.join(', ')}`);
+    }
+    if (typeof boundary.signal !== 'string' || !BOUNDARY_SIGNALS.includes(boundary.signal)) {
+      throw new Error(`boundary.signal must be one of ${BOUNDARY_SIGNALS.join(', ')}`);
+    }
+  }
 
   if (r.type === 'prompt') {
     requireString(r, 'prompt', 'prompt (PromptEvent)');

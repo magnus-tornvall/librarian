@@ -42,7 +42,39 @@ export type ToolCategory =
 
 export type FileAction = 'read' | 'write' | 'edit' | 'delete';
 
-export type SessionAction = 'start' | 'stop' | 'compact' | 'checkpoint';
+export type SessionAction = 'start' | 'stop' | 'compact' | 'checkpoint' | 'end';
+
+/**
+ * How strong an end-of-arc signal a boundary event is (issue #169).
+ *
+ *   - `terminal`   — the session is over; nothing more is coming (`SessionEnd`).
+ *   - `semantic`   — an arc closed but the session may continue (a `git commit`, todos
+ *                    going all-complete).
+ *   - `compaction` — the context window filled up. Recorded as a landmark, and
+ *                    deliberately NOT a completion signal: compaction means "the window
+ *                    filled", not "the work is finished", so acting on it would distill an
+ *                    unfinished arc. Librarian keeps its own durable event log, so unlike
+ *                    tools that read the transcript, compaction destroys nothing here and
+ *                    there is no deadline to honour.
+ *
+ * The adapter reports the kind and never decides what to do with it — whether a boundary
+ * fires a distill is the trigger's call (§4: dumb instrumentation).
+ */
+export type BoundaryKind = 'terminal' | 'semantic' | 'compaction';
+
+/**
+ * Which signal produced the boundary. Deliberately agent-INDEPENDENT: Claude Code's
+ * `SessionEnd` and OpenCode's `session.deleted` both report `session_end`, so a consumer
+ * switches on one field instead of a per-agent table (`resource.agent` still says which
+ * agent it was). It overlaps `SessionAction` for the session-level signals; that redundancy
+ * is the point — `boundary` is the single field a trigger reads.
+ */
+export type BoundarySignal = 'session_end' | 'compact' | 'git_commit' | 'todos_complete';
+
+export interface Boundary {
+  kind: BoundaryKind;
+  signal: BoundarySignal;
+}
 
 export type HintReason =
   | 'file_write'
@@ -80,6 +112,8 @@ interface EventBase {
   resource: Resource;
   context: Context;
   hints?: Hints;
+  /** Present only on the events that close an arc (issue #169) — absent otherwise. */
+  boundary?: Boundary;
 }
 
 export type PromptEvent = EventBase & { type: 'prompt'; prompt: string };
@@ -125,6 +159,8 @@ export type CanonicalEvent = PromptEvent | ToolEvent | SessionEvent;
 //   - PostToolUse      — `{ …common, tool_name, tool_input, … }`      → ToolEvent
 //   - SessionStart     — `{ …common, source, model? }`               → SessionEvent(start)
 //   - Stop             — `{ …common, stop_hook_active, … }`          → SessionEvent(stop)
+//   - SessionEnd       — `{ …common, reason }`                       → SessionEvent(end), terminal
+//   - PreCompact       — `{ …common, trigger, … }`                   → SessionEvent(compact), compaction
 //
 // The `hook_event_name` string IS the discriminator here (unlike OpenCode, whose hook
 // names were deliberately NOT the contract). Claude Code's hook payload is the public,
@@ -209,11 +245,33 @@ export interface StopPayload extends CommonHookFields {
   last_assistant_message?: string;
 }
 
+/**
+ * SessionEnd → SessionEvent(end) + a TERMINAL boundary. This is the genuine one-shot
+ * session boundary — unlike `Stop`, which fires once per assistant turn. A hard-killed
+ * terminal fires no SessionEnd at all, which is why the trigger's timeout and scheduled
+ * net remain the guarantee and this is only the fast path (issue #169).
+ */
+export interface SessionEndPayload extends CommonHookFields {
+  hook_event_name: 'SessionEnd';
+  /** clear | logout | prompt_input_exit | other (recorded, not remapped). */
+  reason?: string;
+}
+
+/** PreCompact → SessionEvent(compact) + a COMPACTION boundary: recorded, never fired on. */
+export interface PreCompactPayload extends CommonHookFields {
+  hook_event_name: 'PreCompact';
+  /** manual | auto. */
+  trigger?: string;
+  custom_instructions?: string;
+}
+
 export type NativePayload =
   | UserPromptSubmitPayload
   | PostToolUsePayload
   | SessionStartPayload
-  | StopPayload;
+  | StopPayload
+  | SessionEndPayload
+  | PreCompactPayload;
 
 // ---------------------------------------------------------------------------
 // Tool classification (§10.1). Native Claude Code tool name → canonical_name/category.
@@ -368,6 +426,36 @@ function commandFailed(outcome: Outcome | undefined): boolean {
   return outcome?.interrupted === true;
 }
 
+/**
+ * Which session-level transitions are boundaries, and how strong (issue #169). Kept as a
+ * table so the OpenCode adapter can carry the identical one: both agents' terminal signal
+ * lands as `{terminal, session_end}` and both compactions as `{compaction, compact}`.
+ * `start`/`stop`/`checkpoint` are absent — `Stop` fires per turn, so it is not a boundary.
+ */
+const SESSION_BOUNDARY: Partial<Record<SessionAction, Boundary>> = {
+  end: { kind: 'terminal', signal: 'session_end' },
+  compact: { kind: 'compaction', signal: 'compact' },
+};
+
+/**
+ * Did a TodoWrite call leave every todo complete? That transition is the closest thing an
+ * agent emits to "the plan is done" — a semantic arc boundary. Strict on purpose: an empty
+ * list is not a completion, and only `completed` counts (a `cancelled` todo means the work
+ * was dropped, not finished). A partial update is no boundary at all.
+ *
+ * Reading the todo list is not the adapter growing judgment: it is reporting a state the
+ * host handed over verbatim, the same way `outcome.exit` is OpenCode's own verdict (§4).
+ */
+function todosAllComplete(todos: unknown): boolean {
+  if (!Array.isArray(todos) || todos.length === 0) {
+    return false;
+  }
+  return todos.every((todo) => {
+    const record = typeof todo === 'object' && todo !== null ? (todo as Record<string, unknown>) : undefined;
+    return record?.status === 'completed';
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Mapping.
 // ---------------------------------------------------------------------------
@@ -432,19 +520,36 @@ function mapTool(payload: PostToolUsePayload, env: MapEnv): ToolEvent {
     event.hints = { possibly_salient: true, reason: 'vcs_commit' };
   }
 
+  // Semantic arc boundaries off the tool stream (issue #169): a landed commit, or todos
+  // going all-complete. A commit that failed closed nothing, so it is not a boundary —
+  // same precedence as the hints above.
+  //
+  // Known false-positive class, and accepted: `commandFailed` here can only honour
+  // `interrupted` (this payload carries no exit code), so a commit rejected by a pre-commit
+  // hook, a `git commit` with nothing staged, or a `--dry-run` still reads as an arc that
+  // closed. The OpenCode adapter, which has a real exit code, does not have this blind spot.
+  // Sharpening it would mean grepping the output for failure text — the salience authority §4
+  // keeps out of the adapter. The cost of a false positive is one distill fired a little
+  // early on a still-open arc; the cost of the alternative is adapter-side judgment §4
+  // has twice refused. Revisit only if the payload ever exposes an exit code.
+  if (category === 'vcs_commit' && !commandFailed(outcome)) {
+    event.boundary = { kind: 'semantic', signal: 'git_commit' };
+  } else if (payload.tool_name.toLowerCase() === 'todowrite' && todosAllComplete(payload.tool_input?.todos)) {
+    event.boundary = { kind: 'semantic', signal: 'todos_complete' };
+  }
+
   return event;
 }
 
-function mapSessionStart(_payload: SessionStartPayload, env: MapEnv): SessionEvent {
-  // Every SessionStart (startup/resume/clear/compact source) maps to action "start":
-  // the canonical SessionAction vocabulary has no per-source variants, and the adapter
-  // does not editorialize (dumb mapping, §4). `source` is recorded on the native
-  // payload for the collector/distiller, not remapped here.
-  return { ...base(env), type: 'session', action: 'start' };
-}
-
-function mapStop(_payload: StopPayload, env: MapEnv): SessionEvent {
-  return { ...base(env), type: 'session', action: 'stop' };
+/** A session-level transition plus the boundary strength the table assigns it (none for
+ *  `start`/`stop` — see the call sites). */
+function mapSessionTransition(action: SessionAction, env: MapEnv): SessionEvent {
+  const event: SessionEvent = { ...base(env), type: 'session', action };
+  const boundary = SESSION_BOUNDARY[action];
+  if (boundary !== undefined) {
+    event.boundary = boundary;
+  }
+  return event;
 }
 
 /**
@@ -463,11 +568,21 @@ export function map(payload: NativePayload, env: MapEnv): CanonicalEvent[] {
     case 'PostToolUse':
       return [mapTool(payload, env)];
     case 'SessionStart':
-      return [mapSessionStart(payload, env)];
+      // Every SessionStart (startup/resume/clear/compact source) maps to action "start": the
+      // canonical SessionAction vocabulary has no per-source variants, and the adapter does not
+      // editorialize (dumb mapping, §4). `source` is recorded on the native payload for the
+      // collector/distiller, not remapped here.
+      return [mapSessionTransition('start', env)];
     case 'Stop':
-      return [mapStop(payload, env)];
+      // NOT a boundary: Stop fires once per assistant turn, not once per session, so treating it
+      // as an end-of-arc marker would distill mid-session on every turn (issue #169).
+      return [mapSessionTransition('stop', env)];
+    case 'SessionEnd':
+      return [mapSessionTransition('end', env)];
+    case 'PreCompact':
+      return [mapSessionTransition('compact', env)];
     default: {
-      // Exhaustiveness guard for the four mapped events. An unrecognized event is NOT a
+      // Exhaustiveness guard for the mapped events. An unrecognized event is NOT a
       // programming error the way an unmapped OpenCode kind was — Claude Code has many
       // hook events, and a user may wire one we do not map. We return no events rather
       // than throw, so a stray payload is a no-op, never a crash (hook-safety, §14).

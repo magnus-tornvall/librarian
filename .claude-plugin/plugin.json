@@ -32,6 +32,20 @@
           { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          { "type": "command", "command": "librarian hook claude-code || true", "timeout": 10 }
+        ]
+      }
     ]
   },
   "mcpServers": {

@@ -1,0 +1,53 @@
+{
+  "name": "todowrite-partial",
+  "description": "The same `todowrite` mid-plan: one entry still `in_progress`, so NO boundary. A partial update is progress, not a closed arc — todos are rewritten wholesale on nearly every turn, and treating any of them as an ending would distill mid-work (issue #169). Otherwise identical to 11-todowrite-all-complete, so the pair isolates the all-complete rule.",
+  "native": {
+    "kind": "tool",
+    "tool": "todowrite",
+    "todos": [
+      { "id": "t1", "content": "Add the boundary field to the mapper", "status": "completed", "priority": "high" },
+      { "id": "t2", "content": "Cover it with fixtures", "status": "in_progress", "priority": "medium" }
+    ]
+  },
+  "env": {
+    "event_id": "01J8X7QK48B3D9V2S0W4X9Z1AA",
+    "ts": "2026-07-06T09:44:00.000Z",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 6,
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK48B3D9V2S0W4X9Z1AA",
+    "ts": "2026-07-06T09:44:00.000Z",
+    "type": "tool",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 6,
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "todowrite",
+      "canonical_name": "unknown",
+      "category": "other"
+    }
+  }
+}

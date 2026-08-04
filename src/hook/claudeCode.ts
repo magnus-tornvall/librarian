@@ -155,8 +155,15 @@ function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
 
-/** The four hook events this adapter maps; anything else is intentionally ignored. */
-const MAPPED_EVENTS = new Set(['UserPromptSubmit', 'PostToolUse', 'SessionStart', 'Stop']);
+/** The hook events this adapter maps; anything else is intentionally ignored. */
+const MAPPED_EVENTS = new Set([
+  'UserPromptSubmit',
+  'PostToolUse',
+  'SessionStart',
+  'Stop',
+  'SessionEnd',
+  'PreCompact',
+]);
 
 /**
  * Validate + narrow raw stdin JSON to a NativePayload for one of the four mapped events.

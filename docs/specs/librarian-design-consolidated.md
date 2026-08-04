@@ -157,6 +157,7 @@ Items marked **[endorsed]** were independently validated by the 2026-07-04 liter
 **Resource & salience**
 - Instrumentation stamps **facts**: `agent`, `agent_version`, `machine_id`, `cwd`, `git_root`, `git_remote`, `git_branch`. Authoritative `project_slug` is derived deterministically at distill/index time and cached in note `scope`.
 - Instrumentation may emit `hints: { possibly_salient?, reason? }` — non-authoritative. Canonical salience lives in the collector/distiller.
+- **Boundary markers (2026-08-04 → #169):** events that close an arc carry `boundary: { kind: "terminal" | "semantic" | "compaction", signal }`, so a distill trigger has something better than a clock to act on. The vocabulary is **agent-independent by design** — Claude Code's `SessionEnd` and OpenCode's `session.deleted` both report `{terminal, session_end}`, so a consumer switches on one field and `resource.agent` still says who produced it. Three strengths, and the difference is load-bearing: `terminal` means nothing more is coming; `semantic` (a landed `git commit`, todos going all-complete) means an arc closed while the session may continue, so it may fire a distill but must not claim the session finished; `compaction` is **recorded and never fired on** — compaction means "the context window filled up", not "the work is finished", and firing there would distill an unfinished arc. Tools that read the transcript treat `PreCompact` as a data-preservation deadline; librarian writes its own durable event log through the hooks, so compaction destroys nothing it needs and there is no urgency. A per-turn signal is never a boundary (`Stop`, `session.idle`), and a hard-killed terminal emits no terminal marker at all — boundaries are an optimisation over the trigger's timeout and scheduled net, never the guarantee. Detection stays in the pure mappers (fixture-testable); the adapter reports strength and never decides what to do with it.
 
 **Search & index**
 - BM25-over-SQLite-FTS5 is the one blessed index. No recall provider abstraction. Schema must not block later vector search, but nothing more. **[endorsed** — BM25-only v1 is pragmatic; lexical retrieval also has an inherently milder distractor profile than dense retrieval**]**
@@ -349,8 +350,11 @@ type ToolEvent = EventBase & {
   files?: Array<{ path: string; action: "read" | "write" | "edit" | "delete" }>;
 };
 
-type SessionEvent = EventBase & { type: "session"; action: "start" | "stop" | "compact" | "checkpoint" };
+type SessionEvent = EventBase & { type: "session";
+                                  action: "start" | "stop" | "compact" | "checkpoint" | "end" };
 ```
+
+`EventBase` also carries the optional `boundary: { kind: "terminal" | "semantic" | "compaction", signal }` marker (§ Resource & salience) on the events where an arc closed.
 
 **Rules:** redaction before append; `resource` stores facts, not authoritative identity; `project_slug` not on events; hints non-authoritative; partial lines ignored/quarantined; cursors advance after success; validators hard-reject `record_class: diagnostic`. **Provenance is collector-stamped, never LLM-authored:** the renderer presents events with ordinal indexes; the LLM cites indexes; the collector maps indexes → ULIDs. Mechanical fields belong to code.
 

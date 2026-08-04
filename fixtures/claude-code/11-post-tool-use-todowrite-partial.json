@@ -1,0 +1,93 @@
+{
+  "name": "post-tool-use-todowrite-partial",
+  "description": "The negative half of 10: the same TodoWrite call with one todo still `in_progress` maps to the identical ToolEvent with NO boundary. A partial update closes nothing, and `todosAllComplete` is strict on purpose — every todo must be `completed` (a `cancelled` todo means the work was dropped, not finished). Without this case, a mapper that flagged every TodoWrite would still look green.",
+  "native": {
+    "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+    "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
+    "cwd": "/Users/magnus/dev/librarian",
+    "permission_mode": "default",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "TodoWrite",
+    "tool_input": {
+      "todos": [
+        {
+          "content": "Add the boundary field to the canonical event schema",
+          "status": "completed",
+          "activeForm": "Adding the boundary field to the canonical event schema"
+        },
+        {
+          "content": "Map SessionEnd and PreCompact in the Claude Code adapter",
+          "status": "in_progress",
+          "activeForm": "Mapping SessionEnd and PreCompact in the Claude Code adapter"
+        }
+      ]
+    },
+    "tool_response": {
+      "oldTodos": [
+        {
+          "content": "Add the boundary field to the canonical event schema",
+          "status": "in_progress",
+          "activeForm": "Adding the boundary field to the canonical event schema"
+        },
+        {
+          "content": "Map SessionEnd and PreCompact in the Claude Code adapter",
+          "status": "pending",
+          "activeForm": "Mapping SessionEnd and PreCompact in the Claude Code adapter"
+        }
+      ],
+      "newTodos": [
+        {
+          "content": "Add the boundary field to the canonical event schema",
+          "status": "completed",
+          "activeForm": "Adding the boundary field to the canonical event schema"
+        },
+        {
+          "content": "Map SessionEnd and PreCompact in the Claude Code adapter",
+          "status": "in_progress",
+          "activeForm": "Mapping SessionEnd and PreCompact in the Claude Code adapter"
+        }
+      ]
+    },
+    "tool_use_id": "toolu_01STU901VWX234",
+    "duration_ms": 9
+  },
+  "env": {
+    "event_id": "01J8X7QK49C4E8X1U5Y9A3B7D4",
+    "ts": "2026-07-06T09:23:40.700Z",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK49C4E8X1U5Y9A3B7D4",
+    "ts": "2026-07-06T09:23:40.700Z",
+    "type": "tool",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "TodoWrite",
+      "canonical_name": "unknown",
+      "category": "other"
+    }
+  }
+}
