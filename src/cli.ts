@@ -55,6 +55,8 @@ const USAGE = `usage:
   librarian doctor [--index-dir <dir>] [--config <file>] [--json]
                                             report embedding endpoint and index readiness
   librarian update [--check]                check for or explicitly apply a binary update
+  librarian uninstall [--purge] [--dry-run] [--yes]
+                                           remove the wiring and the installed bin; keeps ~/.librarian data unless --purge
   librarian inject --project <slug> [--index-dir <dir>] [--global] [--session-start] [--session <id>]
                                            read prompt text on stdin and print push-path memory block
   librarian note show <note_id> [--data-dir <dir>] [--with-provenance] [--json]
@@ -1339,6 +1341,11 @@ export async function main(argv: string[]): Promise<void> {
     case 'update':
       await updateCommand(rest);
       break;
+    case 'uninstall': {
+      const { uninstallCommand } = await import('./uninstall.ts');
+      await uninstallCommand(rest);
+      break;
+    }
     case 'init':
       await initCommand(rest);
       break;
@@ -1424,7 +1431,9 @@ export async function main(argv: string[]): Promise<void> {
       process.stderr.write(USAGE);
       process.exit(command === undefined ? 1 : 2);
   }
-  if (command !== 'update') await passiveUpdateCheck();
+  // `uninstall` is excluded for the same reason as `update`, plus one of its own: the passive
+  // check writes ~/.librarian/cache/update-check, which would re-create the tree we just removed.
+  if (command !== 'update' && command !== 'uninstall') await passiveUpdateCheck();
 }
 
 // Auto-run only as the CLI entry point, so this module can be imported (e.g. by
