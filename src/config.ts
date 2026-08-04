@@ -14,10 +14,22 @@ export type LibrarianConfig = {
     timeoutMs: number;
     recallTimeoutMs: number;
   };
+  distill: {
+    /** How long a session must be quiet before its delta is distillable (#168). */
+    settleMs: number;
+  };
   // Persisted home for exported notes; the fallback when a command's --vault is absent.
   vault?: string;
   scoring: ScoringConfig;
 };
+
+/**
+ * Default settle window (24 h). Deliberately generous: the settle gate is
+ * concurrency safety, not quality (#168) — no threshold can prevent a mid-arc
+ * split, so over-waiting costs almost nothing while under-waiting distills a
+ * session that is still being worked in.
+ */
+export const DEFAULT_SETTLE_MS = 86_400_000;
 
 function invalid(key: string, configPath: string, expected: string): never {
   throw new Error(`invalid ${key} in ${configPath}: expected ${expected}`);
@@ -102,9 +114,25 @@ function embeddingConfig(value: unknown, configPath: string): LibrarianConfig['e
   return { endpoint: embedding.endpoint, model: embedding.model, ...(embedding.digest ? { digest: embedding.digest } : {}), timeoutMs, recallTimeoutMs };
 }
 
+function distillConfig(value: unknown, configPath: string): LibrarianConfig['distill'] {
+  if (value === undefined) return { settleMs: DEFAULT_SETTLE_MS };
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    invalid('distill', configPath, 'an object');
+  }
+  const distill = value as Record<string, unknown>;
+  const settleMs = distill.settleMs ?? DEFAULT_SETTLE_MS;
+  // Zero is legal and means "gate off" — the escape hatch for an operator who
+  // wants a manual drain to distill today's work while nothing emits a terminal
+  // boundary marker yet (#169). Negative or non-finite is a typo, not an intent.
+  if (typeof settleMs !== 'number' || !Number.isFinite(settleMs) || settleMs < 0) {
+    invalid('distill.settleMs', configPath, 'a non-negative finite number');
+  }
+  return { settleMs };
+}
+
 export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {
   if (!fs.existsSync(configPath)) {
-    return { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, scoring: scoringConfig(undefined, configPath) };
+    return { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, distill: distillConfig(undefined, configPath), scoring: scoringConfig(undefined, configPath) };
   }
 
   let parsed: unknown;
@@ -127,5 +155,5 @@ export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {
     throw new Error(`invalid inference.model in ${configPath}: expected a string`);
   }
   const model = (inference.model as string | undefined) ?? (provider === 'opencode' ? 'opencode/big-pickle' : undefined);
-  return { inference: { provider, model }, embedding: embeddingConfig(root.embedding, configPath), vault: vaultConfig(root.vault, configPath), scoring: scoringConfig(root.scoring, configPath) };
+  return { inference: { provider, model }, embedding: embeddingConfig(root.embedding, configPath), distill: distillConfig(root.distill, configPath), vault: vaultConfig(root.vault, configPath), scoring: scoringConfig(root.scoring, configPath) };
 }

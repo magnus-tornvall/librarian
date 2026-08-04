@@ -8,6 +8,7 @@ import { appendNote, readAllNotes } from '../log/noteLog.ts';
 import { updateIndex } from '../recall/embedding.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
+import { loadConfig } from '../config.ts';
 import { acquireLock } from '../log/lock.ts';
 import {
   writeDistillVerdict,
@@ -58,6 +59,68 @@ const MAX_ATTEMPTS = 3;
  */
 const MIN_EVENTS = 10;
 const MIN_PROMPTS = 2;
+
+/**
+ * The session action that marks an arc genuinely over — nothing more is coming
+ * (#169's `SessionEnd` / OpenCode `session.deleted`). `stop` is NOT terminal: it
+ * fires once per assistant turn. Until #169 ships nothing emits this, so the
+ * settle gate below is time-only — which is the whole rule and works standalone.
+ */
+const TERMINAL_SESSION_ACTION = 'end';
+
+/**
+ * True when the delta ENDS on a terminal boundary marker (#169's fast path).
+ * The last event, not any event: a resumed session's log continues past its old
+ * marker, and distilling that delta on the strength of a superseded end would be
+ * the very mid-arc distill this gate exists to prevent.
+ */
+function hasTerminalBoundary(events: Array<Record<string, unknown>>): boolean {
+  const last = events[events.length - 1];
+  return last?.type === 'session' && last.action === TERMINAL_SESSION_ACTION;
+}
+
+/**
+ * Epoch ms of the newest hook-stamped `ts` in the delta, or null when none
+ * parses. The event's own clock, never file mtime — mtime drifts with unrelated
+ * writes and is not the event clock (#168).
+ */
+function lastEventTs(events: Array<Record<string, unknown>>): number | null {
+  let newest: number | null = null;
+  for (const event of events) {
+    if (typeof event.ts !== 'string') continue;
+    const ms = Date.parse(event.ts);
+    if (Number.isNaN(ms)) continue;
+    if (newest === null || ms > newest) newest = ms;
+  }
+  return newest;
+}
+
+/**
+ * Settle gate (#168): a delta is distillable only once its session has gone
+ * quiet for `settleMs`, or a terminal boundary marker says the arc is over.
+ *
+ * This is concurrency safety, not quality — `runDistill` sweeps EVERY pending
+ * session, so without it a drain fired for session A would distill session B
+ * mid-arc. Returns a human reason when the delta must wait, else null.
+ *
+ * A delta with no parseable `ts` is treated as settled: an unreadable clock must
+ * never wedge a session behind the gate forever.
+ */
+function deferReason(
+  events: Array<Record<string, unknown>>,
+  settleMs: number,
+  now: number,
+): string | null {
+  if (hasTerminalBoundary(events)) return null;
+  const last = lastEventTs(events);
+  if (last === null) return null;
+  // Clamped: an event stamped in the future (a peer machine's skewed clock,
+  // arriving via the §15 sync delegation) must cost at most one settle window,
+  // not the length of the skew.
+  const quietMs = Math.max(0, now - last);
+  if (quietMs >= settleMs) return null;
+  return `session still live: last event ${Math.round(quietMs / 1000)}s ago, settle window ${Math.round(settleMs / 1000)}s`;
+}
 
 /**
  * Tool categories that count as a "write tool" for the skip heuristic — a
@@ -289,6 +352,13 @@ export type DistillRunResult = {
   distilled: number;
   duplicates: number;
   skipped: number;
+  /**
+   * Sessions held back by the settle gate (#168) — not yet eligible, never
+   * judged. Kept apart from `skipped` because "still live" and "judged not worth
+   * distilling" are different facts; their cursors are untouched and they are
+   * reconsidered on the next pass.
+   */
+  deferred: number;
   noops: number;
   quarantined: number;
   rejected: number;
@@ -335,7 +405,7 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
   if (lock === null) {
     // Someone live and fresh is already draining this backlog — not an error.
     process.stderr.write('librarian: distill already running (lock held); nothing to do\n');
-    return { distilled: 0, duplicates: 0, skipped: 0, noops: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
+    return { distilled: 0, duplicates: 0, skipped: 0, deferred: 0, noops: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
   }
   try {
     const result = await runDistillPass(options);
@@ -347,7 +417,9 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
 }
 
 async function runDistillPass(options: DistillRunOptions): Promise<DistillRunResult> {
-  const result: DistillRunResult = { distilled: 0, duplicates: 0, skipped: 0, noops: 0, quarantined: 0, rejected: 0, status: 'pass' };
+  const result: DistillRunResult = { distilled: 0, duplicates: 0, skipped: 0, deferred: 0, noops: 0, quarantined: 0, rejected: 0, status: 'pass' };
+  const settleMs = loadConfig(options.configPath).distill.settleMs;
+  const passStartedAt = Date.now();
   // Distinct sessions that had ANY quarantine this run (a corrupt line and/or a
   // budget-exhausted delta). Set, not a counter: several corrupt lines in one
   // session is still one quarantined session, so the drain summary's "sessions
@@ -444,6 +516,25 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
       write_tools: metrics.writeTools,
       salience_hints: metrics.salienceHints,
     };
+
+    // Settle gate FIRST (#168): a live session is not eligible to be judged at
+    // all, so it must not reach the content heuristic. The cursor stays put —
+    // this is a deferral, not a decision, and the delta is reconsidered next pass.
+    const defer = deferReason(events, settleMs, passStartedAt);
+    if (defer !== null) {
+      writeDistillVerdict(diagnosticsDir, {
+        record_class: 'diagnostic',
+        verdict_id: makeVerdictId(),
+        ts: new Date().toISOString(),
+        session_id: sessionId,
+        decision: 'deferred',
+        reason: defer,
+        ...diagnosticFields,
+        counts,
+      });
+      result.deferred += 1;
+      continue;
+    }
 
     const skip = skipReason(metrics);
     if (skip !== null) {
@@ -598,8 +689,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
       result.distilled += 1;
     } catch (err) {
       const lastError = err instanceof Error ? err.message : String(err);
-      const priorCount =
-        cursor?.failed_attempts?.byte_offset === startOffset ? cursor.failed_attempts.count : 0;
+      const priorAttempts = cursor?.failed_attempts;
+      const sameDelta = priorAttempts?.byte_offset === startOffset && priorAttempts?.byte_end === newOffset;
+      const priorCount = sameDelta ? priorAttempts.count : 0;
       const attempt = priorCount + 1;
 
       if (attempt < MAX_ATTEMPTS) {
@@ -611,6 +703,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           cursorPath,
           makeCursor(logFilePath, sessionId, startOffset, cursor?.last_record_id, {
             byte_offset: startOffset,
+            byte_end: newOffset,
             count: attempt,
             last_error: lastError,
           }),

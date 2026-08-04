@@ -1010,7 +1010,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
     index.close();
   }
 
-  const distillWork = distilled.distilled + distilled.duplicates + distilled.skipped + distilled.noops + distilled.quarantined + distilled.rejected;
+  const distillWork = distilled.distilled + distilled.duplicates + distilled.skipped + distilled.deferred + distilled.noops + distilled.quarantined + distilled.rejected;
   const exportWork = (exported?.exported ?? 0) + (exported?.removed ?? 0);
   if (distillWork === 0 && exportWork === 0 && distilled.status === 'pass') {
     // Coverage is live index state, not a work counter — runDistill embedded above
@@ -1023,6 +1023,7 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
     `sessions distilled: ${distilled.distilled}`,
     `sessions duplicates: ${distilled.duplicates}`,
     `sessions skipped: ${distilled.skipped}`,
+    `sessions deferred (still live): ${distilled.deferred}`,
     `sessions noops: ${distilled.noops}`,
     `sessions quarantined: ${distilled.quarantined}`,
     `sessions rejected: ${distilled.rejected}`,

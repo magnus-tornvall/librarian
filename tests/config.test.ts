@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadConfig } from '../src/config.ts';
+import { loadConfig, DEFAULT_SETTLE_MS } from '../src/config.ts';
 import { DEFAULT_SCORING_CONFIG } from '../src/recall/scoring.ts';
 
 test('loadConfig defaults missing and empty scoring sections per key', () => {
   const file = path.join(os.tmpdir(), `missing-${Date.now()}.json`);
-  assert.deepEqual(loadConfig(file), { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, scoring: DEFAULT_SCORING_CONFIG });
+  assert.deepEqual(loadConfig(file), { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, distill: { settleMs: DEFAULT_SETTLE_MS }, scoring: DEFAULT_SCORING_CONFIG });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-config-'));
   const empty = path.join(dir, 'config.json');
   fs.writeFileSync(empty, JSON.stringify({ scoring: { originWeights: { human: 2 }, recencyHalfLifeDays: { fact: 'Infinity' } } }));
@@ -71,4 +71,27 @@ test('loadConfig reads optional embedding settings and rejects malformed values'
   assert.throws(() => loadConfig(file), /embedding\.recallTimeoutMs/);
   fs.writeFileSync(file, JSON.stringify({ embedding: { endpoint: 'http://localhost', model: 'model', digest: '' } }));
   assert.throws(() => loadConfig(file), /embedding\.digest/);
+});
+
+test('loadConfig reads distill.settleMs: default, explicit, gate-off zero, and a loud reject', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-settle-'));
+  const write = (name: string, body: unknown): string => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, JSON.stringify(body));
+    return file;
+  };
+
+  assert.equal(DEFAULT_SETTLE_MS, 86_400_000, 'the default settle window is 24h');
+  assert.equal(loadConfig(write('bare.json', { inference: { provider: 'claude' } })).distill.settleMs, DEFAULT_SETTLE_MS);
+  assert.equal(loadConfig(write('set.json', { distill: { settleMs: 5_000 } })).distill.settleMs, 5_000);
+  // Zero is the deliberate escape hatch (gate off), not a validation failure.
+  assert.equal(loadConfig(write('off.json', { distill: { settleMs: 0 } })).distill.settleMs, 0);
+  assert.throws(() => loadConfig(write('neg.json', { distill: { settleMs: -1 } })), /distill\.settleMs/);
+  assert.throws(() => loadConfig(write('str.json', { distill: { settleMs: '1h' } })), /distill\.settleMs/);
+  assert.throws(() => loadConfig(write('arr.json', { distill: [] })), /invalid distill/);
+
+  // An unmanaged key alongside it still loads and is left alone.
+  const withExtra = write('extra.json', { distill: { settleMs: 60_000 }, extra: 'keep-me' });
+  assert.equal(loadConfig(withExtra).distill.settleMs, 60_000);
+  assert.equal(JSON.parse(fs.readFileSync(withExtra, 'utf8')).extra, 'keep-me');
 });
