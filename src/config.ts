@@ -120,7 +120,14 @@ function distillConfig(value: unknown, configPath: string): LibrarianConfig['dis
     invalid('distill', configPath, 'an object');
   }
   const distill = value as Record<string, unknown>;
-  return { settleMs: positiveTimeout(distill.settleMs, DEFAULT_SETTLE_MS, 'distill.settleMs', configPath) };
+  const settleMs = distill.settleMs ?? DEFAULT_SETTLE_MS;
+  // Zero is legal and means "gate off" — the escape hatch for an operator who
+  // wants a manual drain to distill today's work while nothing emits a terminal
+  // boundary marker yet (#169). Negative or non-finite is a typo, not an intent.
+  if (typeof settleMs !== 'number' || !Number.isFinite(settleMs) || settleMs < 0) {
+    invalid('distill.settleMs', configPath, 'a non-negative finite number');
+  }
+  return { settleMs };
 }
 
 export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {

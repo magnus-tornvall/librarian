@@ -25,6 +25,13 @@ type ReportNote = Pick<StatsNote, 'note_id' | 'title'>;
 export type StatsReport = {
   admission: {
     total: number;
+    /**
+     * Settle-gate deferrals (#168) — reported beside the funnel, never inside
+     * it. One record per pass that held a live session back, so this is "how
+     * often the gate fired", not a count of sessions; `sessions` names the
+     * distinct sessions currently being held.
+     */
+    deferred: { records: number; sessions: number };
     by_month: Record<string, Breakdown>;
     by_origin: Record<string, Breakdown>;
     by_provider: Record<string, Breakdown>;
@@ -121,6 +128,10 @@ export function computeStats({
   return {
     admission: {
       total: judged.length,
+      deferred: {
+        records: verdicts.length - judged.length,
+        sessions: new Set(verdicts.filter((v) => v.decision === 'deferred').map((v) => v.session_id)).size,
+      },
       by_month: grouped(judged, (verdict) => verdict.ts.slice(0, 7)),
       by_origin: grouped(judged, (verdict) => verdict.origin ?? 'unknown'),
       by_provider: grouped(judged, (verdict) => verdict.provider ?? 'unknown'),
@@ -162,6 +173,7 @@ export function formatStats(report: StatsReport): string {
   return [
     'Admission funnel',
     `Total verdicts: ${report.admission.total}`,
+    `Deferred (session still live, not judged): ${report.admission.deferred.records} holds over ${report.admission.deferred.sessions} sessions`,
     'By month:', ...formatBreakdowns(report.admission.by_month),
     'By origin:', ...formatBreakdowns(report.admission.by_origin),
     'By provider:', ...formatBreakdowns(report.admission.by_provider),

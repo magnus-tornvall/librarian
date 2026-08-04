@@ -13,8 +13,14 @@ export type Cursor = {
    * bookkeeping file. Survives a failed run so the next run knows how many times
    * this exact range has already been tried. Reset (omitted) whenever the offset
    * advances — a fresh range starts its count at zero.
+   *
+   * The range is BOTH ends: a delta that grew since the failing attempt (the
+   * session kept appending, or the settle gate held it while it did) is a
+   * different delta and gets a fresh budget, so a long hold can never make one
+   * exhausted budget quarantine a day of events. `byte_end` is absent on cursors
+   * written before it existed; such a budget simply restarts.
    */
-  failed_attempts?: { byte_offset: number; count: number; last_error: string };
+  failed_attempts?: { byte_offset: number; byte_end?: number; count: number; last_error: string };
   updated_at: string;
 };
 

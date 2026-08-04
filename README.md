@@ -126,7 +126,9 @@ you are still working in.
 }
 ```
 
-Lower it if you want notes from today's work sooner. The exact value is not load-bearing:
+Lower it if you want notes from today's work sooner; `"settleMs": 0` turns the gate off
+entirely, which is the escape hatch for a manual drain you know is safe. The exact value is
+not load-bearing:
 no threshold can stop a long real pause from splitting an arc, so over-waiting is cheap and
 under-waiting distills live work.
 

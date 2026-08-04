@@ -68,9 +68,15 @@ const MIN_PROMPTS = 2;
  */
 const TERMINAL_SESSION_ACTION = 'end';
 
-/** True when the delta carries a terminal boundary marker (#169's fast path). */
+/**
+ * True when the delta ENDS on a terminal boundary marker (#169's fast path).
+ * The last event, not any event: a resumed session's log continues past its old
+ * marker, and distilling that delta on the strength of a superseded end would be
+ * the very mid-arc distill this gate exists to prevent.
+ */
 function hasTerminalBoundary(events: Array<Record<string, unknown>>): boolean {
-  return events.some((event) => event.type === 'session' && event.action === TERMINAL_SESSION_ACTION);
+  const last = events[events.length - 1];
+  return last?.type === 'session' && last.action === TERMINAL_SESSION_ACTION;
 }
 
 /**
@@ -108,7 +114,10 @@ function deferReason(
   if (hasTerminalBoundary(events)) return null;
   const last = lastEventTs(events);
   if (last === null) return null;
-  const quietMs = now - last;
+  // Clamped: an event stamped in the future (a peer machine's skewed clock,
+  // arriving via the §15 sync delegation) must cost at most one settle window,
+  // not the length of the skew.
+  const quietMs = Math.max(0, now - last);
   if (quietMs >= settleMs) return null;
   return `session still live: last event ${Math.round(quietMs / 1000)}s ago, settle window ${Math.round(settleMs / 1000)}s`;
 }
@@ -680,8 +689,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
       result.distilled += 1;
     } catch (err) {
       const lastError = err instanceof Error ? err.message : String(err);
-      const priorCount =
-        cursor?.failed_attempts?.byte_offset === startOffset ? cursor.failed_attempts.count : 0;
+      const priorAttempts = cursor?.failed_attempts;
+      const sameDelta = priorAttempts?.byte_offset === startOffset && priorAttempts?.byte_end === newOffset;
+      const priorCount = sameDelta ? priorAttempts.count : 0;
       const attempt = priorCount + 1;
 
       if (attempt < MAX_ATTEMPTS) {
@@ -693,6 +703,7 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
           cursorPath,
           makeCursor(logFilePath, sessionId, startOffset, cursor?.last_record_id, {
             byte_offset: startOffset,
+            byte_end: newOffset,
             count: attempt,
             last_error: lastError,
           }),

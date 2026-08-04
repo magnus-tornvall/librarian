@@ -239,23 +239,45 @@ test('settle: drain over a backlog containing a live session exits 0 and drains 
   assert.equal(fs.existsSync(cursorPath(dataDir, 'sess-b-live')), false, 'drain must not advance a live session cursor');
 });
 
-test('settle: distill.settleMs round-trips from config alongside unmanaged keys', async () => {
-  const root = tempDir('settle-config-');
-  const configPath = writeConfig(root, 5_000, { scoring: { relevanceFloor: 0.2 }, extra: 'keep-me' });
-  const { loadConfig } = await import('../../src/config.ts');
+test('settle: settleMs 0 turns the gate off — a live session distills on demand', () => {
+  const root = tempDir('settle-off-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
 
-  const config = loadConfig(configPath);
-  assert.equal(config.distill.settleMs, 5_000);
-  assert.equal(config.scoring.relevanceFloor, 0.2, 'unmanaged-adjacent sections still load');
-  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')).extra, 'keep-me', 'unknown keys are untouched on read');
+  ingest(dataDir, eligibleEvents('sess-live', 5_000));
+  const result = distill(dataDir, diagnosticsDir, writeFixture(root, [0]), writeConfig(root, 0));
+  assert.equal(result.status, 0, `distill should exit 0; stderr: ${result.stderr}`);
+  assert.deepEqual(sessionsOf(dataDir), ['sess-live'], 'a zero settle window is the escape hatch, not a gate');
+});
 
-  const { DEFAULT_SETTLE_MS } = await import('../../src/config.ts');
-  const bare = path.join(root, 'bare.json');
-  fs.writeFileSync(bare, JSON.stringify({ inference: { provider: 'claude' } }));
-  assert.equal(loadConfig(bare).distill.settleMs, DEFAULT_SETTLE_MS, 'the default is 24h when unset');
-  assert.equal(DEFAULT_SETTLE_MS, 86_400_000);
+test('settle: a terminal marker followed by live events does not unlock the delta', () => {
+  const root = tempDir('settle-resumed-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
 
-  const bad = path.join(root, 'bad.json');
-  fs.writeFileSync(bad, JSON.stringify({ distill: { settleMs: -1 } }));
-  assert.throws(() => loadConfig(bad), /distill\.settleMs/, 'a non-positive settle window is rejected loudly');
+  // A resumed session: the log continues past the old end marker. The superseded
+  // boundary must not vouch for the work that came after it.
+  const events = eligibleEvents('sess-resumed', 2 * MINUTE_MS);
+  events.splice(5, 0, terminalBoundaryEvent('sess-resumed', 12));
+  ingest(dataDir, events);
+
+  const result = distill(dataDir, diagnosticsDir, writeFixture(root, [0]), writeConfig(root, 30 * MINUTE_MS));
+  assert.equal(result.status, 0, `distill should exit 0; stderr: ${result.stderr}`);
+  assert.deepEqual(noteRevisions(dataDir), [], 'a superseded end marker must not unlock a live delta');
+  assert.equal(readDistillVerdicts(diagnosticsDir)[0].decision, 'deferred');
+});
+
+test('settle: a future-dated event is clamped to now, costing at most one window', () => {
+  const root = tempDir('settle-skew-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+
+  // A peer machine's clock runs three days fast; its log arrives via sync (§15).
+  ingest(dataDir, eligibleEvents('sess-skewed', -3 * 24 * 60 * MINUTE_MS));
+  const result = distill(dataDir, diagnosticsDir, writeFixture(root, [0]), writeConfig(root, 30 * MINUTE_MS));
+  assert.equal(result.status, 0, `distill should exit 0; stderr: ${result.stderr}`);
+
+  const verdict = readDistillVerdicts(diagnosticsDir)[0];
+  assert.equal(verdict.decision, 'deferred');
+  assert.match(verdict.reason, /last event 0s ago/, 'the skew is clamped to now, not counted as negative quiet time');
 });
