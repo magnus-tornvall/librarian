@@ -71,8 +71,10 @@ codebase to bypass.
 
 **The invariant:** a session's delta is distillable only when the session has settled.
 Distill never processes a delta whose newest hook-stamped event `ts` is younger than
-`distill.settleMs`, unless the delta carries a terminal boundary marker — an event that
-says the arc is over, not merely paused. A held-back delta is *deferred, not judged*: the
+`distill.settleMs`, unless the delta ENDS on a terminal boundary marker — an event that
+says the arc is over, not merely paused. The last event, not any event: a resumed session's
+log continues past its old marker, and a superseded boundary must not vouch for the work
+that came after it. A held-back delta is *deferred, not judged*: the
 cursor stays exactly where it was, a `deferred` diagnostic records why, and the next pass
 reconsiders the same bytes. It is never a `skipped` verdict — "not yet eligible" and
 "judged not worth distilling" are different facts, so `deferred` is excluded from the
@@ -89,12 +91,15 @@ load-bearing, which is why the default is generous (24 h). Over-waiting costs al
 under this design; under-waiting distills live work.
 
 **The clock is the event's own `ts`, never file mtime.** mtime is not the event clock — it
-moves with unrelated writes and does not survive a copy or a sync. A delta whose events
-carry no parseable `ts` counts as settled: an unreadable clock must never wedge a session
-behind the gate forever.
+moves with unrelated writes and does not survive a copy or a sync. That clock is external
+and can be wrong in either direction, and neither failure may cost more than the gate is
+worth: a delta whose events carry **no parseable `ts`** counts as settled outright, and a
+**future-dated `ts`** — a machine whose clock runs ahead, a real case once logs are synced
+between machines (§15) — must cost at most one settle window, not the length of the skew.
+A bad clock may delay a session; it may never wedge one.
 
 **Enforcing mechanism:** the check sits at the top of `runDistill`'s per-session loop, ahead
 of the content skip heuristic — a live session is not eligible to be judged at all, so it
-must not reach a heuristic that would judge it. Every trigger (manual `librarian drain`, a
-detached child spawned on a session boundary, an OS-scheduled run) is the same function
-call over the same loop, so no trigger can carry an eligibility policy of its own.
+must not reach a heuristic that would judge it. Every trigger — `librarian drain` today, any
+automatic trigger later — is the same function call over the same loop, so no trigger can
+carry an eligibility policy of its own.
