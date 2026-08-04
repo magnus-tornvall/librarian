@@ -866,14 +866,14 @@ function formatHumanProvenance(note: NoteRevision): string {
  * failure, or a `record_class: diagnostic` record aborts with a non-zero exit
  * and an error naming the reason; nothing from the failed line is appended.
  */
-function collect(flags: Map<string, string>): void {
+async function collect(flags: Map<string, string>): Promise<void> {
   const dataDir = flags.get('data-dir') ?? DATA_DIR;
   const input = fs.readFileSync(0, 'utf8');
   const lines = input.split('\n');
 
-  lines.forEach((line, index) => {
+  for (const [index, line] of lines.entries()) {
     if (line.trim().length === 0) {
-      return;
+      continue;
     }
 
     let record: Record<string, unknown>;
@@ -895,12 +895,12 @@ function collect(flags: Map<string, string>): void {
 
     const logFilePath = path.join(dataDir, 'events', `${sessionId}.ndjson`);
     try {
-      appendEvent(logFilePath, record);
+      await appendEvent(logFilePath, record);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(`rejected record on line ${index + 1}: ${reason}`);
     }
-  });
+  }
 }
 
 /**
@@ -1310,7 +1310,7 @@ export async function main(argv: string[]): Promise<void> {
       process.stdout.write(`librarian ${VERSION}\n`);
       break;
     case 'collect':
-      collect(parseFlags(rest));
+      await collect(parseFlags(rest));
       break;
     case 'distill':
       await distillCommand(parseFlags(rest));

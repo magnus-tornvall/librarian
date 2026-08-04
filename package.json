@@ -28,6 +28,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@secretlint/core": "^13.0.4",
+    "@secretlint/secretlint-rule-preset-recommend": "^13.0.4",
     "better-sqlite3": "^12.11.1",
     "sqlite-vec": "0.1.9",
     "ulid": "^3.0.2"

@@ -13,16 +13,16 @@ function tempLogFile(): string {
   return path.join(dir, 'events.ndjson');
 }
 
-test('appending a golden example event round-trips through readAll', () => {
+test('appending a golden example event round-trips through readAll', async () => {
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '01-prompt-in-git-repo.json'), 'utf8'),
   );
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
   assert.deepEqual(readAll(logFilePath), [record]);
 });
 
-test('a plausible pre-redaction secret in command never reaches disk', () => {
+test('a plausible pre-redaction secret in command never reaches disk', async () => {
   const secret = 'ghp_' + 'C'.repeat(36);
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
@@ -30,7 +30,7 @@ test('a plausible pre-redaction secret in command never reaches disk', () => {
   record.command = `curl -H "Authorization: Bearer ${secret}" https://api.example.com/deploy`;
 
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
 
   const rawBytes = fs.readFileSync(logFilePath, 'utf8');
   assert.ok(!rawBytes.includes(secret));
@@ -43,7 +43,7 @@ test('a plausible pre-redaction secret in command never reaches disk', () => {
   );
 });
 
-test('a secret printed by a command never reaches disk', () => {
+test('a secret printed by a command never reaches disk', async () => {
   // Machine-generated output arrives with no `<private>` markup — nobody tagged it — so the
   // patterns are its only guard, on the same non-retrofittable boundary as `command` (#179).
   const secret = 'ghp_' + 'D'.repeat(36);
@@ -54,7 +54,7 @@ test('a secret printed by a command never reaches disk', () => {
   record.outcome = { stdout: `${secret}\n`, stderr: `warning: using ${secret}\n` };
 
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
 
   assert.ok(!fs.readFileSync(logFilePath, 'utf8').includes(secret));
   const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
@@ -63,7 +63,7 @@ test('a secret printed by a command never reaches disk', () => {
   assert.match(outcome.stderr, /^warning: using \[REDACTED:token:sha256:[0-9a-f]{8}\]\n$/);
 });
 
-test('an incidental private tag in command output does not truncate the rest', () => {
+test('an incidental private tag in command output does not truncate the rest', async () => {
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
   );
@@ -72,7 +72,7 @@ test('an incidental private tag in command output does not truncate the rest', (
   };
 
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
 
   const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
   const stdout = (persisted.outcome as Record<string, string>).stdout;
@@ -83,14 +83,14 @@ test('an incidental private tag in command output does not truncate the rest', (
   assert.ok(stdout.includes('<private>true'), 'the incidental tag is left as literal output');
 });
 
-test('a well-formed private span in command output is still stripped', () => {
+test('a well-formed private span in command output is still stripped', async () => {
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
   );
   record.outcome = { stdout: 'before <private>do not persist this</private> after\n' };
 
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
 
   const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
   const stdout = (persisted.outcome as Record<string, string>).stdout;
@@ -98,14 +98,14 @@ test('a well-formed private span in command output is still stripped', () => {
   assert.ok(!fs.readFileSync(logFilePath, 'utf8').includes('do not persist this'));
 });
 
-test('a multi-megabyte stream is capped head+tail before durable append', () => {
+test('a multi-megabyte stream is capped head+tail before durable append', async () => {
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
   );
   record.outcome = { stdout: `HEAD${'x'.repeat(4 * 1024 * 1024)}TAIL` };
 
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
 
   const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
   const stdout = (persisted.outcome as Record<string, string>).stdout;
@@ -115,7 +115,7 @@ test('a multi-megabyte stream is capped head+tail before durable append', () => 
   assert.match(stdout, /…\[\d+ characters elided\]…/, 'the elision names what was dropped');
 });
 
-test('a stream at the cap is stored verbatim, with no elision marker', () => {
+test('a stream at the cap is stored verbatim, with no elision marker', async () => {
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '03-git-commit-vcs-commit.json'), 'utf8'),
   );
@@ -123,13 +123,13 @@ test('a stream at the cap is stored verbatim, with no elision marker', () => {
   record.outcome = { stdout: exact };
 
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
 
   const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
   assert.equal((persisted.outcome as Record<string, string>).stdout, exact);
 });
 
-test('normalizes home paths throughout an event before durable append', () => {
+test('normalizes home paths throughout an event before durable append', async () => {
   const home = os.homedir();
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '02-file-edit-write.json'), 'utf8'),
@@ -141,7 +141,7 @@ test('normalizes home paths throughout an event before durable append', () => {
   record.prompt = `edit ${home}/dev/librarian/src/auth/session.ts`;
 
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
 
   const [persisted] = readAll(logFilePath) as Array<Record<string, unknown>>;
   assert.deepEqual(persisted.resource, { ...record.resource, cwd: '~/dev/librarian', git_root: '~/dev/librarian' });
@@ -150,11 +150,11 @@ test('normalizes home paths throughout an event before durable append', () => {
   assert.equal(persisted.prompt, 'edit ~/dev/librarian/src/auth/session.ts');
   assert.ok(!JSON.stringify(persisted).includes(home));
 
-  appendEvent(logFilePath, persisted);
+  await appendEvent(logFilePath, persisted);
   assert.deepEqual(readAll(logFilePath), [persisted, persisted]);
 });
 
-test('leaves paths that only neighbour or contain the home path unchanged', () => {
+test('leaves paths that only neighbour or contain the home path unchanged', async () => {
   const home = os.homedir();
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '01-prompt-in-git-repo.json'), 'utf8'),
@@ -164,12 +164,12 @@ test('leaves paths that only neighbour or contain the home path unchanged', () =
   record.prompt = `restored /mnt/backup${home}/dev into ${home}ish/dev`;
 
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
 
   assert.deepEqual(readAll(logFilePath), [record]);
 });
 
-test('leaves paths outside home unchanged', () => {
+test('leaves paths outside home unchanged', async () => {
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '01-prompt-in-git-repo.json'), 'utf8'),
   );
@@ -178,18 +178,18 @@ test('leaves paths outside home unchanged', () => {
   record.prompt = 'inspect /tmp/librarian';
 
   const logFilePath = tempLogFile();
-  appendEvent(logFilePath, record);
+  await appendEvent(logFilePath, record);
 
   assert.deepEqual(readAll(logFilePath), [record]);
 });
 
-test('an invalid event throws and does not create or modify the log file', () => {
+test('an invalid event throws and does not create or modify the log file', async () => {
   const record = JSON.parse(
     fs.readFileSync(path.join(GOLDEN_DIR, '01-prompt-in-git-repo.json'), 'utf8'),
   );
   delete record.event_id;
 
   const logFilePath = tempLogFile();
-  assert.throws(() => appendEvent(logFilePath, record));
+  await assert.rejects(() => appendEvent(logFilePath, record));
   assert.equal(fs.existsSync(logFilePath), false);
 });

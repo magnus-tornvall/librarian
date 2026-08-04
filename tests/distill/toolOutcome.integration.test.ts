@@ -36,7 +36,7 @@ const REMEDY = 'nvm use && npm test';
 
 /** Pipe the fixture session through the collector's append boundary and read it back —
  *  the events the distiller sees are the redacted, validated, durable ones. */
-function collectFixtureSession(): Array<Record<string, unknown>> {
+async function collectFixtureSession(): Promise<Array<Record<string, unknown>>> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tool-outcome-'));
   const logFilePath = path.join(dir, 'events.ndjson');
   const raw = fs
@@ -45,7 +45,7 @@ function collectFixtureSession(): Array<Record<string, unknown>> {
     .split('\n')
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   for (const event of raw) {
-    appendEvent(logFilePath, event);
+    await appendEvent(logFilePath, event);
   }
   return readAll(logFilePath) as Array<Record<string, unknown>>;
 }
@@ -64,7 +64,7 @@ function capturingProvider(prompts: string[]): InferenceProvider {
 }
 
 test('the failure text and its remedy survive the append boundary into the distill prompt', async () => {
-  const events = collectFixtureSession();
+  const events = await collectFixtureSession();
   const prompts: string[] = [];
   await distill(events, 'qualify-failed-command-remedy', capturingProvider(prompts), 'opencode');
 
@@ -79,10 +79,10 @@ test('the failure text and its remedy survive the append boundary into the disti
   // the lesson recoverable is that the model can now READ the output — that is the feature.
 });
 
-test('without outcomes the two npm test runs are indistinguishable — the blind spot #179 closes', () => {
+test('without outcomes the two npm test runs are indistinguishable — the blind spot #179 closes', async () => {
   // The counterfactual the issue is built on: strip the captured output and the failure
   // and the fix render as the same intent line, with nothing to learn from.
-  const events = collectFixtureSession().map(({ outcome: _outcome, hints: _hints, ...rest }) => rest);
+  const events = (await collectFixtureSession()).map(({ outcome: _outcome, hints: _hints, ...rest }) => rest);
   const npmTestLines = renderEventsForDistill(events)
     .split('\n')
     .filter((line) => line.includes('npm test'));
@@ -91,15 +91,15 @@ test('without outcomes the two npm test runs are indistinguishable — the blind
   assert.ok(!npmTestLines.some((line) => line.includes(ABI_ERROR)), 'nothing says the first one failed');
 
   // With the outcomes kept, the same two lines differ — and the difference is the memory.
-  const withOutcomes = renderEventsForDistill(collectFixtureSession())
+  const withOutcomes = renderEventsForDistill(await collectFixtureSession())
     .split('\n')
     .filter((line) => line.includes('npm test'));
   assert.ok(withOutcomes[0].includes(ABI_ERROR), 'the first run names why it failed');
   assert.ok(!withOutcomes[1].includes(ABI_ERROR), 'the second run does not');
 });
 
-test('a read event contributes no outcome to the prompt, even mid-session', () => {
-  const events = collectFixtureSession();
+test('a read event contributes no outcome to the prompt, even mid-session', async () => {
+  const events = await collectFixtureSession();
   const read = events.find(
     (event) => (event.tool as Record<string, unknown> | undefined)?.category === 'file_read',
   );
@@ -108,7 +108,7 @@ test('a read event contributes no outcome to the prompt, even mid-session', () =
 });
 
 test('the distilled note names the mismatch and the remedy', async () => {
-  const events = collectFixtureSession();
+  const events = await collectFixtureSession();
   const note = await distill(events, 'qualify-failed-command-remedy', capturingProvider([]), 'opencode');
 
   assert.notEqual(note.kind, 'declined', 'the session is worth remembering');
