@@ -4,14 +4,21 @@ import type { InjectionTrace } from './injectionTrace.ts';
 export const DEAD_NOTE_WINDOW_DAYS = 30;
 export const PERPETUAL_CANDIDATE_MIN_APPEARANCES = 3;
 
-const DECISIONS: DistillVerdict['decision'][] = [
+/**
+ * The decisions admission reports — every verdict that JUDGED a delta.
+ * `deferred` is excluded on purpose (#168): the settle gate held that delta back
+ * before anything judged it, so counting it would dilute the skip/noop rates
+ * this report exists to read.
+ */
+const DECISIONS = [
   'distilled', 'duplicate', 'skipped', 'noop', 'quarantined', 'rejected',
-];
+] as const satisfies readonly DistillVerdict['decision'][];
+type JudgedDecision = (typeof DECISIONS)[number];
 const CUT_REASONS = ['below_floor', 'budget', 'scope_mismatch', 'superseded', 'flagged', 'expired', 'ttl_expired', 'unknown'] as const;
 const EMBEDDING_STATES = ['ok', 'timeout', 'error', 'disabled'] as const;
 
 type CountRate = { count: number; rate: number };
-type Breakdown = { total: number; decisions: Record<DistillVerdict['decision'], CountRate> };
+type Breakdown = { total: number; decisions: Record<JudgedDecision, CountRate> };
 export type StatsNote = { note_id: string; title: string; created_at: string };
 type ReportNote = Pick<StatsNote, 'note_id' | 'title'>;
 
@@ -67,6 +74,9 @@ export function computeStats({
   notes: StatsNote[];
   now: Date;
 }): StatsReport {
+  // Deferrals are not admission decisions (#168) — drop them before any rate is
+  // computed so "not yet eligible" never lands in the same denominator as judged.
+  const judged = verdicts.filter((verdict) => verdict.decision !== 'deferred');
   const shipped = new Map<string, number>();
   const recentShipped = new Set<string>();
   const candidateStats = new Map<string, { appearances: number; onlyBelowFloor: boolean }>();
@@ -110,10 +120,10 @@ export function computeStats({
 
   return {
     admission: {
-      total: verdicts.length,
-      by_month: grouped(verdicts, (verdict) => verdict.ts.slice(0, 7)),
-      by_origin: grouped(verdicts, (verdict) => verdict.origin ?? 'unknown'),
-      by_provider: grouped(verdicts, (verdict) => verdict.provider ?? 'unknown'),
+      total: judged.length,
+      by_month: grouped(judged, (verdict) => verdict.ts.slice(0, 7)),
+      by_origin: grouped(judged, (verdict) => verdict.origin ?? 'unknown'),
+      by_provider: grouped(judged, (verdict) => verdict.provider ?? 'unknown'),
     },
     usage: {
       trace_count: traces.length,

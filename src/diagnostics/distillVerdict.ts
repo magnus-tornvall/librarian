@@ -26,7 +26,14 @@ export type DistillVerdict = {
   verdict_id: string;
   ts: string;
   session_id: string;
-  decision: 'distilled' | 'duplicate' | 'skipped' | 'noop' | 'quarantined' | 'rejected';
+  /**
+   * `deferred` is the one decision that is NOT a judgment: the settle gate
+   * (#168) held the delta back because its session is still live. The cursor did
+   * not advance and the delta will be reconsidered. It is deliberately kept out
+   * of the admission breakdown in `stats.ts` so it cannot dilute the skip/noop
+   * rates, which measure what was actually judged.
+   */
+  decision: 'distilled' | 'duplicate' | 'skipped' | 'deferred' | 'noop' | 'quarantined' | 'rejected';
   reason: string;
   origin?: string;
   provider?: string;

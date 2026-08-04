@@ -109,6 +109,27 @@ digest mismatch, delete the disposable `~/.librarian/index/` directory and run
 `librarian drain` to rebuild it. A timeout or endpoint failure keeps recall
 BM25-only and records that state in the injection trace.
 
+## Distill eligibility (settle window)
+
+`librarian distill` / `librarian drain` process *every* pending session, not just the one
+you were last in — so a session is only eligible once it has gone quiet. A delta whose
+newest event is younger than `distill.settleMs` (default `86400000`, 24 h) is **deferred**:
+its cursor is untouched, a `deferred` diagnostic records why, and the next run reconsiders
+it. That is what makes a drain safe to fire at any time — it can never distill a session
+you are still working in.
+
+```json
+{
+  "distill": {
+    "settleMs": 1800000
+  }
+}
+```
+
+Lower it if you want notes from today's work sooner. The exact value is not load-bearing:
+no threshold can stop a long real pause from splitting an arc, so over-waiting is cheap and
+under-waiting distills live work.
+
 ## MCP Server
 
 `librarian mcp` starts the local stdio MCP server with `search` and `get_note` tools. See [`docs/mcp.md`](docs/mcp.md) for Claude Code registration and tool behavior.

@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadConfig } from '../src/config.ts';
+import { loadConfig, DEFAULT_SETTLE_MS } from '../src/config.ts';
 import { DEFAULT_SCORING_CONFIG } from '../src/recall/scoring.ts';
 
 test('loadConfig defaults missing and empty scoring sections per key', () => {
   const file = path.join(os.tmpdir(), `missing-${Date.now()}.json`);
-  assert.deepEqual(loadConfig(file), { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, scoring: DEFAULT_SCORING_CONFIG });
+  assert.deepEqual(loadConfig(file), { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, distill: { settleMs: DEFAULT_SETTLE_MS }, scoring: DEFAULT_SCORING_CONFIG });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-config-'));
   const empty = path.join(dir, 'config.json');
   fs.writeFileSync(empty, JSON.stringify({ scoring: { originWeights: { human: 2 }, recencyHalfLifeDays: { fact: 'Infinity' } } }));

@@ -1,9 +1,10 @@
 # Structural invariants
 
-Three rules the design leans on. Each is enforced by directory layout or record shape —
-by construction — not by the good behavior of future code (§4: "structural invariants beat
-policy invariants"). This doc names each rule together with which mechanism enforces it and
-which backlog task implements that mechanism.
+Four rules the design leans on. Each is enforced by directory layout, record shape, or a
+single chokepoint every caller routes through — by construction — not by the good behavior
+of future code (§4: "structural invariants beat policy invariants"). This doc names each
+rule together with which mechanism enforces it and which backlog task implements that
+mechanism.
 
 ## 1. Generated/curated split
 
@@ -65,3 +66,35 @@ reopen the low-signal-note problem the design is built to avoid.
 distiller (task 018) and the curated-note importer (§1 above, not yet a numbered task) are
 the only two write paths into the note log, by construction — no third path exists in the
 codebase to bypass.
+
+## 4. Settle before distill
+
+**The invariant:** a session's delta is distillable only when the session has settled.
+Distill never processes a delta whose newest hook-stamped event `ts` is younger than
+`distill.settleMs`, unless the delta carries a terminal boundary marker — an event that
+says the arc is over, not merely paused. A held-back delta is *deferred, not judged*: the
+cursor stays exactly where it was, a `deferred` diagnostic records why, and the next pass
+reconsiders the same bytes. It is never a `skipped` verdict — "not yet eligible" and
+"judged not worth distilling" are different facts, so `deferred` is excluded from the
+admission rates `librarian stats` reads (§12.10); conflating them would corrupt the
+noop/skip rates that are the tuning instrument.
+
+**This is concurrency safety, not quality.** `runDistill` sweeps *every* pending session,
+not the one that triggered it, so without an eligibility rule a drain fired for session A
+distills session B while B is still being worked in. That — not distill quality — is what
+the gate exists to prevent, and it is what makes a global drain safe to fire from anywhere,
+at any time. No quiet-period threshold can prevent a mid-arc split: a real pause longer than
+the threshold always trips it, at any value. The value is therefore deliberately not
+load-bearing, which is why the default is generous (24 h). Over-waiting costs almost nothing
+under this design; under-waiting distills live work.
+
+**The clock is the event's own `ts`, never file mtime.** mtime is not the event clock — it
+moves with unrelated writes and does not survive a copy or a sync. A delta whose events
+carry no parseable `ts` counts as settled: an unreadable clock must never wedge a session
+behind the gate forever.
+
+**Enforcing mechanism:** the check sits at the top of `runDistill`'s per-session loop, ahead
+of the content skip heuristic — a live session is not eligible to be judged at all, so it
+must not reach a heuristic that would judge it. Every trigger (manual `librarian drain`, a
+detached child spawned on a session boundary, an OS-scheduled run) is the same function
+call over the same loop, so no trigger can carry an eligibility policy of its own.
