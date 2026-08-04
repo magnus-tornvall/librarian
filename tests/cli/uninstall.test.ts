@@ -42,6 +42,10 @@ function wiredHome(): string {
   }, null, 2)}\n`);
   write(path.join('.librarian', NOTES), '{"note_id":"n1"}\n');
   write(path.join('.librarian', 'index', 'notes.db'), 'sqlite\n');
+  // The bin's own scratch space: native artifacts keyed on its size+mtime, plus the
+  // update-check stamp. Wiring, not memory — swept even without --purge.
+  write(path.join('.librarian', 'cache', 'native', '1234-5678', 'better_sqlite3.node'), 'native\n');
+  write(path.join('.librarian', 'cache', 'update-check'), '{"checked_at":0}\n');
 
   return home;
 }
@@ -71,6 +75,9 @@ test('uninstall removes the wiring and preserves the data', () => {
   // Config: wiring keys dropped, settings kept.
   const config = JSON.parse(fs.readFileSync(path.join(home, '.librarian', 'config.json'), 'utf8')) as Record<string, unknown>;
   assert.deepEqual(Object.keys(config).sort(), ['inference', 'vault']);
+
+  // The bin's caches go with the bin, even without --purge.
+  assert.equal(exists(home, path.join('.librarian', 'cache')), false, 'cache is the bin\'s scratch space, not memory');
 
   // Data survives — the whole point.
   assert.equal(exists(home, path.join('.librarian', NOTES)), true, 'note log must survive');
@@ -104,7 +111,22 @@ test('uninstall --dry-run reports without changing anything', () => {
   assert.equal(exists(home, path.join('.librarian', 'bin', 'librarian')), true);
   assert.equal(exists(home, path.join('.config', 'opencode', 'plugins', 'librarian.ts')), true);
   assert.equal(exists(home, path.join('.librarian', NOTES)), true);
+  assert.equal(exists(home, path.join('.librarian', 'cache', 'update-check')), true);
   assert.match(fs.readFileSync(path.join(home, '.zshrc'), 'utf8'), /added by librarian installer/);
+  const config = JSON.parse(fs.readFileSync(path.join(home, '.librarian', 'config.json'), 'utf8')) as Record<string, unknown>;
+  assert.ok('bin' in config, '--dry-run must not touch the config');
+});
+
+test('a wiring-only config is deleted, and the report says so', () => {
+  const home = wiredHome();
+  const configPath = path.join(home, '.librarian', 'config.json');
+  fs.writeFileSync(configPath, `${JSON.stringify({ bin: 'b', runtime: 'r' })}\n`);
+  const result = runUninstall(home);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(configPath), false, 'nothing but wiring left — delete the file');
+  assert.match(result.stdout, /wiring-only config/);
+  assert.equal(result.stdout.includes('bin/runtime keys'), false, 'must not claim it edited keys');
+  assert.equal(exists(home, path.join('.librarian', NOTES)), true, 'data still survives');
 });
 
 test('uninstall is idempotent on an unwired HOME', () => {

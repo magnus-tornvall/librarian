@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CONFIG_PATH, LIBRARIAN_ROOT } from './paths.ts';
+import { CACHE_DIR, CONFIG_PATH, LIBRARIAN_ROOT } from './paths.ts';
 import { isSea } from './index/nativeAssets.ts';
 import { stdioPrompter } from './prompt.ts';
 
@@ -38,14 +38,17 @@ function parseArgs(argv: string[]): Options {
 }
 
 /**
- * Where the installed binary lives. `process.execPath` is authoritative under SEA (it honors
- * an installer run with a non-default `LIBRARIAN_BIN_DIR`); otherwise fall back to the path
- * `scripts/install.sh` writes by default.
+ * Where the installed binary lives — same resolution order as `installedLibrarianBin()`.
+ *
+ * Under SEA `process.execPath` IS the binary being uninstalled, so its directory is
+ * authoritative and already reflects an installer run with a non-default
+ * `LIBRARIAN_BIN_DIR`. Checking the env var *first* would let a stale export point the sweep
+ * at a directory this binary was never installed into. Off-SEA there is nothing to derive
+ * from, so the env var (then the installer's default) is all we have.
  */
 function binDir(): string {
-  if (process.env.LIBRARIAN_BIN_DIR) return process.env.LIBRARIAN_BIN_DIR;
   if (isSea()) return path.dirname(process.execPath);
-  return path.join(LIBRARIAN_ROOT, 'bin');
+  return process.env.LIBRARIAN_BIN_DIR ?? path.join(LIBRARIAN_ROOT, 'bin');
 }
 
 /** Strip every marker-tagged line from one profile. Returns true if the file changed. */
@@ -69,23 +72,25 @@ function stripPathLine(profile: string, dryRun: boolean): boolean {
  * config, deleting the file only if that leaves it empty. Everything else — provider,
  * embedding, vault, scoring — is the user's settings, not wiring: it survives.
  */
-function cleanConfig(dryRun: boolean): boolean {
+function cleanConfig(dryRun: boolean): string | undefined {
   let config: unknown;
   try {
     config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   } catch {
-    return false; // absent or malformed: nothing safe to edit
+    return undefined; // absent or malformed: nothing safe to edit
   }
-  if (config === null || typeof config !== 'object' || Array.isArray(config)) return false;
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) return undefined;
   const record = config as Record<string, unknown>;
-  if (!('bin' in record) && !('runtime' in record)) return false;
+  if (!('bin' in record) && !('runtime' in record)) return undefined;
+  delete record.bin;
+  delete record.runtime;
+  const emptied = Object.keys(record).length === 0;
   if (!dryRun) {
-    delete record.bin;
-    delete record.runtime;
-    if (Object.keys(record).length === 0) fs.rmSync(CONFIG_PATH, { force: true });
+    if (emptied) fs.rmSync(CONFIG_PATH, { force: true });
     else fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(record, null, 2)}\n`);
   }
-  return true;
+  // Report what actually happened: a wiring-only config is deleted, not edited.
+  return emptied ? `${CONFIG_PATH} (wiring-only config)` : `bin/runtime keys from ${CONFIG_PATH}`;
 }
 
 export async function uninstallCommand(argv: string[]): Promise<void> {
@@ -133,13 +138,21 @@ export async function uninstallCommand(argv: string[]): Promise<void> {
   }
 
   // 4. Config wiring keys — settings stay.
-  if (cleanConfig(dryRun)) removed(`bin/runtime keys from ${CONFIG_PATH}`);
+  const config = cleanConfig(dryRun);
+  if (config) removed(config);
 
   // 5. Data: preserved by default. That is policy, not an oversight, so say which.
   if (purge) {
     if (!dryRun) fs.rmSync(LIBRARIAN_ROOT, { recursive: true, force: true });
     removed(`${LIBRARIAN_ROOT} (--purge: notes, events, index, diagnostics)`);
   } else {
+    // The cache is the *binary's* scratch space, not the user's memory: extracted native
+    // artifacts keyed on the bin's own size+mtime, plus the update-check stamp. Both are
+    // dead the moment the bin is gone, and a reinstall re-extracts under a new key anyway.
+    if (fs.existsSync(CACHE_DIR)) {
+      if (!dryRun) fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+      removed(`${CACHE_DIR} (extracted native artifacts + update-check stamp)`);
+    }
     out(`  kept ${LIBRARIAN_ROOT} — your notes and index. Pass --purge to delete them too.`);
   }
 

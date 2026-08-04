@@ -36,9 +36,10 @@ librarian uninstall --dry-run   # print what it would remove, change nothing
 librarian uninstall --purge     # also delete ~/.librarian (asks first; --yes skips)
 ```
 
-Removing the tool never removes the memory (spec §35): `uninstall` takes out the
-binary, the installer's `PATH` line, the OpenCode plugin file, and the config keys
-that point at the bin — and leaves `~/.librarian` alone unless you pass `--purge`.
+Removing the tool never removes the memory (spec §14 amendment): `uninstall` takes
+out the binary, the installer's `PATH` line, the OpenCode plugin file, the extracted
+native/update caches, and the config keys that point at the bin — and leaves your
+notes and index alone unless you pass `--purge`.
 It prints the two teardowns it cannot do for you, because they live in the host's
 own config: `/plugin uninstall librarian` in Claude Code, and `claude mcp remove
 librarian` if you registered MCP by hand.
