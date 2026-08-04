@@ -7,14 +7,17 @@ export class DiagnosticRecordRejectedError extends Error {
 
 const EVENT_TYPES = ['prompt', 'tool', 'session'];
 
-/** Boundary strengths an adapter may claim (issue #169). Validated because `collect` reads
- *  NDJSON from anyone's stdin, and the trigger downstream switches on this field — garbage
- *  here would land in an append-only log that is never deleted. */
-const BOUNDARY_KINDS = ['terminal', 'semantic', 'compaction'];
-
-/** And which signals. Enum-checked like `kind`: a typo'd signal (`session_ended`) would land in
- *  a log that is never deleted and no trigger would ever match it. */
-const BOUNDARY_SIGNALS = ['session_end', 'compact', 'git_commit', 'todos_complete'];
+/**
+ * The boundary markers an adapter may claim (issue #169), keyed by strength so the PAIR is
+ * checked, not two independent enums — `{terminal, git_commit}` is incoherent and no trigger
+ * could act on it. Validated because `collect` reads NDJSON from anyone's stdin and the trigger
+ * downstream switches on these fields: garbage here lands in a log that is never deleted.
+ */
+const BOUNDARY_SIGNALS: Record<string, string[]> = {
+  terminal: ['session_end'],
+  semantic: ['git_commit', 'todos_complete'],
+  compaction: ['compact'],
+};
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null) {
@@ -55,11 +58,17 @@ export function validateEvent(record: unknown): void {
 
   if (r.boundary !== undefined) {
     const boundary = asRecord(r.boundary, 'boundary');
-    if (typeof boundary.kind !== 'string' || !BOUNDARY_KINDS.includes(boundary.kind)) {
-      throw new Error(`boundary.kind must be one of ${BOUNDARY_KINDS.join(', ')}`);
+    // Object.hasOwn, not a bare lookup: `kind: "constructor"` would otherwise resolve to an
+    // inherited property and blow up instead of being rejected.
+    const signals =
+      typeof boundary.kind === 'string' && Object.hasOwn(BOUNDARY_SIGNALS, boundary.kind)
+        ? BOUNDARY_SIGNALS[boundary.kind]
+        : undefined;
+    if (signals === undefined) {
+      throw new Error(`boundary.kind must be one of ${Object.keys(BOUNDARY_SIGNALS).join(', ')}`);
     }
-    if (typeof boundary.signal !== 'string' || !BOUNDARY_SIGNALS.includes(boundary.signal)) {
-      throw new Error(`boundary.signal must be one of ${BOUNDARY_SIGNALS.join(', ')}`);
+    if (typeof boundary.signal !== 'string' || !signals.includes(boundary.signal)) {
+      throw new Error(`boundary.signal for kind ${boundary.kind} must be one of ${signals.join(', ')}`);
     }
   }
 

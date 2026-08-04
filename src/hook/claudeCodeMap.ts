@@ -153,7 +153,7 @@ export type CanonicalEvent = PromptEvent | ToolEvent | SessionEvent;
 // fields (`session_id`, `transcript_path`, `cwd`, `hook_event_name`, and usually
 // `permission_mode`); each event adds its own fields. These shapes are RECORDED from
 // the current Claude Code hooks reference (docs.claude.com/en/docs/claude-code/hooks)
-// and pinned into the golden fixtures. The four events this adapter maps:
+// and pinned into the golden fixtures. The six events this adapter maps:
 //
 //   - UserPromptSubmit — `{ …common, prompt }`                        → PromptEvent
 //   - PostToolUse      — `{ …common, tool_name, tool_input, … }`      → ToolEvent
@@ -231,7 +231,8 @@ export interface PostToolUsePayload extends CommonHookFields {
 /** SessionStart → SessionEvent(start). `source` says how the session started. */
 export interface SessionStartPayload extends CommonHookFields {
   hook_event_name: 'SessionStart';
-  /** startup | resume | clear | compact (recorded, not remapped — always → start). */
+  /** startup | resume | clear | compact. Read but deliberately NOT mapped — always → start;
+   *  nothing persists the native payload, so this fact does not reach the log. */
   source?: string;
   /** Active model identifier (may be absent, e.g. after /clear). */
   model?: string;
@@ -253,7 +254,9 @@ export interface StopPayload extends CommonHookFields {
  */
 export interface SessionEndPayload extends CommonHookFields {
   hook_event_name: 'SessionEnd';
-  /** clear | logout | prompt_input_exit | other (recorded, not remapped). */
+  /** clear | logout | prompt_input_exit | other. Read but deliberately NOT mapped: the canonical
+   *  SessionAction vocabulary has no per-reason variants, and only the canonical event reaches the
+   *  log — so a `logout` end and a `clear` end are indistinguishable downstream, on purpose. */
   reason?: string;
 }
 
@@ -570,8 +573,8 @@ export function map(payload: NativePayload, env: MapEnv): CanonicalEvent[] {
     case 'SessionStart':
       // Every SessionStart (startup/resume/clear/compact source) maps to action "start": the
       // canonical SessionAction vocabulary has no per-source variants, and the adapter does not
-      // editorialize (dumb mapping, §4). `source` is recorded on the native payload for the
-      // collector/distiller, not remapped here.
+      // editorialize (dumb mapping, §4). `source` is read but deliberately not mapped — only the
+      // canonical event reaches the log, so it does not survive the hook.
       return [mapSessionTransition('start', env)];
     case 'Stop':
       // NOT a boundary: Stop fires once per assistant turn, not once per session, so treating it

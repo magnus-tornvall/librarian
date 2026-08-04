@@ -1,6 +1,6 @@
 {
   "name": "pre-compact",
-  "description": "A Claude Code PreCompact hook payload maps to a SessionEvent with action 'compact' and a COMPACTION boundary. It is RECORDED as a landmark and must NOT fire a distill: compaction means the context window filled up, not that the work is finished, so acting on it would distill an unfinished arc. Tools that read the transcript treat PreCompact as a data-preservation deadline; librarian writes its own durable event log through the hooks, so compaction destroys nothing it needs and there is no deadline to honour. `trigger` (auto/manual) and `custom_instructions` are recorded on the native payload, not remapped.",
+  "description": "A Claude Code PreCompact hook payload maps to a SessionEvent with action 'compact' and a COMPACTION boundary. It is RECORDED as a landmark and must NOT fire a distill: compaction means the context window filled up, not that the work is finished, so acting on it would distill an unfinished arc. Tools that read the transcript treat PreCompact as a data-preservation deadline; librarian writes its own durable event log through the hooks, so compaction destroys nothing it needs and there is no deadline to honour. `trigger` (auto/manual) and `custom_instructions` are read but deliberately NOT mapped — only the canonical event reaches the log.",
   "native": {
     "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
     "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",

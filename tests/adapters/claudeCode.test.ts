@@ -289,6 +289,29 @@ test('claude-code mapping: a TodoWrite with an EMPTY todos array is not a comple
   assert.doesNotThrow(() => validateEvent(event));
 });
 
+test('claude-code mapping: a cancelled todo is not a completion, and only TodoWrite can complete', () => {
+  // Mirrors the OpenCode adapter's assertions on the duplicated `todosAllComplete` rule — the
+  // duplication is deliberate (no shared runtime module), so the tests have to mirror too or the
+  // next divergence lands untested.
+  const [cancelled] = map(
+    postToolUse('TodoWrite', {
+      todos: [
+        { content: 'ship it', status: 'completed', activeForm: 'Shipping it' },
+        { content: 'the other approach', status: 'cancelled', activeForm: 'Trying the other approach' },
+      ],
+    }),
+    inlineEnv(),
+  ) as [Record<string, unknown>];
+  assert.equal(cancelled.boundary, undefined, 'cancelled means the work was dropped, not finished');
+
+  // The signal belongs to the todo tool, not to any payload that happens to carry a `todos` key.
+  const [other] = map(
+    postToolUse('WebFetch', { todos: [{ content: 'ship it', status: 'completed', activeForm: 'Shipping it' }] }),
+    inlineEnv(),
+  ) as [Record<string, unknown>];
+  assert.equal(other.boundary, undefined, 'an all-complete list on another tool is not a completion');
+});
+
 test('claude-code mapping: validateEvent accepts every boundary-bearing event and REJECTS a bogus kind', () => {
   // `collect` reads NDJSON from anyone's stdin and the trigger downstream switches on
   // `boundary.kind`, so the validator is the guard on what reaches an append-only log.

@@ -246,6 +246,37 @@ test('hook opencode: tool, compacting, and session.deleted envelopes each collec
   assert.deepEqual(collected[2].boundary, { kind: 'terminal', signal: 'session_end' });
 });
 
+test('hook opencode: a todowrite envelope carries its list through lowering to a todos_complete boundary', () => {
+  // The other three markers are proven end-to-end above; this is the one whose detection depends
+  // on the plugin forwarding a tool ARG the lowering has to lift (`input.args.todos`). Without it
+  // the mapper sees no list and the signal silently never fires (issue #169).
+  const repo = makeGitRepo();
+  const dataDir = tempDir('opencode-hook-todos-');
+  const bin = makeLibrarianBin(dataDir, tempDir('d-'), tempDir('i-'));
+
+  const done = runHook(
+    {
+      hook: 'tool.execute.after',
+      cwd: repo,
+      input: {
+        tool: 'todowrite',
+        sessionID: 'oc-todos',
+        callID: 'c1',
+        args: { todos: [{ id: 't1', content: 'ship the boundary events', status: 'completed', priority: 'high' }] },
+      },
+      output: { title: 'todos', output: '', metadata: {} },
+    },
+    repo,
+    bin,
+  );
+  assert.equal(done.status, 0, `todowrite hook should exit 0; stderr: ${done.stderr}`);
+
+  const [event] = events(dataDir, 'oc-todos');
+  assert.equal(event?.type, 'tool');
+  assert.equal((event.tool as Record<string, unknown>).native_name, 'todowrite');
+  assert.deepEqual(event.boundary, { kind: 'semantic', signal: 'todos_complete' });
+});
+
 test('hook opencode: a bash tool lowers output.output onto the event, a read tool does not', () => {
   const repo = makeGitRepo();
   const dataDir = tempDir('opencode-hook-outcome-');
