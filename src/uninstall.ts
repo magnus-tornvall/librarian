@@ -121,7 +121,12 @@ export async function uninstallCommand(argv: string[]): Promise<void> {
     removed(plugin);
   }
 
-  // 2. The binary, plus any staged/rollback siblings a killed self-update stranded. Files
+  // 2. The OS drain timer, BEFORE the binary: a schedule left pointing at a deleted bin
+  //    keeps firing and keeps failing.
+  const { removeSchedule } = await import('./schedule.ts');
+  for (const what of removeSchedule(dryRun)) removed(what);
+
+  // 3. The binary, plus any staged/rollback siblings a killed self-update stranded. Files
   //    only, never the directory itself — `LIBRARIAN_BIN_DIR` may be a shared bin dir.
   const bin = binDir();
   for (const entry of fs.existsSync(bin) ? fs.readdirSync(bin) : []) {
@@ -131,17 +136,17 @@ export async function uninstallCommand(argv: string[]): Promise<void> {
   }
   if (!dryRun) { try { fs.rmdirSync(bin); } catch { /* shared or non-empty: leave it */ } }
 
-  // 3. The installer's PATH line, from whichever profile got it.
+  // 4. The installer's PATH line, from whichever profile got it.
   for (const name of PROFILES) {
     const profile = path.join(os.homedir(), name);
     if (stripPathLine(profile, dryRun)) removed(`PATH line from ${profile}`);
   }
 
-  // 4. Config wiring keys — settings stay.
+  // 5. Config wiring keys — settings stay.
   const config = cleanConfig(dryRun);
   if (config) removed(config);
 
-  // 5. Data: preserved by default. That is policy, not an oversight, so say which.
+  // 6. Data: preserved by default. That is policy, not an oversight, so say which.
   if (purge) {
     if (!dryRun) fs.rmSync(LIBRARIAN_ROOT, { recursive: true, force: true });
     removed(`${LIBRARIAN_ROOT} (--purge: notes, events, index, diagnostics)`);
@@ -156,7 +161,7 @@ export async function uninstallCommand(argv: string[]): Promise<void> {
     out(`  kept ${LIBRARIAN_ROOT} — your notes and index. Pass --purge to delete them too.`);
   }
 
-  // 6. Host-owned wiring we cannot remove for you.
+  // 7. Host-owned wiring we cannot remove for you.
   out('');
   out('Finish in the hosts that registered librarian:');
   out('  Claude Code: /plugin uninstall librarian   then   /plugin marketplace remove magnus-tornvall/librarian');

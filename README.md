@@ -148,6 +148,30 @@ not load-bearing:
 no threshold can stop a long real pause from splitting an arc, so over-waiting is cheap and
 under-waiting distills live work.
 
+## Automatic notes (no daemon)
+
+You never have to type `librarian drain`. Two triggers cover it, and neither is a resident
+process:
+
+1. **A boundary in the session.** When an adapter records a completion — the session ending, a
+   successful commit, a todo list going all-green — the hook spawns a **detached**
+   `librarian drain` and returns immediately. It never blocks your agent, never writes to its
+   stdout, and a failure to spawn is a stderr line rather than a broken session. Bursts are
+   debounced to one drain a minute (a session end always fires, since it is the one that owes
+   you the note), and overlapping drains are safe by construction — the second one finds the
+   distiller lock held and exits with nothing to do.
+2. **An OS timer**, for everything a hook cannot see: a hard-killed terminal, a machine that
+   slept mid-run, a provider that was offline when the session ended.
+
+```bash
+librarian install-schedule                  # launchd / systemd-user / cron entry, drains hourly
+librarian install-schedule --interval 15    # every 15 minutes instead
+librarian install-schedule --uninstall      # remove it
+```
+
+It prints the unit it wrote, where, and the activation command it ran — nothing is installed
+silently — and `librarian uninstall` removes it again.
+
 ## MCP Server
 
 `librarian mcp` starts the local stdio MCP server with `search` and `get_note` tools. See [`docs/mcp.md`](docs/mcp.md) for Claude Code registration and tool behavior.

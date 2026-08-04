@@ -55,6 +55,8 @@ const USAGE = `usage:
   librarian doctor [--index-dir <dir>] [--config <file>] [--json]
                                             report embedding endpoint and index readiness
   librarian update [--check]                check for or explicitly apply a binary update
+  librarian install-schedule [--interval <minutes>] [--vault <dir>] [--uninstall]
+                                           write an OS timer (launchd/systemd/cron) that drains every <minutes> (default 60)
   librarian uninstall [--purge] [--dry-run] [--yes]
                                            remove the wiring and the installed bin; keeps ~/.librarian data unless --purge
   librarian inject --project <slug> [--index-dir <dir>] [--global] [--session-start] [--session <id>]
@@ -1342,6 +1344,11 @@ export async function main(argv: string[]): Promise<void> {
     case 'update':
       await updateCommand(rest);
       break;
+    case 'install-schedule': {
+      const { installScheduleCommand } = await import('./schedule.ts');
+      installScheduleCommand(rest);
+      break;
+    }
     case 'uninstall': {
       const { uninstallCommand } = await import('./uninstall.ts');
       await uninstallCommand(rest);
