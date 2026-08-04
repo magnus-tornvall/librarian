@@ -1,0 +1,54 @@
+{
+  "name": "todowrite-all-complete",
+  "description": "A `todowrite` whose list is non-empty and every entry `completed` is the closest thing an agent emits to \"the plan is done\", so it carries the semantic todos_complete boundary. The tool itself is unrecognized vocabulary — canonical_name unknown / category other, and no salience hint: the boundary is the only judgment the adapter offers here (issue #169). Todos are OpenCode's real shape ({id, content, status, priority}); only `status` is read.",
+  "native": {
+    "kind": "tool",
+    "tool": "todowrite",
+    "todos": [
+      { "id": "t1", "content": "Add the boundary field to the mapper", "status": "completed", "priority": "high" },
+      { "id": "t2", "content": "Cover it with fixtures", "status": "completed", "priority": "medium" }
+    ]
+  },
+  "env": {
+    "event_id": "01J8X7QK47A2C8U1R9V3W8Y0ZZ",
+    "ts": "2026-07-06T09:45:00.000Z",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 7,
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK47A2C8U1R9V3W8Y0ZZ",
+    "ts": "2026-07-06T09:45:00.000Z",
+    "type": "tool",
+    "resource": {
+      "agent": "opencode",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/opencode-adapter"
+    },
+    "context": {
+      "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "turn": 7,
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "todowrite",
+      "canonical_name": "unknown",
+      "category": "other"
+    },
+    "boundary": { "kind": "semantic", "signal": "todos_complete" }
+  }
+}

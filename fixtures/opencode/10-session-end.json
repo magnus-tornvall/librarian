@@ -1,13 +1,13 @@
 {
-  "name": "session-compact",
-  "description": "An OpenCode session compaction (`experimental.session.compacting`) maps to a SessionEvent with action compact. Session lifecycle transitions carry no salience hint. It carries the compaction boundary marker: recorded as a landmark, never a completion signal — compaction means the context window filled up, not that the work is done, and librarian's own event log survives it, so a distill must never fire here (issue #169).",
+  "name": "session-end",
+  "description": "What OpenCode's `session.deleted` lowers to: a SessionEvent with action end, carrying the TERMINAL boundary — the session is over, nothing more is coming. It is the only ONE-SHOT end signal OpenCode offers (`session.idle` fires once per assistant turn and is deliberately not mapped, or every turn would look like an ending). The marker is byte-identical to the one Claude Code's `SessionEnd` produces: a consumer switches on `boundary`, not on which agent it came from (issue #169).",
   "native": {
     "kind": "session",
-    "action": "compact"
+    "action": "end"
   },
   "env": {
-    "event_id": "01J8X7QK44X9Z5R8N6S0T5V7VU",
-    "ts": "2026-07-06T09:20:00.000Z",
+    "event_id": "01J8X7QK46Z1B7T0Q8U2V7X9YY",
+    "ts": "2026-07-06T09:40:00.000Z",
     "resource": {
       "agent": "opencode",
       "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
@@ -18,14 +18,14 @@
     },
     "context": {
       "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
-      "turn": 5,
+      "turn": 9,
       "cwd": "/Users/magnus/dev/librarian"
     }
   },
   "expected": {
     "schema_version": 1,
-    "event_id": "01J8X7QK44X9Z5R8N6S0T5V7VU",
-    "ts": "2026-07-06T09:20:00.000Z",
+    "event_id": "01J8X7QK46Z1B7T0Q8U2V7X9YY",
+    "ts": "2026-07-06T09:40:00.000Z",
     "type": "session",
     "resource": {
       "agent": "opencode",
@@ -37,10 +37,10 @@
     },
     "context": {
       "session_id": "01J8X7QK40M8Q3N6P0R5S7TVWX",
-      "turn": 5,
+      "turn": 9,
       "cwd": "/Users/magnus/dev/librarian"
     },
-    "action": "compact",
-    "boundary": { "kind": "compaction", "signal": "compact" }
+    "action": "end",
+    "boundary": { "kind": "terminal", "signal": "session_end" }
   }
 }

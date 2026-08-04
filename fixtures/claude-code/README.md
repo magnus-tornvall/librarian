@@ -58,7 +58,17 @@ not fail a case; a change to a stable field would.
 | `05-session-start.json`                | SessionStart               | `SessionEvent` action `start`. |
 | `06-post-tool-use-bash-stderr.json`    | PostToolUse `Bash`, non-empty `stderr` | `outcome` carries BOTH streams — and **no hint**: stderr is not a failure signal. |
 | `07-post-tool-use-bash-interrupted.json`| PostToolUse `Bash`, `interrupted: true` | the one honest failure signal → hint `command_failed`. |
+| `08-session-end.json`                  | SessionEnd                 | `SessionEvent` action `end` + `boundary` `{terminal, session_end}` — the one-shot session boundary. |
+| `09-pre-compact.json`                  | PreCompact                 | `SessionEvent` action `compact` + `boundary` `{compaction, compact}` — recorded landmark, **never** a completion signal. |
+| `10-post-tool-use-todowrite-complete.json`| PostToolUse `TodoWrite`, all todos `completed` | `unknown`/`other` + `boundary` `{semantic, todos_complete}`; no `outcome`, no hint. |
+| `11-post-tool-use-todowrite-partial.json`| PostToolUse `TodoWrite`, one todo `in_progress` | the same event with **no** `boundary` — a partial update closes nothing. |
+
+Boundary markers (`boundary`, [`schema/event.md`](../../schema/event.md)) mark the events where
+an arc actually closed. Fixture `03` carries the fourth signal — a `git commit` that landed →
+`{semantic, git_commit}`.
 
 Additional mapping rules (git push → `vcs_push`, Grep/Glob → search, an unrecognized tool
-→ `unknown`/`other`, Stop → `stop`) plus the end-to-end pipe, the redaction pass, and the
-hook-safety case are covered by explicit assertions in the test runner.
+→ `unknown`/`other`, Stop → `stop` with **no** boundary, `git commit-tree` and a failed
+`git commit` earning no boundary, an empty todo list not counting as a completion, and
+`validateEvent` rejecting a bogus `boundary.kind`) plus the end-to-end pipe, the redaction
+pass, and the hook-safety case are covered by explicit assertions in the test runner.

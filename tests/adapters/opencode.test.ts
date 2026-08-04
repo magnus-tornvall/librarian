@@ -125,6 +125,110 @@ for (const file of fixtureFiles) {
   });
 }
 
+// --- Boundary edge cases the fixtures cannot carry (issue #169) -----------------------
+//
+// A fixture is one payload → one expected event, so the cases that only make sense as a
+// CONTRAST (a near-miss command, a failed commit, an empty list) live here beside the
+// classification assertions they sharpen.
+
+const BOUNDARY_ENV: MapEnv = {
+  event_id: '01J8X7QK49C4E0W3T1X5Y0A2BB',
+  ts: '2026-07-06T09:50:00.000Z',
+  resource: { agent: 'opencode', machine_id: '01J8X7QK3VZ9R4M2N6P0S5T7WX', cwd: '/repo' },
+  context: { session_id: 'opencode-boundary-session', turn: 1, cwd: '/repo' },
+};
+
+function mapOne(native: NativePayload): Record<string, unknown> {
+  const events = map(native, BOUNDARY_ENV);
+  assert.equal(events.length, 1, 'the mapper emits exactly one canonical event');
+  const [event] = events as [Record<string, unknown>];
+  assert.doesNotThrow(() => validateEvent(event), 'a mapped event must pass the collector validator');
+  return event;
+}
+
+test('opencode: `git commit-tree` is not a commit — no vcs_commit, no boundary', () => {
+  // The subcommand must be a whole token. A plumbing command that merely starts with the
+  // letters "commit" closes no arc, and mis-reading it would fire a distill on a hash write.
+  const event = mapOne({ kind: 'tool', tool: 'bash', command: 'git commit-tree $tree -m wip' });
+  assert.equal((event.tool as Record<string, unknown>).category, 'command');
+  assert.equal(event.boundary, undefined);
+  assert.equal(event.hints, undefined);
+});
+
+test('opencode: a non-zero-exit `git commit` carries no boundary — the case Claude Code cannot see', () => {
+  // OpenCode's harness reports a real `metadata.exit`, so a commit that never landed (a failing
+  // pre-commit hook, nothing staged) is correctly not an arc boundary. The Claude Code adapter
+  // has no exit code in its payload and cannot make this distinction — same marker vocabulary,
+  // different evidence available.
+  const failed = mapOne({
+    kind: 'tool',
+    tool: 'bash',
+    command: 'git commit -m "fix: expire check"',
+    outcome: { stdout: 'pre-commit hook failed\n', exit: 1 },
+  });
+  assert.equal((failed.tool as Record<string, unknown>).category, 'vcs_commit', 'it is still a commit attempt');
+  assert.equal(failed.boundary, undefined, 'a commit that failed closed nothing');
+  assert.deepEqual(
+    failed.hints,
+    { possibly_salient: true, reason: 'command_failed' },
+    'failure outranks vcs_commit as a hint reason',
+  );
+
+  // An interrupted commit is the same story via the other failure signal.
+  const interrupted = mapOne({
+    kind: 'tool',
+    tool: 'bash',
+    command: 'git commit -m wip',
+    outcome: { interrupted: true },
+  });
+  assert.equal(interrupted.boundary, undefined, 'an interrupted commit closed nothing either');
+
+  // And the contrast: the same command with a zero exit did land, and does close an arc.
+  const landed = mapOne({
+    kind: 'tool',
+    tool: 'bash',
+    command: 'git commit -m "fix: expire check"',
+    outcome: { stdout: ' 1 file changed\n', exit: 0 },
+  });
+  assert.deepEqual(landed.boundary, { kind: 'semantic', signal: 'git_commit' });
+});
+
+test('opencode: todos_complete is strict — an empty list and a cancelled todo are not completions', () => {
+  // `todowrite` is called constantly; a loose rule here would mark most of a session as endings.
+  const empty = mapOne({ kind: 'tool', tool: 'todowrite', todos: [] });
+  assert.equal(empty.boundary, undefined, 'an empty list is not a finished plan — there was no plan');
+
+  const cancelled = mapOne({
+    kind: 'tool',
+    tool: 'todowrite',
+    todos: [
+      { id: 't1', content: 'ship it', status: 'completed', priority: 'high' },
+      { id: 't2', content: 'the other approach', status: 'cancelled', priority: 'low' },
+    ],
+  });
+  assert.equal(cancelled.boundary, undefined, 'cancelled means the work was dropped, not finished');
+
+  // A tool that is not todowrite carrying an all-complete list is not a completion signal
+  // either — the signal belongs to the todo tool, not to any payload with a `todos` key.
+  const notTodoWrite = mapOne({
+    kind: 'tool',
+    tool: 'write',
+    files: [{ path: '/repo/plan.md' }],
+    todos: [{ id: 't1', content: 'ship it', status: 'completed', priority: 'high' }],
+  });
+  assert.equal(notTodoWrite.boundary, undefined);
+});
+
+test('opencode: the collector rejects a boundary kind outside the vocabulary', () => {
+  // `boundary` is read by the distill trigger, so an adapter typo must fail loud at the append
+  // boundary (§9) rather than land a marker nothing will ever act on.
+  const event = { ...mapOne({ kind: 'session', action: 'end' }), boundary: { kind: 'wrapped-up', signal: 'session_end' } };
+  assert.throws(() => validateEvent(event), /boundary\.kind must be one of terminal, semantic, compaction/);
+
+  const noSignal = { ...mapOne({ kind: 'session', action: 'end' }), boundary: { kind: 'terminal' } };
+  assert.throws(() => validateEvent(noSignal), /boundary\.signal/);
+});
+
 // --- End-to-end: mapped fixture events through the real `librarian collect` ----------
 
 function tempDir(prefix: string): string {
@@ -148,6 +252,12 @@ test('opencode e2e: every mapped fixture event pipes through real `librarian col
     return map(fixture.native, fixture.env);
   });
   assert.ok(events.length >= 3, 'expected mapped events from the discovered fixtures');
+  // The real collector must accept boundary-bearing events, not just tolerate them — the
+  // deep-equality check below is what proves the marker survives the append round-trip.
+  assert.ok(
+    events.some((event) => (event as { boundary?: unknown }).boundary !== undefined),
+    'the fixture set must include at least one boundary-bearing event (issue #169)',
+  );
 
   const stdin = events.map(ndjsonLine).join('');
   const result = runCollect(dataDir, stdin);

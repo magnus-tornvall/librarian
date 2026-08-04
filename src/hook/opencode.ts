@@ -144,9 +144,10 @@ function readSessionInfo(evt: Loose): SessionInfo | undefined {
  *
  *   - `session.created` → start. Fires EXACTLY ONCE when a session is created (unlike
  *     Claude Code's `SessionStart`, which fires repeatedly across a session's life).
- *   - `session.deleted` → stop. Fires once when the session is deleted — the only one-shot
+ *   - `session.deleted` → end. Fires once when the session is deleted — the only one-shot
  *     "session ended" signal OpenCode offers (session.idle repeats per turn, so it is
- *     deliberately NOT used here).
+ *     deliberately NOT used here). The mapper turns `end` into the TERMINAL boundary marker,
+ *     the same one Claude Code's `SessionEnd` produces (issue #169).
  *
  * Compaction is handled by its own `experimental.session.compacting` hook, not here. Both
  * events carry the full `Session` under `properties.info`.
@@ -160,7 +161,7 @@ function lowerSessionEvent(evt: Loose): { payload: SessionPayload; session: Sess
   if (!session) {
     return undefined;
   }
-  const action = type === 'session.created' ? 'start' : 'stop';
+  const action = type === 'session.created' ? 'start' : 'end';
   return { payload: { kind: 'session', action }, session };
 }
 
@@ -250,6 +251,11 @@ function lowerTool(input: Loose, output: Loose): NativePayload | undefined {
 
   if (files) {
     payload.files = files;
+  }
+  // The `todowrite` tool's list, passed through verbatim; the mapper decides whether an
+  // all-complete list is a semantic boundary (issue #169 — detection stays in the mapper).
+  if (Array.isArray(args.todos)) {
+    payload.todos = args.todos;
   }
   return payload;
 }

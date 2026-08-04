@@ -2,7 +2,7 @@
 
 The Claude Code integration ships as a **thin Claude Code plugin**
 ([`.claude-plugin/plugin.json`](../../.claude-plugin/plugin.json)): the manifest declares
-four `command` hooks and a stdio MCP server, all routed through the single installed
+six `command` hooks and a stdio MCP server, all routed through the single installed
 `librarian` bin. Each hook runs `librarian hook claude-code`, which maps the native hook
 payload onto the canonical event schema ([`schema/event.md`](../../schema/event.md)) and
 pipes it into `librarian collect`. For `UserPromptSubmit` and `SessionStart` it also shells
@@ -32,8 +32,9 @@ only names `librarian` subcommands (spec §14 amendment: a thin plugin, not thre
   and returns the block as `hookSpecificOutput.additionalContext` only when stdout is
   non-empty.
 - **[`.claude-plugin/plugin.json`](../../.claude-plugin/plugin.json)** — the plugin manifest:
-  the four hooks (`UserPromptSubmit`, `PostToolUse` matcher `*`, `SessionStart`, `Stop`) each
-  running `librarian hook claude-code`, plus `mcpServers.librarian` → `librarian mcp`.
+  the six hooks (`UserPromptSubmit`, `PostToolUse` matcher `*`, `SessionStart`, `Stop`,
+  `SessionEnd`, `PreCompact`) each running `librarian hook claude-code`, plus
+  `mcpServers.librarian` → `librarian mcp`.
 - **[`.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json)** — so
   `/plugin marketplace add magnus-tornvall/librarian` resolves this repo as a marketplace.
 
@@ -76,7 +77,8 @@ from inside Claude Code:
 /plugin install librarian
 ```
 
-That wires the four hooks (`UserPromptSubmit`, `PostToolUse`, `SessionStart`, `Stop`) and the
+That wires the six hooks (`UserPromptSubmit`, `PostToolUse`, `SessionStart`, `Stop`,
+`SessionEnd`, `PreCompact`) and the
 stdio MCP server with **no** `settings.json` edit. Fully restart a running Claude Code
 session after install.
 
@@ -123,17 +125,29 @@ proves nothing about the plugin. Remove the legacy hooks first.
 
 ## What gets emitted (mapping rules, §10.1)
 
-| Native Claude Code hook              | Canonical event | Notes |
-| ------------------------------------ | --------------- | ----- |
-| `UserPromptSubmit`                   | `PromptEvent`   | `prompt` shipped **raw** (collector redacts). |
-| `PostToolUse`                        | `ToolEvent`     | `tool.native_name` = Claude Code's `tool_name` (capitalized, e.g. `Bash`); `canonical_name` ∈ read/write/edit/bash/search/unknown; `category` ∈ file_read/file_write/command/search/vcs_commit/vcs_push/other. |
-| `PostToolUse` `Write`/`Edit`         | `ToolEvent`     | canonical write/edit + `category: file_write` + `files[]` (from `tool_input.file_path`); file writes get `hints.possibly_salient` (`reason: file_write`). |
-| `PostToolUse` `Read`                 | `ToolEvent`     | read / file_read; `files[]` action `read`; no hint. **No `outcome`** — its `tool_response` is the file's contents. |
-| `PostToolUse` `Grep`/`Glob`          | `ToolEvent`     | search / search. No `outcome` — a search is re-runnable in a second. |
-| `PostToolUse` `Bash`                 | `ToolEvent`     | bash / command, `command` populated from `tool_input.command`; `git commit` / `git push` detection sharpens the category to `vcs_commit` / `vcs_push`. `outcome` (`stdout`/`stderr`/`interrupted`) is lifted from `tool_response`, empty streams elided. `interrupted` — and only `interrupted` — sets `hints.possibly_salient` (`reason: command_failed`), which outranks the file_write/vcs_commit hints. **stderr is not a failure signal:** over 1217 real Bash results the payload had no exit code, never set `is_error`, and all 266 non-empty `stderr` values were Claude Code's own "Shell cwd was reset to …" notice while real failures printed to stdout. The distiller reads the captured output and judges for itself. Note the asymmetry: the **OpenCode** adapter lifts a real `metadata.exit` and does fire this hint. |
-| `PostToolUse` (any other tool)       | `ToolEvent`     | unknown / other. |
-| `SessionStart`                       | `SessionEvent`  | `action: "start"` (every source). |
-| `Stop`                               | `SessionEvent`  | `action: "stop"`. |
+| Native Claude Code hook              | Canonical event | `boundary` | Notes |
+| ------------------------------------ | --------------- | ---------- | ----- |
+| `UserPromptSubmit`                   | `PromptEvent`   | — | `prompt` shipped **raw** (collector redacts). |
+| `PostToolUse`                        | `ToolEvent`     | — | `tool.native_name` = Claude Code's `tool_name` (capitalized, e.g. `Bash`); `canonical_name` ∈ read/write/edit/bash/search/unknown; `category` ∈ file_read/file_write/command/search/vcs_commit/vcs_push/other. |
+| `PostToolUse` `Write`/`Edit`         | `ToolEvent`     | — | canonical write/edit + `category: file_write` + `files[]` (from `tool_input.file_path`); file writes get `hints.possibly_salient` (`reason: file_write`). |
+| `PostToolUse` `Read`                 | `ToolEvent`     | — | read / file_read; `files[]` action `read`; no hint. **No `outcome`** — its `tool_response` is the file's contents. |
+| `PostToolUse` `Grep`/`Glob`          | `ToolEvent`     | — | search / search. No `outcome` — a search is re-runnable in a second. |
+| `PostToolUse` `Bash`                 | `ToolEvent`     | `{semantic, git_commit}` on a `vcs_commit` that did **not** fail | bash / command, `command` populated from `tool_input.command`; `git commit` / `git push` detection sharpens the category to `vcs_commit` / `vcs_push`. `outcome` (`stdout`/`stderr`/`interrupted`) is lifted from `tool_response`, empty streams elided. `interrupted` — and only `interrupted` — sets `hints.possibly_salient` (`reason: command_failed`), which outranks the file_write/vcs_commit hints. **stderr is not a failure signal:** over 1217 real Bash results the payload had no exit code, never set `is_error`, and all 266 non-empty `stderr` values were Claude Code's own "Shell cwd was reset to …" notice while real failures printed to stdout. The distiller reads the captured output and judges for itself. Note the asymmetry: the **OpenCode** adapter lifts a real `metadata.exit` and does fire this hint. |
+| `PostToolUse` `TodoWrite`            | `ToolEvent`     | `{semantic, todos_complete}` when **every** todo is `completed` | unknown / other like any untabled tool; only `tool_input.todos` is read, and strictly — an empty list is no completion, and `cancelled` means dropped, not finished. |
+| `PostToolUse` (any other tool)       | `ToolEvent`     | — | unknown / other. |
+| `SessionStart`                       | `SessionEvent`  | — | `action: "start"` (every source). |
+| `Stop`                               | `SessionEvent`  | — | `action: "stop"`. Deliberately **no** boundary: `Stop` fires once per assistant turn, not once per session. |
+| `SessionEnd`                         | `SessionEvent`  | `{terminal, session_end}` | `action: "end"`. The genuine one-shot session boundary; `reason` (clear/logout/prompt_input_exit/other) is not remapped. |
+| `PreCompact`                         | `SessionEvent`  | `{compaction, compact}` | `action: "compact"`. Recorded landmark only — see below. |
+
+`boundary` marks the events where an arc actually **closed**, so a distill trigger has
+something better than a clock to act on ([`schema/event.md`](../../schema/event.md)). The
+adapter reports it and never decides what to do with it — firing is the trigger's call (§4).
+Two rules are load-bearing here: a `compaction` boundary must **not** fire a distill (the
+context window filled, which is not the work finishing, and librarian's own durable event log
+means compaction destroys nothing it needs), and a hard-killed terminal fires no `SessionEnd`
+at all — boundaries are an optimisation on top of the trigger's timeout and scheduled net,
+never the guarantee.
 
 `resource` carries `agent: "claude-code"`, `machine_id` (via `librarian machine-id` or
 `MACHINE_ID_PATH`), `cwd` (from the hook payload), and `git_root`/`git_remote`/`git_branch`

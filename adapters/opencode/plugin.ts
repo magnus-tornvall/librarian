@@ -539,7 +539,7 @@ export const LibrarianPlugin = async (ctx: PluginContext) => {
     },
 
     /** Session lifecycle. The shell keeps only the one-shot session.created (start) /
-     *  session.deleted (stop); anything else lowers to nothing. `Session.version` is captured
+     *  session.deleted (end, the terminal boundary); anything else lowers to nothing. `Session.version` is captured
      *  here because it appears on no other payload. */
     event: async ({ event }: { event: Loose }) => {
       if (!agentVersion && asString(event.type) === 'session.created') {

@@ -1,0 +1,94 @@
+{
+  "name": "post-tool-use-todowrite-complete",
+  "description": "A Claude Code PostToolUse hook for TodoWrite whose tool_input.todos are ALL status 'completed' carries a semantic boundary (`todos_complete`) — the closest thing an agent emits to 'the plan is done', and an arc the session may well continue past. The tool itself is not in the classification table, so it stays unknown/other (dumb by design) and, being neither a shell nor a VCS category, captures no outcome even though tool_response is populated; nothing here earns a salience hint either. Reading the todo list is not the adapter growing judgment: it reports a state the host handed over verbatim.",
+  "native": {
+    "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+    "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
+    "cwd": "/Users/magnus/dev/librarian",
+    "permission_mode": "default",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "TodoWrite",
+    "tool_input": {
+      "todos": [
+        {
+          "content": "Add the boundary field to the canonical event schema",
+          "status": "completed",
+          "activeForm": "Adding the boundary field to the canonical event schema"
+        },
+        {
+          "content": "Map SessionEnd and PreCompact in the Claude Code adapter",
+          "status": "completed",
+          "activeForm": "Mapping SessionEnd and PreCompact in the Claude Code adapter"
+        }
+      ]
+    },
+    "tool_response": {
+      "oldTodos": [
+        {
+          "content": "Add the boundary field to the canonical event schema",
+          "status": "completed",
+          "activeForm": "Adding the boundary field to the canonical event schema"
+        },
+        {
+          "content": "Map SessionEnd and PreCompact in the Claude Code adapter",
+          "status": "in_progress",
+          "activeForm": "Mapping SessionEnd and PreCompact in the Claude Code adapter"
+        }
+      ],
+      "newTodos": [
+        {
+          "content": "Add the boundary field to the canonical event schema",
+          "status": "completed",
+          "activeForm": "Adding the boundary field to the canonical event schema"
+        },
+        {
+          "content": "Map SessionEnd and PreCompact in the Claude Code adapter",
+          "status": "completed",
+          "activeForm": "Mapping SessionEnd and PreCompact in the Claude Code adapter"
+        }
+      ]
+    },
+    "tool_use_id": "toolu_01MNO345PQR678",
+    "duration_ms": 12
+  },
+  "env": {
+    "event_id": "01J8X7QK48B3D7W0T4X8Z2A6C3",
+    "ts": "2026-07-06T09:24:05.100Z",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK48B3D7W0T4X8Z2A6C3",
+    "ts": "2026-07-06T09:24:05.100Z",
+    "type": "tool",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "tool": {
+      "native_name": "TodoWrite",
+      "canonical_name": "unknown",
+      "category": "other"
+    },
+    "boundary": { "kind": "semantic", "signal": "todos_complete" }
+  }
+}

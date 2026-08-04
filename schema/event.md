@@ -5,7 +5,7 @@ for one thing that happened in an agent session — a prompt, a tool call, or a 
 lifecycle transition. Events are the event log's unit of storage: append-only, replayable,
 never deleted. There are three variants today: `PromptEvent` (a user prompt), `ToolEvent`
 (a tool invocation — read, write, edit, bash, search, commit, push), and `SessionEvent` (a
-session-level transition — start, stop, compact, checkpoint). A fourth variant,
+session-level transition — start, stop, compact, checkpoint, end). A fourth variant,
 `ContentEvent`, is reserved for non-agent sources (email, documents, …) but deferred until a
 concrete non-agent source exists.
 
@@ -28,6 +28,8 @@ type EventBase = {
   hints?: { possibly_salient?: boolean;
             reason?: "file_write" | "vcs_commit" | "command_failed" | "cwd_change"
                    | "user_pushback" | "manual" };
+  boundary?: { kind: "terminal" | "semantic" | "compaction";       // an arc closed here
+               signal: "session_end" | "compact" | "git_commit" | "todos_complete" };
 };
 
 type PromptEvent = EventBase & { type: "prompt"; prompt: string };
@@ -46,8 +48,34 @@ type ToolEvent = EventBase & {
   files?: Array<{ path: string; action: "read" | "write" | "edit" | "delete" }>;
 };
 
-type SessionEvent = EventBase & { type: "session"; action: "start" | "stop" | "compact" | "checkpoint" };
+type SessionEvent = EventBase & { type: "session";
+                                  action: "start" | "stop" | "compact" | "checkpoint" | "end" };
 ```
+
+## Boundary markers
+
+`boundary` marks the events where an arc actually **closed**, so a distill trigger has
+something better than a clock to act on. It is present only on those events, carries the same
+vocabulary for every agent (a consumer switches on one field; `resource.agent` still says which
+agent it was), and the adapter never decides what to do with it — firing is the trigger's call
+(§4: dumb instrumentation).
+
+| `kind` | `signal` | Emitted on | Strength |
+| ------ | -------- | ---------- | -------- |
+| `terminal` | `session_end` | Claude Code `SessionEnd`, OpenCode `session.deleted` | The session is over; nothing more is coming. |
+| `semantic` | `git_commit` | a `vcs_commit` tool call that did **not** fail | An arc closed; the session may continue. |
+| `semantic` | `todos_complete` | a todo-write tool call leaving **every** todo `completed` | Same. |
+| `compaction` | `compact` | Claude Code `PreCompact`, OpenCode `experimental.session.compacting` | Recorded landmark only — **never** a completion signal. |
+
+`compaction` is recorded but must **not** fire a distill: compaction means "the context window
+filled up", not "the work is finished", so acting on it would distill an unfinished arc. Tools
+that read the transcript treat `PreCompact` as a data-preservation deadline; librarian writes its
+own durable event log through the hooks, so compaction destroys nothing it needs.
+
+A per-turn signal is not a boundary: Claude Code's `Stop` and OpenCode's `session.idle` fire once
+per assistant turn, so treating either as an end-of-arc marker would distill mid-session on every
+turn. And a hard-killed terminal fires no `SessionEnd` at all — boundaries are an optimisation on
+top of the trigger's timeout and scheduled net, never the guarantee.
 
 ## Rules
 

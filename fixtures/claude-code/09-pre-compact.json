@@ -1,0 +1,49 @@
+{
+  "name": "pre-compact",
+  "description": "A Claude Code PreCompact hook payload maps to a SessionEvent with action 'compact' and a COMPACTION boundary. It is RECORDED as a landmark and must NOT fire a distill: compaction means the context window filled up, not that the work is finished, so acting on it would distill an unfinished arc. Tools that read the transcript treat PreCompact as a data-preservation deadline; librarian writes its own durable event log through the hooks, so compaction destroys nothing it needs and there is no deadline to honour. `trigger` (auto/manual) and `custom_instructions` are read but deliberately NOT mapped — only the canonical event reaches the log.",
+  "native": {
+    "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+    "transcript_path": "/Users/magnus/.claude/projects/-Users-magnus-dev-librarian/00893aaf.jsonl",
+    "cwd": "/Users/magnus/dev/librarian",
+    "permission_mode": "default",
+    "hook_event_name": "PreCompact",
+    "trigger": "auto",
+    "custom_instructions": ""
+  },
+  "env": {
+    "event_id": "01J8X7QK47A2C6V9S3W7Y1Z5B2",
+    "ts": "2026-07-06T09:22:30.500Z",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    }
+  },
+  "expected": {
+    "schema_version": 1,
+    "event_id": "01J8X7QK47A2C6V9S3W7Y1Z5B2",
+    "ts": "2026-07-06T09:22:30.500Z",
+    "type": "session",
+    "resource": {
+      "agent": "claude-code",
+      "machine_id": "01J8X7QK3VZ9R4M2N6P0S5T7WX",
+      "cwd": "/Users/magnus/dev/librarian",
+      "git_root": "/Users/magnus/dev/librarian",
+      "git_remote": "git@github.com:magnus-tornvall/librarian.git",
+      "git_branch": "feat/claude-code-adapter"
+    },
+    "context": {
+      "session_id": "cc-sess-01J8X7QK40M8Q3N6P0R5S7TVWX",
+      "cwd": "/Users/magnus/dev/librarian"
+    },
+    "action": "compact",
+    "boundary": { "kind": "compaction", "signal": "compact" }
+  }
+}
