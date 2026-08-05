@@ -8,6 +8,7 @@ import { appendNote, readAllNotes } from '../log/noteLog.ts';
 import { updateIndex } from '../recall/embedding.ts';
 import type { NoteRecord, NoteRevision } from '../note.ts';
 import { readCursor, advanceCursor, type Cursor } from '../log/cursor.ts';
+import { writeDebugStack } from '../debug.ts';
 import { loadConfig } from '../config.ts';
 import { acquireLock } from '../log/lock.ts';
 import {
@@ -408,9 +409,13 @@ export async function runDistill(options: DistillRunOptions): Promise<DistillRun
     return { distilled: 0, duplicates: 0, skipped: 0, deferred: 0, noops: 0, quarantined: 0, rejected: 0, status: 'lock-held' };
   }
   try {
-    const result = await runDistillPass(options);
-    await updateIndex(options.indexDir, options.dataDir, options.configPath, { failLoudOnTotalFailure: true });
-    return result;
+    // Notes appended before a failing session are durable, so index them even when
+    // the pass throws — otherwise recall stays stale until the next successful run.
+    try {
+      return await runDistillPass(options);
+    } finally {
+      await updateIndex(options.indexDir, options.dataDir, options.configPath, { failLoudOnTotalFailure: true });
+    }
   } finally {
     lock.release();
   }
@@ -425,6 +430,9 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
   // session is still one quarantined session, so the drain summary's "sessions
   // quarantined" noun stays honest.
   const quarantinedSessions = new Set<string>();
+  // Sessions that failed under the retry budget this run. Collected, not thrown
+  // at the first one: the rest of the backlog is independent work.
+  const failedSessions: string[] = [];
   const { dataDir, diagnosticsDir, provider } = options;
   const eventsDir = path.join(dataDir, 'events');
   if (!fs.existsSync(eventsDir)) {
@@ -689,16 +697,22 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
       result.distilled += 1;
     } catch (err) {
       const lastError = err instanceof Error ? err.message : String(err);
+      // The aggregate thrown at the end of the pass carries this message but not
+      // this stack, so the call site is only recoverable here, at the throw.
+      writeDebugStack(err, options.configPath);
       const priorAttempts = cursor?.failed_attempts;
       const sameDelta = priorAttempts?.byte_offset === startOffset && priorAttempts?.byte_end === newOffset;
       const priorCount = sameDelta ? priorAttempts.count : 0;
       const attempt = priorCount + 1;
 
       if (attempt < MAX_ATTEMPTS) {
-        // Under budget: record the attempt on the cursor (offset UNMOVED) and
-        // rethrow so the CLI exits non-zero and the next run retries this range.
-        // No corrupt-line verdicts here — the cursor does not advance past them,
-        // so they are emitted once, on the run that finally advances the delta.
+        // Under budget: record the attempt on the cursor (offset UNMOVED) so the
+        // next run retries this range, and keep going with the other sessions —
+        // one malformed provider response must not strand a 300-session backlog.
+        // The failure still surfaces: the pass throws an aggregate at the end, so
+        // the CLI exits non-zero. No corrupt-line verdicts here — the cursor does
+        // not advance past them, so they are emitted once, on the run that
+        // finally advances the delta.
         advanceCursor(
           cursorPath,
           makeCursor(logFilePath, sessionId, startOffset, cursor?.last_record_id, {
@@ -708,7 +722,8 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
             last_error: lastError,
           }),
         );
-        throw err;
+        failedSessions.push(`${sessionId} (attempt ${attempt}/${MAX_ATTEMPTS}): ${lastError}`);
+        continue;
       }
 
       // Budget exhausted: quarantine. Write a verdict naming the byte range a
@@ -736,5 +751,10 @@ async function runDistillPass(options: DistillRunOptions): Promise<DistillRunRes
     }
   }
   result.quarantined = quarantinedSessions.size;
+  if (failedSessions.length > 0) {
+    throw new Error(
+      `${failedSessions.length} session(s) failed and will be retried on the next run:\n  ${failedSessions.join('\n  ')}`,
+    );
+  }
   return result;
 }
