@@ -160,7 +160,7 @@ process:
    session — the timer below is what makes that recoverable. Bursts are
    debounced to one drain a minute (a session end always fires, since it is the one that owes
    you the note), and overlapping drains are safe by construction — the second one finds the
-   distiller lock held and exits with nothing to do.
+   distiller lock held, skips the distill, renders whatever notes already exist, and exits 0.
 2. **An OS timer**, for everything a hook cannot see: a hard-killed terminal, a machine that
    slept mid-run, a provider that was offline when the session ended.
 

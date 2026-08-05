@@ -111,6 +111,18 @@ function xmlEscape(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * The installing shell's PATH, carried into the unit. A scheduler gives a job almost nothing
+ * (launchd: `/usr/bin:/bin:/usr/sbin:/sbin`; cron and a systemd user unit are similarly bare),
+ * but the distill providers spawn a bare `claude` / `opencode`, which live in `~/.local/bin`,
+ * `~/.claude/local`, nvm and homebrew dirs. Without this the timer fires and fails every time —
+ * the exact silent nothing-happened this command exists to prevent.
+ */
+function unitPath(): string {
+  const value = process.env.PATH;
+  return value === undefined || value === '' ? '/usr/bin:/bin:/usr/sbin:/sbin' : value;
+}
+
 function plistBody(argv: string[], intervalMinutes: number): string {
   const args = argv.map((arg) => `      <string>${xmlEscape(arg)}</string>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -123,6 +135,11 @@ function plistBody(argv: string[], intervalMinutes: number): string {
     <array>
 ${args}
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>${xmlEscape(unitPath())}</string>
+    </dict>
     <key>StartInterval</key>
     <integer>${intervalMinutes * 60}</integer>
     <key>StandardOutPath</key>
@@ -140,10 +157,8 @@ ${args}
  * `$` starts a variable expansion, and `\`/`"` are the escape and the quote themselves.
  * A vault path is user-supplied, so all four must survive verbatim.
  */
-function systemdExecStart(argv: string[]): string {
-  const quote = (arg: string): string =>
-    `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '$$$$').replace(/%/g, '%%')}"`;
-  return argv.map(quote).join(' ');
+function systemdQuote(arg: string): string {
+  return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '$$$$').replace(/%/g, '%%')}"`;
 }
 
 function serviceBody(argv: string[]): string {
@@ -152,7 +167,8 @@ Description=Librarian drain
 
 [Service]
 Type=oneshot
-ExecStart=${systemdExecStart(argv)}
+Environment=${systemdQuote(`PATH=${unitPath()}`)}
+ExecStart=${argv.map(systemdQuote).join(' ')}
 StandardOutput=append:${LOG_PATH}
 StandardError=append:${LOG_PATH}
 `;
@@ -197,7 +213,9 @@ function cronSchedule(intervalMinutes: number): string {
  */
 function cronLine(argv: string[], intervalMinutes: number): string {
   const quote = (arg: string): string => `'${arg.replace(/'/g, `'\\''`)}'`;
-  const command = `${argv.map(quote).join(' ')} >> ${quote(LOG_PATH)} 2>&1`;
+  // A `PATH=` line in the crontab would leak into the user's other jobs, so the assignment is a
+  // shell env prefix on our command only — cron hands the line to /bin/sh, which honours it.
+  const command = `PATH=${quote(unitPath())} ${argv.map(quote).join(' ')} >> ${quote(LOG_PATH)} 2>&1`;
   return `${cronSchedule(intervalMinutes)} ${command.replace(/%/g, '\\%')} ${CRON_MARKER}`;
 }
 
@@ -212,15 +230,30 @@ function activate(out: Printer, command: string, args: string[], optional = fals
   throw new Error(`activation failed: ${[command, ...args].join(' ')}: ${detail}`);
 }
 
-/** Does `systemctl --user` actually resolve here? A container often has systemd binaries but no user bus. */
+/**
+ * Does `systemctl --user` actually reach a user manager here? `--version` does not: it ignores
+ * `--user` and succeeds wherever the binary exists, so containers, plain SSH sessions and WSL
+ * were taking the systemd branch and failing instead of falling back to cron. `show-environment`
+ * is a real round-trip to the user bus.
+ */
 function hasSystemdUser(): boolean {
-  return spawnSync('systemctl', ['--user', '--version'], { encoding: 'utf8' }).status === 0;
+  return spawnSync('systemctl', ['--user', 'show-environment'], { encoding: 'utf8' }).status === 0;
 }
 
-/** The current crontab, or empty when there is none (a bare crontab exits non-zero). */
+/**
+ * The current crontab, or empty when the user genuinely has none. `crontab -l` exits non-zero for
+ * both "no crontab for user" and a real failure (no permission, spool unavailable, binary
+ * missing) — and reading a real failure as "empty" means the write that follows drops every job
+ * the user had. So only silence counts as empty; anything else fails loud before we write.
+ */
 function readCrontab(): string {
   const result = spawnSync('crontab', ['-l'], { encoding: 'utf8' });
-  return result.status === 0 ? result.stdout : '';
+  if (result.status === 0) return result.stdout;
+  const stderr = (result.stderr ?? '').trim();
+  if (result.error === undefined && (result.stdout ?? '') === '' && (stderr === '' || /no crontab/i.test(stderr))) {
+    return '';
+  }
+  throw new Error(`crontab -l failed: ${result.error?.message ?? stderr} — refusing to rewrite a crontab we cannot read`);
 }
 
 function writeCrontab(lines: string[]): void {
@@ -310,14 +343,18 @@ export function installScheduleCommand(argv: string[]): void {
     out('  no vault configured — the timer will distill but export nothing. Set one with `librarian config`.');
   }
   out(`  log: ${LOG_PATH}`);
+  out(`  PATH for the timer: ${unitPath()}`);
+
+  // Always replace, never add. A box gains or loses systemd between installs, and re-running
+  // would otherwise leave the cron line firing alongside the new timer (or vice versa) — two
+  // drains an hour, one of them pointing at whatever the last install thought was true. This
+  // also covers the same-mechanism re-run, so no separate launchd bootout is needed below.
+  for (const what of removeSchedule(false)) out(`  replaced ${what}`);
 
   switch (platform()) {
     case 'darwin': {
       const plist = launchAgentPath();
       write(plist, plistBody(drain, interval), out);
-      // Bootout first so a re-run replaces the loaded agent; it fails when nothing is loaded,
-      // which is the normal first-install case, so its failure is not an error.
-      activate(out, 'launchctl', ['bootout', `gui/${uid}/${LAUNCHD_LABEL}`], true);
       activate(out, 'launchctl', ['bootstrap', `gui/${uid}`, plist]);
       break;
     }
@@ -331,7 +368,8 @@ export function installScheduleCommand(argv: string[]): void {
       }
       out('  systemctl --user does not resolve here — falling back to cron');
       const line = cronLine(drain, interval);
-      const kept = readCrontab().split('\n').filter((existing) => !existing.includes(CRON_MARKER) && existing.trim().length > 0);
+      // removeSchedule above already stripped any marker line, so this is just "keep their jobs".
+      const kept = readCrontab().split('\n').filter((existing) => existing.trim().length > 0);
       writeCrontab([...kept, line]);
       out(`  installed crontab line: ${line}`);
       break;

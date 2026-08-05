@@ -19,7 +19,14 @@
  *    mid-session semantic boundary is a near-no-op for the active session while
  *    opportunistically draining any *other* session that has settled. The stamp file below
  *    keeps a burst of boundaries from storming; the distiller's own lock is the backstop
- *    (a second drain sees a live lock, reports on stderr, exits 0).
+ *    (a second drain sees a live lock, reports it, exports what exists, exits 0).
+ *
+ * ponytail: the stamp is read-then-write, not a compare-and-swap, so hooks firing in the same
+ *           instant can all see the old stamp and all spawn. That is a bounded cost — a few
+ *           processes that immediately find the lock held and exit 0 — and it is the same
+ *           filesystem-CAS gap the distiller lock already documents (`src/log/lock.ts`, #69).
+ *           If it ever matters, both want the one real single-writer primitive, not two
+ *           hand-rolled ones.
  *
  * This only *invokes* `drain` — locking, retry, quarantine and idempotency are already drain's
  * own (`docs/hardening.md`), and a repeat drain over one backlog is a byte-identical no-op, so

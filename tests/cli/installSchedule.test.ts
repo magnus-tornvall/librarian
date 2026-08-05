@@ -82,17 +82,21 @@ function firstMatch(body: string, pattern: RegExp, what: string): string {
 /** The thing the mechanism actually execs — the first argument, before any of ours. */
 const plistProgram = (body: string): string => firstMatch(body, /<array>\s*<string>([^<]*)<\/string>/, 'ProgramArguments[0]');
 const systemdProgram = (body: string): string => firstMatch(body, /^ExecStart="((?:[^"\\]|\\.)*)"/m, 'the ExecStart program');
-const cronProgram = (line: string): string => firstMatch(line, /^(?:\S+ ){5}'([^']*)'/, 'the cron command');
+const cronProgram = (line: string): string => firstMatch(line, / PATH='.*?' '([^']*)'/, 'the cron command');
 
 /**
  * The assertions every generated unit owes us, whatever the mechanism: it execs a real absolute
- * path (a bare `librarian` would never resolve — no scheduler has our PATH) and it drains the vault.
+ * path (a bare `librarian` would never resolve — no scheduler has our PATH), it drains the vault,
+ * and it carries a PATH — the distill providers spawn a bare `claude`/`opencode`, so a unit
+ * without one fires into a spawn error forever.
  */
-function assertUnitInvokesDrain(body: string, program: string, vault: string): void {
+function assertUnitInvokesDrain(env: Env, body: string, program: string, vault: string): void {
   assert.ok(path.isAbsolute(program), `the unit must exec an absolute path, not \`${program}\``);
   assert.ok(fs.existsSync(program), `the unit's program must exist on disk, got \`${program}\``);
   assert.match(body, /drain/, 'the unit must invoke drain');
   assert.ok(body.includes('--vault') && body.includes(vault), `the unit must pass --vault ${vault}; got:\n${body}`);
+  // env.binDir heads the installing shell's PATH, so finding it proves the whole PATH came across.
+  assert.ok(body.includes(env.binDir), `the unit must carry the installing shell's PATH; got:\n${body}`);
 }
 
 test('install-schedule (darwin): writes a launchd plist invoking drain with the vault and interval, and bootstraps it', { skip: process.platform !== 'darwin' ? 'darwin only' : false }, () => {
@@ -107,17 +111,31 @@ test('install-schedule (darwin): writes a launchd plist invoking drain with the 
   const body = fs.readFileSync(plist, 'utf8');
   assert.match(body, /<key>Label<\/key>\s*<string>com\.librarian\.drain<\/string>/);
   assert.match(body, /<key>StartInterval<\/key>\s*<integer>900<\/integer>/, '15 minutes must become 900 seconds');
-  assertUnitInvokesDrain(body, plistProgram(body), vault);
+  assertUnitInvokesDrain(env, body, plistProgram(body), vault);
+  assert.match(
+    body,
+    new RegExp(`<key>EnvironmentVariables</key>\\s*<dict>\\s*<key>PATH</key>\\s*<string>${env.binDir}:`),
+    'launchd gives a job PATH=/usr/bin:/bin:/usr/sbin:/sbin, so the plist must set one',
+  );
   // The log must land under ~/.librarian, never in the vault.
   assert.ok(body.includes(path.join(env.home, '.librarian', 'logs', 'drain.log')));
   assert.equal(body.includes(`<string>${vault}/`), false, 'no log path may point into the vault');
 
-  // Activation really ran, and the glass-box output says so.
+  // Activation really ran, and the glass-box output says so. Nothing was installed before, so
+  // there is nothing to boot out — the replacement step is silent on a first install.
   const log = invocations(env);
-  assert.match(log, /launchctl bootout gui\/\d+\/com\.librarian\.drain/);
   assert.match(log, new RegExp(`launchctl bootstrap gui/\\d+ ${plist.replace(/[/.]/g, (c) => `\\${c}`)}`));
   assert.match(result.stdout, /wrote /);
   assert.match(result.stdout, /running launchctl bootstrap/);
+  assert.match(result.stdout, /PATH for the timer: /, 'glass-box: the PATH the timer gets must be printed');
+  assert.doesNotMatch(result.stdout, /replaced /);
+
+  // A re-run replaces rather than stacks: the old agent is booted out before the new one loads.
+  fs.rmSync(env.log, { force: true });
+  const again = runSchedule(env, ['--interval', '15', '--vault', vault]);
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /replaced .*launchd agent/);
+  assert.match(invocations(env), /launchctl bootout gui\/\d+\/com\.librarian\.drain/);
 });
 
 test('install-schedule (darwin): --uninstall removes the plist, boots it out, and is exit 0 with nothing installed', { skip: process.platform !== 'darwin' ? 'darwin only' : false }, () => {
@@ -147,7 +165,11 @@ test('install-schedule (linux, systemd): writes service+timer, reloads, and enab
 
   const service = fs.readFileSync(systemdUnit(env, 'librarian-drain.service'), 'utf8');
   assert.match(service, /Type=oneshot/);
-  assertUnitInvokesDrain(service, systemdProgram(service), vault);
+  assertUnitInvokesDrain(env, service, systemdProgram(service), vault);
+  assert.ok(service.includes(`Environment="PATH=${env.binDir}:`), `the service must set PATH; got:\n${service}`);
+  // The branch must be chosen by a probe that actually reaches the user bus — `--version` ignores
+  // `--user` and succeeds wherever the binary exists.
+  assert.match(invocations(env), /systemctl --user show-environment/, 'the systemd probe must touch the user bus');
   const timer = fs.readFileSync(systemdUnit(env, 'librarian-drain.timer'), 'utf8');
   // A calendar timer, not OnUnitActiveSec: monotonic time does not advance across suspend, and
   // Persistent= (the catch-up we promise) only applies to OnCalendar=.
@@ -185,7 +207,10 @@ test('install-schedule (linux, no systemd): falls back to a marker-tagged cronta
   const line = log.split('\n').find((l) => l.includes('# librarian-drain'));
   assert.ok(line !== undefined, `a marker-tagged line must be installed; log:\n${log}`);
   assert.match(line, /^\*\/20 \* \* \* \* /, '20 minutes must become a */20 minute field');
-  assertUnitInvokesDrain(line, cronProgram(line), vault);
+  assertUnitInvokesDrain(env, line, cronProgram(line), vault);
+  // A shell env prefix, not a crontab-wide `PATH=` line, which would leak into the user's own jobs.
+  assert.ok(line.includes(`PATH='${env.binDir}:`), `the cron command must set PATH; got:\n${line}`);
+  assert.match(invocations(env), /systemctl --user show-environment/, 'the cron branch must be the probe failing');
 
   // Nothing to remove: the stub's `crontab -l` prints nothing, so uninstall is a clean no-op.
   fs.rmSync(env.log, { force: true });
@@ -208,7 +233,7 @@ test('install-schedule: the vault comes from the config when --vault is absent',
   assert.doesNotMatch(result.stdout, /no vault configured/);
 
   const service = fs.readFileSync(systemdUnit(env, 'librarian-drain.service'), 'utf8');
-  assertUnitInvokesDrain(service, systemdProgram(service), vault);
+  assertUnitInvokesDrain(env, service, systemdProgram(service), vault);
 });
 
 // A vault path is user input, and cron and systemd each translate characters before anything runs:
@@ -245,6 +270,78 @@ test('install-schedule (cron): a hostile vault path survives shell quoting and c
   const quoted = `'${env.home}/Bob'\\''s "weird" 100\\%$vault dir'`;
   assert.ok(line.includes(`'--vault' ${quoted}`), `expected ${quoted} in:\n${line}`);
   assert.equal(/[^\\]%/.test(line), false, `every % must be backslash-escaped; got:\n${line}`);
+});
+
+/** Replace one stub — for the failure modes and the statefulness the logging stub cannot express. */
+function overrideStub(env: Env, name: string, body: string): void {
+  const stub = path.join(env.binDir, name);
+  fs.writeFileSync(stub, body);
+  fs.chmodSync(stub, 0o755);
+}
+
+/** A `crontab` backed by a real file, so a second install sees what the first one installed. */
+function spoolCrontab(env: Env): string {
+  const spool = path.join(path.dirname(env.binDir), 'spool');
+  overrideStub(env, 'crontab', `#!/bin/bash
+echo "crontab $*" >> ${JSON.stringify(env.log)}
+if [ "$1" = "-l" ]; then
+  if [ -s ${JSON.stringify(spool)} ]; then cat ${JSON.stringify(spool)}; exit 0; fi
+  echo "no crontab for tester" >&2
+  exit 1
+fi
+cat > ${JSON.stringify(spool)}
+exit 0
+`);
+  return spool;
+}
+
+test('install-schedule: a crontab we cannot read is never rewritten', () => {
+  // `crontab -l` exits non-zero for "no crontab" AND for a real failure. Reading the second as
+  // "empty" and writing our line on top silently destroys every job the user had.
+  const env = makeEnv('cli-schedule-cron-unreadable-', 'linux', ['systemctl']);
+  overrideStub(env, 'crontab', `#!/bin/bash
+echo "crontab $*" >> ${JSON.stringify(env.log)}
+if [ "$1" = "-l" ]; then
+  echo "0 3 * * * /usr/local/bin/backup.sh"
+  echo "crontab: cannot open /var/at/tabs: permission denied" >&2
+  exit 1
+fi
+exit 0
+`);
+
+  const result = runSchedule(env, ['--vault', path.join(env.home, 'vault')]);
+  assert.equal(result.status, 1, 'an unreadable crontab must fail loud, not install');
+  assert.match(result.stderr, /permission denied/, 'the underlying failure must be reported');
+  assert.doesNotMatch(invocations(env), /crontab -\n/, 'nothing may be written to a crontab we could not read');
+  assert.doesNotMatch(result.stdout, /installed crontab line/);
+
+  // Same rule on the way out: uninstall must not "clean up" a crontab it could not read either.
+  fs.rmSync(env.log, { force: true });
+  assert.equal(runSchedule(env, ['--uninstall']).status, 1);
+  assert.doesNotMatch(invocations(env), /crontab -\n/);
+});
+
+test('install-schedule: switching mechanism replaces the old one instead of stacking two drains', () => {
+  const env = makeEnv('cli-schedule-switch-', 'linux', ['systemctl']);
+  const spool = spoolCrontab(env);
+  fs.writeFileSync(spool, '0 3 * * * /usr/local/bin/backup.sh\n');
+  const vault = path.join(env.home, 'vault');
+
+  // No systemd yet → the cron fallback.
+  assert.equal(runSchedule(env, ['--vault', vault]).status, 0);
+  assert.match(fs.readFileSync(spool, 'utf8'), /# librarian-drain/);
+
+  // The box gains a user bus. Installing again must take the cron line back out, or the user gets
+  // two periodic drains — the cron one still pointing at whatever the first install believed.
+  overrideStub(env, 'systemctl', `#!/bin/bash\necho "systemctl $*" >> ${JSON.stringify(env.log)}\nexit 0\n`);
+  const second = runSchedule(env, ['--vault', vault]);
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /replaced the # librarian-drain crontab line/);
+  assert.ok(fs.existsSync(systemdUnit(env, 'librarian-drain.timer')), 'the systemd timer must be installed');
+
+  const crontab = fs.readFileSync(spool, 'utf8');
+  assert.doesNotMatch(crontab, /# librarian-drain/, 'the superseded cron line must be gone');
+  assert.match(crontab, /backup\.sh/, "the user's own jobs must survive the replacement");
 });
 
 test('install-schedule: an unknown platform fails loud and prints the command to schedule by hand', () => {
