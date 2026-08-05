@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -225,6 +225,99 @@ test('drain: an immediate second drain over the same backlog is a provable no-op
   assertIdentical(notesAfterFirst, snapshot(path.join(dataDir, 'notes')), 'note log');
   assertIdentical(vaultAfterFirst, snapshot(vaultDir), 'vault');
   assert.equal(noteRevisions(dataDir).length, 2, 'the second drain mints no new note');
+});
+
+test('drain: two concurrent drains over one backlog converge to exactly one set of notes', async () => {
+  // The automatic drain (#170) gives drain two callers that can overlap — the boundary-
+  // triggered child and the scheduled timer. Convergence under overlap is an existing
+  // guarantee (the distiller lock, `docs/hardening.md`); this asserts it still holds when
+  // the callers are concurrent rather than consecutive, so the new triggers need no
+  // coordination between them.
+  const root = tempDir('cli-drain-concurrent-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const vaultDir = path.join(root, 'vault');
+  const goodFixture = writeFixture(root);
+
+  ingest(dataDir, eligibleEvents('sess-a'));
+  ingest(dataDir, eligibleEvents('sess-b'));
+
+  const args = ['drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--provider-fixture', goodFixture, '--vault', vaultDir];
+  const both = await Promise.all([0, 1].map(() => new Promise<{ code: number | null; stderr: string }>((resolve) => {
+    const child = spawn('node', [CLI, ...args]);
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.on('close', (code) => { resolve({ code, stderr }); });
+  })));
+
+  for (const [index, run] of both.entries()) {
+    assert.equal(run.code, 0, `concurrent drain ${index} should exit 0; stderr: ${run.stderr}`);
+  }
+  assert.equal(noteRevisions(dataDir).length, 2, 'two eligible sessions mint two notes no matter how many drains raced');
+  assert.equal(generatedFiles(vaultDir).length, 2, 'the vault holds one file per note, not one per drain');
+
+  // And the backlog is genuinely empty afterwards — neither racer left work behind.
+  const notesAfter = snapshot(path.join(dataDir, 'notes'));
+  const vaultAfter = snapshot(vaultDir);
+  const third = drain(dataDir, diagnosticsDir, goodFixture, vaultDir);
+  assert.equal(third.status, 0, `follow-up drain should exit 0; stderr: ${third.stderr}`);
+  assert.match(third.stdout, /Nothing pending/, 'the race must leave nothing pending');
+  assertIdentical(notesAfter, snapshot(path.join(dataDir, 'notes')), 'note log');
+  assertIdentical(vaultAfter, snapshot(vaultDir), 'vault');
+});
+
+test('drain: a live distiller lock skips the distill and the index work, but still exports', () => {
+  // The deterministic half of the test above. Everything after the distill pass writes
+  // `index/notes.db`, and the distiller lock does not cover those writes — a drain that
+  // carried on past a live holder raced it for the sqlite writer and died with "database is
+  // locked". Now routine, since the boundary trigger and the timer both fire drain (#170).
+  // Export is the deliberate exception: the holder may be a plain `librarian distill`, which
+  // never exports, and file writes do not race the sqlite writer.
+  const root = tempDir('cli-drain-lockheld-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const vaultDir = path.join(root, 'vault');
+  const goodFixture = writeFixture(root);
+
+  ingest(dataDir, eligibleEvents('sess-a'));
+  // A note that already exists — what a live `distill` holder would have appended without
+  // exporting it. The lock must not strand it outside the vault.
+  appendNote(dataDir, {
+    kind: 'note_revision',
+    schema_version: 1,
+    note_id: 'fact:lock-held-pending-export',
+    revision_id: 'rev-1',
+    created_at: '2026-07-05T09:01:00.000Z',
+    identity: { mode: 'episodic' },
+    source: { origin: 'claude-code', distiller: 'llm' },
+    note_type: 'fact',
+    title: 'Minted by the lock holder',
+    scope: { project_slug: 'librarian' },
+    provenance: {},
+    links: [],
+    body: { summary: 'Appended by whoever holds the lock; not yet exported.' },
+  } as NoteRevision);
+  // This test process is a live, fresh holder as far as the lock's PID probe is concerned.
+  fs.mkdirSync(path.join(dataDir, 'locks'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dataDir, 'locks', 'distiller.lock'),
+    JSON.stringify({ pid: process.pid, token: 'held-by-the-test', acquired_at: new Date().toISOString() }),
+  );
+
+  // An explicit index dir, so "no index pass happened" is checkable rather than implied.
+  const indexDir = path.join(root, 'index');
+  const result = runCli(
+    ['drain', '--data-dir', dataDir, '--diagnostics-dir', diagnosticsDir, '--index-dir', indexDir,
+      '--provider-fixture', goodFixture, '--vault', vaultDir],
+    '',
+  );
+
+  assert.equal(result.status, 0, `a held lock is not an error; stderr: ${result.stderr}`);
+  assert.match(result.stdout, /distiller lock held by another run/, 'the yield must be reported, not silent');
+  assert.equal(noteRevisions(dataDir).length, 1, 'the yielding drain distills nothing of its own');
+  assert.equal(generatedFiles(vaultDir).length, 1, 'but it renders the note the holder already appended');
+  // No index pass: a second writer on notes.db is what died with "database is locked".
+  assert.equal(fs.existsSync(indexDir), false, 'the yielding drain must not open the index');
 });
 
 test('drain: a quarantine-destined session does not block healthy sessions in the same run', () => {

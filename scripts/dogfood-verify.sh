@@ -80,6 +80,37 @@ process.stdout.write(row.injection_id);
 NODE
 }
 
+# Did the automatic drain (#170) run on its own for this session? The boundary hook spawns a
+# detached `librarian drain` when the session ends, so once the agent has exited the session's
+# distiller cursor must exist with nobody having typed a command. Prints the minted note id when
+# the session earned one, `skipped` when the pipeline ran but the delta was below the salience
+# floor (a legitimate outcome for a two-turn canary), and exits 2 when nothing ran at all.
+auto_drain_state() {
+  SESSION="$1" "${NODE_BIN}" <<'NODE'
+const fs = require('node:fs'), path = require('node:path');
+const data = path.join(process.env.HOME, '.librarian/data');
+if (!fs.existsSync(path.join(data, 'cursors/distiller', `${process.env.SESSION}.json`))) process.exit(2);
+const dir = path.join(data, 'notes');
+const rows = fs.existsSync(dir)
+  ? fs.readdirSync(dir).filter(n => n.endsWith('.ndjson')).flatMap(n => fs.readFileSync(path.join(dir, n), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse))
+  : [];
+const note = rows.reverse().find(r => r.kind === 'note_revision' && r.provenance?.session_id === process.env.SESSION);
+process.stdout.write(note ? note.note_id : 'skipped');
+NODE
+}
+
+# The drain is detached and pays a provider call per pending session, so wait — bounded.
+await_auto_drain() {
+  for _ in $(seq 1 45); do
+    if state="$(auto_drain_state "$1")"; then
+      printf '%s' "${state}"
+      return 0
+    fi
+    sleep 2
+  done
+  return 2
+}
+
 run_agent() {
   agent="$1"
   event_nonce="$2"
@@ -105,9 +136,20 @@ run_agent() {
     session="$(check_events opencode "${event_nonce}" no)"
   fi
 
+  # No manual `librarian drain` anywhere in this script: the agent's exit is the only trigger.
+  # OpenCode keeps a session alive after `opencode run` returns, so it fires no terminal
+  # boundary here — a missing drain is a finding for it, an error for Claude Code.
+  if ! drain_state="$(await_auto_drain "${session}")"; then
+    if [[ "${agent}" == claude-code ]]; then
+      echo "ERROR: no automatic drain ran for ${agent} session ${session} (no distiller cursor) — notes still need a manual drain." >&2
+      exit 1
+    fi
+    drain_state="no-auto-drain"
+  fi
+
   if ! trace_id "${event_nonce}" >/dev/null; then
     if [[ "${agent}" == opencode ]]; then
-      printf '%-12s %-8s %-26s %s\n' "${agent}" FINDING "${session}" "transform hook emitted no injection trace"
+      printf '%-12s %-8s %-26s %-30s %s\n' "${agent}" FINDING "${session}" "${drain_state}" "transform hook emitted no injection trace"
       return
     fi
     echo "ERROR: Claude Code emitted no shipped injection trace for ${note_id}." >&2
@@ -122,17 +164,17 @@ run_agent() {
   fi
   if injection_id="$(trace_id "${echo_prompt}")"; then
     if [[ "${echo_output}" != *"${injection_id}"* && "${agent}" == opencode ]]; then
-      printf '%-12s %-8s %-26s %s\n' "${agent}" FINDING "${session}" "trace ${injection_id} emitted; behavioral echo returned ${echo_output}"
+      printf '%-12s %-8s %-26s %-30s %s\n' "${agent}" FINDING "${session}" "${drain_state}" "trace ${injection_id} emitted; behavioral echo returned ${echo_output}"
       return
     fi
     [[ "${echo_output}" == *"${injection_id}"* ]] || { echo "ERROR: ${agent} behavioral echo did not return ${injection_id}; received: ${echo_output}" >&2; exit 1; }
-    printf '%-12s %-8s %-26s %s\n' "${agent}" PASS "${session}" "${injection_id}"
+    printf '%-12s %-8s %-26s %-30s %s\n' "${agent}" PASS "${session}" "${drain_state}" "${injection_id}"
   else
     echo "ERROR: ${agent} behavioral echo emitted no shipped injection trace for ${note_id}." >&2; exit 1
   fi
 }
 
-printf '%-12s %-8s %-26s %s\n' AGENT RESULT SESSION INJECTION
+printf '%-12s %-8s %-26s %-30s %s\n' AGENT RESULT SESSION AUTODRAIN INJECTION
 if [[ "${selected_agent}" == all || "${selected_agent}" == claude-code ]]; then
   run_agent claude-code "${claude_event_nonce}"
 fi

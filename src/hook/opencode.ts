@@ -42,6 +42,7 @@ import {
   type PromptPayload,
   type SessionPayload,
 } from './opencodeMap.ts';
+import { maybeSpawnDrain } from './autoDrain.ts';
 import { resolveLibrarianCommand, runLibrarian as spawnLibrarian } from './librarianBin.ts';
 import { buildResource as buildSharedResource, type Resource } from './resource.ts';
 
@@ -392,6 +393,7 @@ export function runHook(
   deliver: (event: CanonicalEvent) => void,
   buildResourceFn: (cwd: string, agentVersion?: string) => Resource = buildResource,
   injectFn: (resource: Resource, query: string, sessionStart: boolean, sessionId?: string) => InjectOutcome = runInject,
+  spawnDrain: (events: CanonicalEvent[]) => void = (events) => maybeSpawnDrain(events, librarian, logError),
 ): OpenCodeHookResult | undefined {
   const rawText = readStdin();
   if (rawText.trim().length === 0) {
@@ -432,6 +434,10 @@ export function runHook(
   for (const event of events) {
     deliver(event);
   }
+
+  // After handoff, never before: the drain child must be able to see the boundary event we
+  // just collected, or it would defer the very session that ended (#168's settle gate).
+  spawnDrain(events);
 
   if (envelope.hook !== 'chat.message' || lowered.payload.kind !== 'prompt') {
     return undefined;

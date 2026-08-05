@@ -33,6 +33,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ulid } from 'ulid';
+import { maybeSpawnDrain } from './autoDrain.ts';
 import { map, type CanonicalEvent, type Context, type NativePayload } from './claudeCodeMap.ts';
 import { resolveLibrarianCommand, runLibrarian as spawnLibrarian } from './librarianBin.ts';
 import { buildResource as buildSharedResource, type Resource } from './resource.ts';
@@ -215,6 +216,7 @@ export function runHook(
   buildResourceFn: (cwd: string) => Resource = buildResource,
   injectFn: (payload: NativePayload, cwd: string, gitRoot?: string) => string | undefined = injectForPayload,
   emitContext: (hookEventName: 'UserPromptSubmit' | 'SessionStart', block: string) => void = emitAdditionalContext,
+  spawnDrain: (events: CanonicalEvent[]) => void = (events) => maybeSpawnDrain(events, librarian, logError),
 ): void {
   const rawText = readStdin();
   if (rawText.trim().length === 0) {
@@ -250,6 +252,10 @@ export function runHook(
   for (const event of events) {
     deliver(event);
   }
+
+  // After handoff, never before: the drain child must be able to see the boundary event we
+  // just collected, or it would defer the very session that ended (#168's settle gate).
+  spawnDrain(events);
 
   const block = injectFn(payload, cwd, resource.git_root);
   if (block !== undefined && (payload.hook_event_name === 'UserPromptSubmit' || payload.hook_event_name === 'SessionStart')) {

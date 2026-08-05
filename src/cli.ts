@@ -56,6 +56,8 @@ const USAGE = `usage:
   librarian doctor [--index-dir <dir>] [--config <file>] [--json]
                                             report embedding endpoint and index readiness
   librarian update [--check]                check for or explicitly apply a binary update
+  librarian install-schedule [--interval <minutes>] [--vault <dir>] [--uninstall]
+                                           write an OS timer (launchd/systemd/cron) that drains every <minutes> (default 60)
   librarian uninstall [--purge] [--dry-run] [--yes]
                                            remove the wiring and the installed bin; keeps ~/.librarian data unless --purge
   librarian inject --project <slug> [--index-dir <dir>] [--global] [--session-start] [--session <id>]
@@ -976,8 +978,9 @@ async function distillCommand(flags: Map<string, string>): Promise<void> {
  * never reimplements locking (#59) or failure handling (#60).
  *
  *   1. Distill everything pending, under the distiller's own lock. A live lock
- *      holder is reported on stderr and does NOT abort the drain — the export
- *      step still runs over whatever notes already exist.
+ *      holder means someone else owns the distill pass right now: this run reports
+ *      that, exports what already exists, and skips the index work, exit 0 (see
+ *      the lock-held branch below for why the index work is the part that must go).
  *   2. Export everything pending to `<vault>/generated/**` — skipped entirely
  *      when no vault resolves (neither `--vault` nor `config.vault`).
  *   3. Print a one-line-per-fact summary to stdout. "Nothing pending" prints
@@ -1005,10 +1008,24 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
     throw err;
   }
   if (distilled.status === 'lock-held') {
-    // Another distiller holds the lock, so runDistill skipped its index pass —
-    // reconcile here so drain stays the manual recovery tool (§4), failing loud
-    // on a systemic embed failure like every other batch reconcile.
-    await updateIndex(indexDir, dataDir, flags.get('config'), { failLoudOnTotalFailure: true });
+    // The distill pass is somebody else's right now, and whoever holds the lock reconciles the
+    // index inside it. What we must NOT do is the index work below: the lock covers the distill
+    // pass only, so a second writer on `index/notes.db` races the holder for the sqlite writer
+    // and exits 1 with "database is locked" — survivable while overlap meant typing `drain`
+    // twice, routine now that a boundary and a timer both fire it (#170).
+    //
+    // Export still runs, though. The holder may be a plain `librarian distill`, which never
+    // exports, so yielding the vault too would leave notes unrendered until the next drain —
+    // and export is file writes, not sqlite, so it does not race the writer. Whatever this run
+    // skipped, the next drain picks up: the backlog is idempotent.
+    const yielded = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
+    process.stdout.write(
+      [
+        'distiller lock held by another run; skipped distill',
+        ...(yielded !== undefined ? [`notes exported: ${yielded.exported}`, `notes removed: ${yielded.removed}`] : []),
+      ].join('\n') + '\n',
+    );
+    return;
   }
   const exported = vaultDir !== undefined ? runExport({ dataDir, vaultDir }) : undefined;
   const index = openIndexWrite(indexDir);
@@ -1351,6 +1368,11 @@ export async function main(argv: string[]): Promise<void> {
     case 'update':
       await updateCommand(rest);
       break;
+    case 'install-schedule': {
+      const { installScheduleCommand } = await import('./schedule.ts');
+      installScheduleCommand(rest);
+      break;
+    }
     case 'uninstall': {
       const { uninstallCommand } = await import('./uninstall.ts');
       await uninstallCommand(rest);

@@ -50,11 +50,32 @@ function wiredHome(): string {
   return home;
 }
 
+/**
+ * Uninstall also tears down the drain schedule (#170), which shells out to the OS scheduler.
+ * Stub all three no-ops outside `.librarian/` (`--purge` deletes that tree) so the run cannot
+ * reach the developer's real crontab or systemd — a real `crontab -` here wipes their jobs.
+ */
+function schedulerStubs(home: string): string {
+  const stubs = path.join(home, 'scheduler-stubs');
+  fs.mkdirSync(stubs, { recursive: true });
+  for (const name of ['crontab', 'systemctl', 'launchctl']) {
+    const stub = path.join(stubs, name);
+    fs.writeFileSync(stub, '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(stub, 0o755);
+  }
+  return stubs;
+}
+
 function runUninstall(home: string, args: string[] = [], input = ''): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, [CLI, 'uninstall', ...args], {
     encoding: 'utf8',
     input,
-    env: { ...process.env, HOME: home, LIBRARIAN_BIN_DIR: path.join(home, '.librarian', 'bin') },
+    env: {
+      ...process.env,
+      HOME: home,
+      LIBRARIAN_BIN_DIR: path.join(home, '.librarian', 'bin'),
+      PATH: `${schedulerStubs(home)}:${process.env.PATH ?? ''}`,
+    },
   });
 }
 
