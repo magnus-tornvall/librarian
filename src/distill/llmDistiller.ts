@@ -1,5 +1,5 @@
 import { ulid } from 'ulid';
-import type { InferenceProvider } from './provider.ts';
+import { parseProviderJson, type InferenceProvider } from './provider.ts';
 import { renderEventsForDistill } from '../render/distillPrompt.ts';
 import { latestRecordPerNoteId, projectSummaryId, NOTE_TYPES, type NoteRecord, type NoteRevision } from '../note.ts';
 import { projectSlugFromGitRoot } from '../projectSlug.ts';
@@ -22,15 +22,6 @@ const LINK_TARGET_TYPES = new Set<NoteRevision['links'][number]['target_type']>(
   'file',
   'url',
 ]);
-
-// Chat providers (opencode/claude) sometimes wrap the object in a
-// ```json ... ``` fence despite "ONLY JSON". Strip one fence if present;
-// otherwise parse as-is so genuinely malformed JSON still throws.
-function unfence(text: string): string {
-  const trimmed = text.trim();
-  const m = trimmed.match(/^```(?:json)?\s*\n([\s\S]*?)\n?```$/);
-  return m ? m[1].trim() : trimmed;
-}
 
 function coerceNoteType(value: unknown): NoteRevision['note_type'] {
   return NOTE_TYPES.includes(value as NoteRevision['note_type'])
@@ -87,8 +78,10 @@ export async function distill(
 
   // Parse the LLM judgment. On malformed JSON, throw — no retry in this task
   // (§5 caps the eventual ceiling at completion + validate + one retry; the
-  // retry-once wrapper is a later concern, per task 017's scope note).
-  const judgment = JSON.parse(unfence(raw)) as LlmNoteJudgment;
+  // retry-once wrapper is a later concern, per task 017's scope note). The thrown
+  // error names an excerpt of the offending response so the failure is
+  // diagnosable from the cursor/verdict alone.
+  const judgment = (await parseProviderJson(raw)) as LlmNoteJudgment;
 
   if (judgment.note_type === 'none') {
     return { kind: 'declined', reason: typeof judgment.reason === 'string' ? judgment.reason : '' };

@@ -11,6 +11,7 @@ import { makeClaudeProvider } from './distill/claudeProvider.ts';
 import { makeOpencodeProvider } from './distill/opencodeProvider.ts';
 import { buildHumanRevision, importCuratedNote } from './distill/humanDistiller.ts';
 import { loadConfig } from './config.ts';
+import { writeDebugStack } from './debug.ts';
 import { embeddingCoverage, embeddingIndexModel, indexedThrough, openIndexRead, openIndexWrite, probeNativeStack, stateNotes } from './index/database.ts';
 import { classifyEmbeddingError, makeOpenAiEmbeddingProvider } from './embedding/provider.ts';
 import { runDistill } from './distill/distillRun.ts';
@@ -997,7 +998,15 @@ async function drainCommand(flags: Map<string, string>): Promise<void> {
   // runDistill already replayed the note log and embedded (failing loud on a
   // systemic error) — reading coverage here is a signal-only lens, not a second
   // index pass that would re-run the work just to print a count.
-  const distilled = await runDistill({ dataDir, diagnosticsDir, provider, indexDir, configPath: flags.get('config') });
+  let distilled: Awaited<ReturnType<typeof runDistill>>;
+  try {
+    distilled = await runDistill({ dataDir, diagnosticsDir, provider, indexDir, configPath: flags.get('config') });
+  } catch (err) {
+    // Some sessions failed and will retry next run, but the notes minted before
+    // them are durable — export those rather than holding the vault back too.
+    if (vaultDir !== undefined) runExport({ dataDir, vaultDir });
+    throw err;
+  }
   if (distilled.status === 'lock-held') {
     // The distill pass is somebody else's right now, and whoever holds the lock reconciles the
     // index inside it. What we must NOT do is the index work below: the lock covers the distill
@@ -1465,6 +1474,10 @@ if (import.meta.main) {
   main(process.argv.slice(2)).catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(`librarian: ${message}\n`);
+    // The message alone names WHAT failed, never WHERE. `--config` is uniform across
+    // commands, so reading it off argv here needs no global state to thread.
+    const configFlag = process.argv.indexOf('--config');
+    writeDebugStack(err, configFlag === -1 ? undefined : process.argv[configFlag + 1]);
     process.exit(1);
   });
 }

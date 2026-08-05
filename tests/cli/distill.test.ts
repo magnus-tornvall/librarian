@@ -666,6 +666,10 @@ test('distill: a provider whose output is not JSON fails loud — non-zero exit,
   const result = distill(dataDir, diagnosticsDir, fixturePath);
   assert.notEqual(result.status, 0, 'a JSON parse failure must cause a non-zero exit');
   assert.match(result.stderr, /librarian:/, 'the CLI must name the failure on stderr');
+  // The raw response is stored nowhere else, so the error must carry an excerpt of
+  // it — otherwise "Unexpected token" is undiagnosable once the run is gone.
+  assert.match(result.stderr, /a model that ignored the instruction/, 'the error must excerpt the offending response');
+  assert.doesNotMatch(result.stderr, /llmDistiller\.ts/, 'the stack stays off unless config debug is true');
 
   // Fail loud, bounded (§5/#60): the first failure mints no note and the cursor
   // OFFSET does not advance — the next run retries the same range — but the
@@ -679,6 +683,55 @@ test('distill: a provider whose output is not JSON fails loud — non-zero exit,
     1,
     'the first failure must record failed_attempts.count = 1',
   );
+  assert.match(
+    (cursor!.failed_attempts as Record<string, unknown>).last_error as string,
+    /a model that ignored the instruction/,
+    'the recorded last_error must excerpt the response, so the failure is diagnosable from the cursor alone',
+  );
+});
+
+test('distill: config debug:true adds the stack to a failure, naming the call site', () => {
+  const root = tempDir('cli-distill-debug-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  const fixturePath = writeFixtureContent(root, 'not json at all');
+  const configPath = path.join(root, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({ debug: true }));
+
+  ingest(dataDir, eligibleEvents('sess-debug'));
+
+  const result = runCli([
+    'distill',
+    '--data-dir', dataDir,
+    '--diagnostics-dir', diagnosticsDir,
+    '--provider-fixture', fixturePath,
+    '--config', configPath,
+  ], '');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /llmDistiller\.ts/, 'the stack must name the failing module');
+});
+
+test('distill: one session failing under the retry budget does not strand the rest of the backlog', () => {
+  const root = tempDir('cli-distill-onebad-');
+  const dataDir = path.join(root, 'data');
+  const diagnosticsDir = path.join(root, 'diagnostics');
+  // Logs are processed in sorted order, so 'sess-a-bad' burns the first response.
+  const bad = 'not json at all — a model that ignored the instruction';
+  const fixturePath = writeFixtureContent(root, JSON.stringify([bad, DISTINCT_RESPONSE, FAITHFUL_RESPONSE]));
+
+  ingest(dataDir, eligibleEvents('sess-a-bad'));
+  ingest(dataDir, eligibleEvents('sess-b-good'));
+
+  const result = distill(dataDir, diagnosticsDir, fixturePath);
+  assert.notEqual(result.status, 0, 'a failed session must still cause a non-zero exit');
+  assert.match(result.stderr, /sess-a-bad/, 'the aggregate error must name the failed session');
+
+  assert.equal(noteRevisions(dataDir).length, 1, 'the healthy session must still be distilled');
+  const badCursor = readCursorOrNull(dataDir, 'sess-a-bad');
+  assert.equal(badCursor!.byte_offset, 0, 'the failed session keeps its offset for retry');
+  assert.equal((badCursor!.failed_attempts as Record<string, unknown>).count, 1);
+  const goodCursor = readCursorOrNull(dataDir, 'sess-b-good');
+  assert.ok((goodCursor!.byte_offset as number) > 0, 'the healthy session advances past its delta');
 });
 
 test('distill: an eligible delta missing resource.agent fails loud — non-zero exit, no note, cursor not advanced', () => {

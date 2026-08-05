@@ -8,7 +8,7 @@ import { DEFAULT_SCORING_CONFIG } from '../src/recall/scoring.ts';
 
 test('loadConfig defaults missing and empty scoring sections per key', () => {
   const file = path.join(os.tmpdir(), `missing-${Date.now()}.json`);
-  assert.deepEqual(loadConfig(file), { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, distill: { settleMs: DEFAULT_SETTLE_MS }, scoring: DEFAULT_SCORING_CONFIG });
+  assert.deepEqual(loadConfig(file), { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, distill: { settleMs: DEFAULT_SETTLE_MS }, debug: false, scoring: DEFAULT_SCORING_CONFIG });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-config-'));
   const empty = path.join(dir, 'config.json');
   fs.writeFileSync(empty, JSON.stringify({ scoring: { originWeights: { human: 2 }, recencyHalfLifeDays: { fact: 'Infinity' } } }));
@@ -94,4 +94,17 @@ test('loadConfig reads distill.settleMs: default, explicit, gate-off zero, and a
   const withExtra = write('extra.json', { distill: { settleMs: 60_000 }, extra: 'keep-me' });
   assert.equal(loadConfig(withExtra).distill.settleMs, 60_000);
   assert.equal(JSON.parse(fs.readFileSync(withExtra, 'utf8')).extra, 'keep-me');
+});
+
+test('loadConfig reads debug: off by default, on when set, loud on a non-boolean', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-debug-'));
+  const write = (name: string, body: unknown): string => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, JSON.stringify(body));
+    return file;
+  };
+
+  assert.equal(loadConfig(write('bare.json', {})).debug, false, 'debug is off unless asked for');
+  assert.equal(loadConfig(write('on.json', { debug: true })).debug, true);
+  assert.throws(() => loadConfig(write('str.json', { debug: 'yes' })), /invalid debug/);
 });

@@ -1,6 +1,6 @@
 import type { NoteRevision } from '../note.ts';
 import { renderEventsForDistill } from '../render/distillPrompt.ts';
-import type { InferenceProvider } from './provider.ts';
+import { parseProviderJson, type InferenceProvider } from './provider.ts';
 
 export type VerifyVerdict = {
   faithful: boolean;
@@ -23,14 +23,8 @@ const INSTRUCTION = [
   'Note judgment fields:',
 ].join('\n');
 
-function unfence(text: string): string {
-  const trimmed = text.trim();
-  const match = trimmed.match(/^```(?:json)?\s*\n([\s\S]*?)\n?```$/);
-  return match ? match[1].trim() : trimmed;
-}
-
-function parseVerdict(raw: string): VerifyVerdict {
-  const value: unknown = JSON.parse(unfence(raw));
+async function parseVerdict(raw: string): Promise<VerifyVerdict> {
+  const value: unknown = await parseProviderJson(raw);
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('verifier response must be a JSON object');
   }
