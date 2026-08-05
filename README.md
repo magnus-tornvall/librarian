@@ -148,6 +148,25 @@ not load-bearing:
 no threshold can stop a long real pause from splitting an arc, so over-waiting is cheap and
 under-waiting distills live work.
 
+## Diagnosing a failed run (`debug`)
+
+A failure prints one line: what went wrong, and — for a distill failure — which session,
+which attempt, and an excerpt of the offending provider response, which is also recorded in
+that session's cursor (`data/cursors/distiller/<session>.json` → `failed_attempts.last_error`)
+and in the distill verdicts under `diagnostics/distill/`. That is normally enough.
+
+When it is not, `debug` adds the stack of the failure to stderr:
+
+```json
+{
+  "debug": true
+}
+```
+
+It is the *only* debug switch, and it adds only the stack — the one thing an error message
+cannot carry. There are no log levels and no log file: the pipeline's diagnosis lives in the
+verdict and cursor files it already writes, and those are readable without turning anything on.
+
 ## MCP Server
 
 `librarian mcp` starts the local stdio MCP server with `search` and `get_note` tools. See [`docs/mcp.md`](docs/mcp.md) for Claude Code registration and tool behavior.

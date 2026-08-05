@@ -35,7 +35,7 @@ const RAW_HEADROOM = 8;
 
 /** Collapse whitespace and cut to `limit`, so one line stays one line whatever the command
  *  printed. Provably bounded: the result is never longer than `limit` plus the ellipsis. */
-function excerpt(text: string, limit: number): string {
+export function excerpt(text: string, limit: number): string {
   const flat = text.slice(0, limit * RAW_HEADROOM).replace(/\s+/g, ' ').trim();
   const truncated = flat.length > limit || text.length > limit * RAW_HEADROOM;
   return truncated ? `${flat.slice(0, limit)}…` : flat;

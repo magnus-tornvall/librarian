@@ -20,6 +20,13 @@ export type LibrarianConfig = {
   };
   // Persisted home for exported notes; the fallback when a command's --vault is absent.
   vault?: string;
+  /**
+   * Add the stack of a failure to the error the CLI already prints (default false).
+   * A message names WHAT failed and never WHERE — this is the one diagnostic an
+   * error message structurally cannot carry. Not a log level and not a log file:
+   * the pipeline's diagnosis lives in the verdict/cursor files it already writes.
+   */
+  debug: boolean;
   scoring: ScoringConfig;
 };
 
@@ -84,6 +91,14 @@ function positiveTimeout(value: unknown, fallback: number, key: string, configPa
   return timeout;
 }
 
+function debugConfig(value: unknown, configPath: string): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') {
+    invalid('debug', configPath, 'a boolean');
+  }
+  return value;
+}
+
 function vaultConfig(value: unknown, configPath: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.length === 0) {
@@ -132,7 +147,7 @@ function distillConfig(value: unknown, configPath: string): LibrarianConfig['dis
 
 export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {
   if (!fs.existsSync(configPath)) {
-    return { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, distill: distillConfig(undefined, configPath), scoring: scoringConfig(undefined, configPath) };
+    return { inference: { provider: 'opencode', model: 'opencode/big-pickle' }, embedding: undefined, distill: distillConfig(undefined, configPath), debug: false, scoring: scoringConfig(undefined, configPath) };
   }
 
   let parsed: unknown;
@@ -155,5 +170,5 @@ export function loadConfig(configPath = CONFIG_PATH): LibrarianConfig {
     throw new Error(`invalid inference.model in ${configPath}: expected a string`);
   }
   const model = (inference.model as string | undefined) ?? (provider === 'opencode' ? 'opencode/big-pickle' : undefined);
-  return { inference: { provider, model }, embedding: embeddingConfig(root.embedding, configPath), distill: distillConfig(root.distill, configPath), vault: vaultConfig(root.vault, configPath), scoring: scoringConfig(root.scoring, configPath) };
+  return { inference: { provider, model }, embedding: embeddingConfig(root.embedding, configPath), distill: distillConfig(root.distill, configPath), vault: vaultConfig(root.vault, configPath), debug: debugConfig(root.debug, configPath), scoring: scoringConfig(root.scoring, configPath) };
 }
