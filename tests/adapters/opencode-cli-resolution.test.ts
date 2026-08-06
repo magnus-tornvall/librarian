@@ -85,6 +85,26 @@ test('resolution: ~/.librarian/config.json `bin` is used when LIBRARIAN_BIN is u
   assert.deepEqual(argv, [process.execPath, '/configured/dist/cli.js']);
 });
 
+test('resolution: a tilde in config `bin` expands to the home directory', () => {
+  // Regression: the config is hand-edited, so `~/…` is what a human writes. Unexpanded it
+  // is a *relative* path (a literal `~` dir under the host's cwd) and the spawn fails.
+  const home = homeWithConfig({ bin: '~/.librarian/bin/librarian' });
+  const argv = withEnv({ LIBRARIAN_BIN: null, HOME: home }, () => resolveLibrarianArgv());
+  assert.deepEqual(argv, [path.join(home, '.librarian', 'bin', 'librarian')]);
+});
+
+test('resolution: a bare name in config `bin` stays a PATH lookup (never cwd-relative)', () => {
+  const home = homeWithConfig({ bin: 'librarian' });
+  const argv = withEnv({ LIBRARIAN_BIN: null, HOME: home }, () => resolveLibrarianArgv());
+  assert.deepEqual(argv, ['librarian']);
+});
+
+test('resolution: a tilde in config `runtime` expands for a .js bin', () => {
+  const home = homeWithConfig({ bin: '/configured/dist/cli.js', runtime: '~/.nvm/versions/node/bin/node' });
+  const argv = withEnv({ LIBRARIAN_BIN: null, LIBRARIAN_RUNTIME: null, HOME: home }, () => resolveLibrarianArgv());
+  assert.deepEqual(argv, [path.join(home, '.nvm', 'versions', 'node', 'bin', 'node'), '/configured/dist/cli.js']);
+});
+
 test('resolution: LIBRARIAN_BIN wins over a config `bin` (env is the highest rung)', () => {
   const home = homeWithConfig({ bin: '/configured/dist/cli.js' });
   const argv = withEnv({ LIBRARIAN_BIN: '/override/librarian', HOME: home }, () => resolveLibrarianArgv());

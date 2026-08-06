@@ -82,14 +82,21 @@ function configPath(): string {
 
 /** Read a string-valued key out of ~/.librarian/config.json, best-effort: a missing file,
  *  malformed JSON, or an absent/blank value yields undefined (fall through to the next
- *  rung), never a throw — resolution must not break the session. */
+ *  rung), never a throw — resolution must not break the session.
+ *
+ *  A leading `~` is expanded: the config is hand-edited, and nothing on this path expands
+ *  a tilde, so `"bin": "~/.librarian/bin/librarian"` would otherwise be spawned as a
+ *  cwd-relative path and fail. Only `~` / `~/…`, and never `path.resolve` — a bare
+ *  `librarian` must stay a PATH lookup, not become a cwd-relative file. */
 function stringFromConfig(key: string): string | undefined {
   try {
     const parsed = JSON.parse(fs.readFileSync(configPath(), 'utf8')) as unknown;
     if (typeof parsed === 'object' && parsed !== null) {
       const value = (parsed as Loose)[key];
       if (typeof value === 'string' && value.trim().length > 0) {
-        return value;
+        const trimmed = value.trim();
+        if (trimmed === '~') return os.homedir();
+        return trimmed.startsWith('~/') ? path.join(os.homedir(), trimmed.slice(2)) : value;
       }
     }
   } catch {

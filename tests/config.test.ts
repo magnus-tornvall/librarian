@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, DEFAULT_SETTLE_MS } from '../src/config.ts';
+import { HOME } from '../src/paths.ts';
 import { DEFAULT_SCORING_CONFIG } from '../src/recall/scoring.ts';
 
 test('loadConfig defaults missing and empty scoring sections per key', () => {
@@ -52,6 +53,23 @@ test('loadConfig reads optional vault path and rejects malformed values', () => 
   assert.throws(() => loadConfig(file), /vault/);
   fs.writeFileSync(file, JSON.stringify({ vault: 42 }));
   assert.throws(() => loadConfig(file), /vault/);
+});
+
+test('loadConfig expands a tilde vault and absolutizes a relative one', () => {
+  // Regression: `"vault": "~/.librarian/vault/"` used to be handed to fs verbatim, which
+  // treats it as *relative* — drain then exported into a literal `~` dir under the cwd.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'librarian-config-'));
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ vault: '~/.librarian/vault/' }));
+  assert.equal(loadConfig(file).vault, path.join(HOME, '.librarian', 'vault'));
+  fs.writeFileSync(file, JSON.stringify({ vault: '~' }));
+  assert.equal(loadConfig(file).vault, HOME);
+  // `~user` is someone else's home — not ours to resolve, so it stays a plain path segment.
+  fs.writeFileSync(file, JSON.stringify({ vault: '~someone/notes' }));
+  assert.equal(loadConfig(file).vault, path.resolve('~someone/notes'));
+  // Relative paths absolutize at load time so the cwd-less drain timer cannot drift.
+  fs.writeFileSync(file, JSON.stringify({ vault: 'notes/vault' }));
+  assert.equal(loadConfig(file).vault, path.resolve('notes/vault'));
 });
 
 test('loadConfig reads optional embedding settings and rejects malformed values', () => {

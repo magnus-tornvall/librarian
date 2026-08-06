@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { CONFIG_PATH } from './paths.ts';
+import path from 'node:path';
+import { CONFIG_PATH, HOME } from './paths.ts';
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from './recall/scoring.ts';
 
 export type LibrarianConfig = {
@@ -99,12 +100,27 @@ function debugConfig(value: unknown, configPath: string): boolean {
   return value;
 }
 
+/**
+ * Expand a leading `~` (only `~` alone or `~/…` — `~user` is left verbatim, we don't
+ * resolve other people's homes). A config file is edited by hand, so a tilde is what a
+ * human writes; nothing expands it on that path, and `fs` would take `~/x` as a *relative*
+ * path and silently create a directory literally named `~` under the cwd.
+ */
+function expandHome(value: string): string {
+  if (value === '~') return HOME;
+  if (value.startsWith('~/')) return path.join(HOME, value.slice(2));
+  return value;
+}
+
 function vaultConfig(value: unknown, configPath: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.length === 0) {
     invalid('vault', configPath, 'a non-empty string');
   }
-  return value;
+  // Absolutize at load time, not at use time: the vault is opened by long-lived,
+  // cwd-less callers too (the launchd/systemd drain timer), where a cwd-relative
+  // path resolves against whatever the service manager happened to set.
+  return path.resolve(expandHome(value));
 }
 
 function embeddingConfig(value: unknown, configPath: string): LibrarianConfig['embedding'] {
